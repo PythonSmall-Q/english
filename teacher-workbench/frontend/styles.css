@@ -51,6 +51,30 @@ body {
   color: var(--text-muted);
 }
 
+/* 按钮 loading 态（防重复提交守卫用） */
+.btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.btn-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  vertical-align: -2px;
+  animation: btn-spin 0.6s linear infinite;
+}
+
+@keyframes btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* 数据导入 modal 的格式示例块 */
 .import-example {
   background: var(--bg, #f6f8fa);

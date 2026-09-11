@@ -9,6 +9,75 @@
  *   · render(el)：el 为 #view-container，视图负责填充内容
  * - 通用组件：modal(title, html, onMount) / closeModal() / toast(msg) / confirmDialog(msg)
  */
+/**
+ * 按钮防重复提交：统一给 .btn 的 click 加 loading 守卫。
+ * 覆盖两个绑定通道：addEventListener 与 onclick 属性；后续新增按钮自动生效。
+ * 守卫语义：点击后按钮 disabled + 转圈，handler 的异步工作完成后恢复；
+ * 重复点击被忽略。
+ */
+(function installBtnGuard() {
+  function guard(btn, listener) {
+    const wrapped = async (event) => {
+      if (btn.disabled) return;
+      const spinner = document.createElement('span');
+      spinner.className = 'btn-spinner';
+      btn.disabled = true;
+      btn.classList.add('is-loading');
+      btn.insertBefore(spinner, btn.firstChild);
+      try {
+        await listener.call(btn, event);
+      } finally {
+        spinner.remove();
+        btn.classList.remove('is-loading');
+        btn.disabled = false;
+      }
+    };
+    wrapped._btnGuarded = true;
+    return wrapped;
+  }
+
+  // 1) addEventListener 通道
+  const origAdd = EventTarget.prototype.addEventListener;
+  EventTarget.prototype.addEventListener = function (type, listener, options) {
+    if (
+      type === 'click' &&
+      typeof listener === 'function' &&
+      !listener._btnGuarded &&
+      this instanceof Element &&
+      this.classList?.contains('btn')
+    ) {
+      return origAdd.call(this, type, guard(this, listener), options);
+    }
+    return origAdd.call(this, type, listener, options);
+  };
+
+  // 2) onclick 属性通道（内部转 addEventListener，获得同样守卫）
+  const RAW_KEY = '__onclick_raw';
+  const WRAPPED_KEY = '__onclick_wrapped';
+  Object.defineProperty(HTMLElement.prototype, 'onclick', {
+    configurable: true,
+    set(handler) {
+      const prev = this[WRAPPED_KEY];
+      if (prev) {
+        EventTarget.prototype.removeEventListener.call(this, 'click', prev);
+        this[WRAPPED_KEY] = null;
+      }
+      const fn = typeof handler === 'function' ? handler : null;
+      this[RAW_KEY] = fn;
+      if (fn && this.classList?.contains('btn')) {
+        const wrapped = guard(this, fn);
+        this[WRAPPED_KEY] = wrapped;
+        origAdd.call(this, 'click', wrapped);
+      } else if (fn) {
+        origAdd.call(this, 'click', fn);
+      }
+    },
+    get() {
+      return this[RAW_KEY] || null;
+    },
+  });
+})();
+
 window.App = {
   /** §66 页面状态 */
   state: { user: null, tenants: [], tenant: null, quota: null, view: null },
@@ -83,6 +152,11 @@ window.App = {
   },
 
   closeModal() {
+    // 通过遮罩/× 关闭时，挂起的 confirmDialog 以「取消」结算，避免调用方永久等待
+    if (App._confirmResolve) {
+      App._confirmResolve(false);
+      App._confirmResolve = null;
+    }
     document.getElementById('modal-root').innerHTML = '';
   },
 
@@ -112,14 +186,14 @@ window.App = {
            <button class="btn btn-danger" id="confirm-ok" type="button">确认</button>
          </div>`,
         () => {
-          document.getElementById('confirm-cancel').onclick = () => {
+          const done = (value) => {
+            // 先结算再关闭，避免 closeModal 以「取消」重复结算
+            App._confirmResolve = null;
+            resolve(value);
             App.closeModal();
-            resolve(false);
           };
-          document.getElementById('confirm-ok').onclick = () => {
-            App.closeModal();
-            resolve(true);
-          };
+          document.getElementById('confirm-cancel').onclick = () => done(false);
+          document.getElementById('confirm-ok').onclick = () => done(true);
         }
       );
     });

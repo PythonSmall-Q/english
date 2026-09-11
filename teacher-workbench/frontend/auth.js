@@ -44,11 +44,17 @@ App.showAuthScreen = function (mode = 'login') {
       e.preventDefault();
       const errEl = document.getElementById('auth-error');
       errEl.classList.add('hidden');
+      const submitBtn = e.target.querySelector('button[type="submit"]');
       const body = {
         email: document.getElementById('auth-email').value.trim(),
         password: document.getElementById('auth-password').value,
       };
       if (!isLogin) body.displayName = document.getElementById('auth-name').value.trim();
+      // 防重复提交
+      submitBtn.disabled = true;
+      const spinner = document.createElement('span');
+      spinner.className = 'btn-spinner';
+      submitBtn.insertBefore(spinner, submitBtn.firstChild);
       try {
         if (isLogin) {
           await api.auth.login(body);
@@ -60,6 +66,9 @@ App.showAuthScreen = function (mode = 'login') {
       } catch (err) {
         errEl.textContent = (err && err.message) || '操作失败，请重试';
         errEl.classList.remove('hidden');
+      } finally {
+        spinner.remove();
+        submitBtn.disabled = false;
       }
     });
   }
