@@ -9,7 +9,7 @@
  */
 
 import { Hono } from 'hono';
-import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
+import { requireAuth, requireTenant, requireRole, requireClassManager, audit } from '../middleware.js';
 import { ApiError, newId, now } from '../db.js';
 import { checkQuota } from '../quota.js';
 
@@ -91,11 +91,11 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
  * POST /assignments — 新建作业
  * body: { class_id, title, content?, deadline? }
  */
-app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.post('/', requireAuth, requireTenant, requireClassManager(), async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
-  const body = await c.req.json().catch(() => ({}));
+  const body = c.get('_body') || (await c.req.json().catch(() => ({})));
 
   const classId = String(body.class_id || '').trim();
   const title = String(body.title || '').trim();
@@ -123,7 +123,7 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) =>
  * PUT /assignments/:id — 更新作业
  * body: { title?, content?, deadline?, status? }
  */
-app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.put('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', table: 'assignments' }), async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
@@ -148,7 +148,7 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
 /**
  * DELETE /assignments/:id — 物理删除作业及其提交记录
  */
-app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.delete('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', table: 'assignments' }), async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
@@ -173,12 +173,12 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
  * UPSERT assignment_submissions（status=submitted/missing），全部 db.batch 一次提交保证事务性
  * 学生必须属于作业所属班级
  */
-app.post('/:id/submissions/bulk', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.post('/:id/submissions/bulk', requireAuth, requireTenant, requireClassManager({ param: 'id', table: 'assignments' }), async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const assignment = await getAssignmentOr404(db, tenantId, c.req.param('id'));
-  const body = await c.req.json().catch(() => ({}));
+  const body = c.get('_body') || (await c.req.json().catch(() => ({})));
 
   const submitted = Array.isArray(body.submitted) ? body.submitted.map(String) : [];
   const missing = Array.isArray(body.missing) ? body.missing.map(String) : [];

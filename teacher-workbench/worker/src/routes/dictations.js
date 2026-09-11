@@ -10,7 +10,7 @@
  */
 
 import { Hono } from 'hono';
-import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
+import { requireAuth, requireTenant, requireRole, canManageClass, audit } from '../middleware.js';
 import { ApiError, newId, now } from '../db.js';
 import { checkQuota } from '../quota.js';
 
@@ -24,6 +24,25 @@ async function getDictationOr404(db, tenantId, id) {
     .first();
   if (!row) throw new ApiError('NOT_FOUND', '默写不存在');
   return row;
+}
+
+/**
+ * 默写写权限：全年段默写仅 owner/admin；班级默写 = 该班管理者
+ * （owner/admin、班主任、年级组长）
+ */
+async function requireDictationManager(db, tenantId, user, dictation) {
+  if (dictation.scope === 'grade') {
+    const membership = await db
+      .prepare("SELECT role FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
+      .bind(tenantId, user.id)
+      .first();
+    if (!membership || (membership.role !== 'owner' && membership.role !== 'admin')) {
+      throw new ApiError('FORBIDDEN', '全年段默写仅租户管理员可管理');
+    }
+    return;
+  }
+  const check = await canManageClass(db, tenantId, user.id, dictation.class_id);
+  if (!check.ok) throw new ApiError('FORBIDDEN', check.reason);
 }
 
 /** 校验 scope 取值 */
@@ -87,7 +106,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
  * body: { title, class_id?, scope?, dictation_date?, material_url? }
  * scope='class' 时 class_id 必填且须属于当前租户；scope='grade' 时 class_id 可空
  */
-app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.post('/', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
@@ -100,12 +119,15 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) =>
   if (scope === 'class' && !classId) {
     throw new ApiError('VALIDATION_ERROR', "班级默写（scope='class'）必须提供 class_id");
   }
-  if (classId) {
-    const cls = await db
-      .prepare('SELECT id FROM classes WHERE tenant_id = ? AND id = ?')
-      .bind(tenantId, classId)
-      .first();
-    if (!cls) throw new ApiError('NOT_FOUND', '班级不存在');
+  // 写权限：班级默写 = 该班管理者；全年段默写 = owner/admin
+  if (scope === 'grade') {
+    const membership = c.get('membership');
+    if (membership.role !== 'owner' && membership.role !== 'admin') {
+      throw new ApiError('FORBIDDEN', '全年段默写仅租户管理员可创建');
+    }
+  } else {
+    const check = await canManageClass(db, tenantId, user.id, classId);
+    if (!check.ok) throw new ApiError(check.cls ? 'FORBIDDEN' : 'NOT_FOUND', check.reason);
   }
 
   await checkQuota(db, tenantId, 'dictations');
@@ -175,11 +197,12 @@ app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) =
  * PUT /dictations/:id — 更新默写
  * body: { title?, class_id?, scope?, dictation_date?, material_url? }
  */
-app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.put('/:id', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
+  await requireDictationManager(db, tenantId, user, dictation);
   const body = await c.req.json().catch(() => ({}));
 
   const title = body.title !== undefined ? String(body.title).trim() : dictation.title;
@@ -216,11 +239,12 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
 /**
  * DELETE /dictations/:id — 物理删除默写及其结果记录
  */
-app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.delete('/:id', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
+  await requireDictationManager(db, tenantId, user, dictation);
 
   await db.batch([
     db
@@ -241,11 +265,12 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
  * UPSERT：passed → passed=1, retest_required=0；failed → passed=0, retest_required=1
  * 全部 db.batch 一次提交；scope='class' 时学生必须属于该班，scope='grade' 时可来自全年级任何班
  */
-app.post('/:id/results/bulk', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.post('/:id/results/bulk', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
+  await requireDictationManager(db, tenantId, user, dictation);
   const body = await c.req.json().catch(() => ({}));
 
   const passed = Array.isArray(body.passed) ? body.passed.map(String) : [];
@@ -311,11 +336,12 @@ app.post('/:id/results/bulk', requireAuth, requireTenant, requireRole(['teacher'
  * body: { studentIds: [studentId...], completed: true }
  * 将指定学生 retest_completed=1、retest_required=0（仅更新已有结果记录的学生）
  */
-app.post('/:id/retest', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.post('/:id/retest', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
+  await requireDictationManager(db, tenantId, user, dictation);
   const body = await c.req.json().catch(() => ({}));
 
   const studentIds = Array.isArray(body.studentIds) ? [...new Set(body.studentIds.map(String))] : [];

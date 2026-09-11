@@ -81,6 +81,86 @@ export async function requireTenant(c, next) {
 const ROLE_LEVEL = { owner: 4, admin: 3, teacher: 2, viewer: 1 };
 
 /**
+ * 班级级管理权限（年级组/班主任模型）：
+ * 可管理某班级的人 = 租户 owner/admin，或该班的班主任（classes.teacher_id），
+ * 或该班所属年级组的组长（grade_groups.leader_user_id）。
+ * 其余成员对该班只读。
+ * @returns {Promise<{ok:boolean, cls:object|null, reason:string}>}
+ */
+export async function canManageClass(db, tenantId, userId, classId) {
+  const cls = await db
+    .prepare('SELECT * FROM classes WHERE id = ? AND tenant_id = ?')
+    .bind(classId, tenantId)
+    .first();
+  if (!cls) return { ok: false, cls: null, reason: '班级不存在' };
+  const membership = await db
+    .prepare("SELECT * FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
+    .bind(tenantId, userId)
+    .first();
+  if (!membership) return { ok: false, cls, reason: '你不属于该空间' };
+  if (membership.role === 'owner' || membership.role === 'admin') return { ok: true, cls };
+  if (cls.teacher_id && cls.teacher_id === userId) return { ok: true, cls };
+  if (cls.grade_group_id) {
+    const group = await db
+      .prepare('SELECT id FROM grade_groups WHERE id = ? AND tenant_id = ? AND leader_user_id = ?')
+      .bind(cls.grade_group_id, tenantId, userId)
+      .first();
+    if (group) return { ok: true, cls };
+  }
+  return { ok: false, cls, reason: '你仅可查看该班级，如需修改请联系班主任或年级组长' };
+}
+
+/**
+ * 班级写权限中间件：从参数或 body 中取 class_id（classParam 指定参数名，
+ * 默认先查 body.class_id，其次路由 :id 对应资源的归属班级）。
+ * 用法：app.post('/students', requireAuth, requireTenant, requireClassManager(), ...)
+ * 对 classes 自身的增删改用 requireClassManager({ self: true })。
+ */
+export function requireClassManager(options = {}) {
+  return async (c, next) => {
+    const db = c.env.DB;
+    const tenantId = c.get('tenantId');
+    const user = c.get('user');
+
+    let classId = null;
+    if (options.self) {
+      const row = await db
+        .prepare('SELECT id FROM classes WHERE id = ? AND tenant_id = ?')
+        .bind(c.req.param('id'), tenantId)
+        .first();
+      if (!row) throw new ApiError('NOT_FOUND', '班级不存在');
+      classId = row.id;
+    } else {
+      const body = await c.req.json().catch(() => ({}));
+      c.set('_body', body); // 供 handler 复用，避免二次读取
+      if (options.param) {
+        // 从路由资源反查归属班级（如 /assignments/:id → assignment.class_id）
+        const resourceId = c.req.param(options.param);
+        const row = await db
+          .prepare(`SELECT class_id FROM ${options.table} WHERE id = ? AND tenant_id = ?`)
+          .bind(resourceId, tenantId)
+          .first();
+        if (!row) throw new ApiError('NOT_FOUND', '资源不存在');
+        classId = row.class_id;
+      } else {
+        classId = body.class_id ? String(body.class_id) : null;
+      }
+      // 班级级资源必须挂在某个班下；无班级维度的资源用全局角色控制
+      if (!classId) {
+        throw new ApiError('FORBIDDEN', '缺少 class_id，无法判定班级权限');
+      }
+    }
+
+    const check = await canManageClass(db, tenantId, user.id, classId);
+    if (!check.ok) {
+      throw new ApiError(check.cls ? 'FORBIDDEN' : 'NOT_FOUND', check.reason);
+    }
+    c.set('managedClass', check.cls);
+    await next();
+  };
+}
+
+/**
  * 角色层级校验：membership.role 需 ≥ 列表中最低层级。
  * 例：requireRole(['teacher']) 允许 teacher/admin/owner；requireRole(['owner']) 仅 owner。
  * @param {string[]} roles 允许的最低角色集合

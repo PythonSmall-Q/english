@@ -11,7 +11,7 @@
 
 import { Hono } from 'hono';
 import { ApiError, newId, now } from '../db.js';
-import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
+import { requireAuth, requireTenant, canManageClass, audit } from '../middleware.js';
 
 const app = new Hono();
 
@@ -100,16 +100,36 @@ app.get('/', requireAuth, requireTenant, async (c) => {
 });
 
 /**
- * POST /api/v1/schedules — 新增课表条目（teacher 起，不占配额）
+ * 课表写权限：挂班级的条目 = 该班管理者（owner/admin、班主任、年级组长）；
+ * 全年段条目 = owner/admin
+ */
+async function requireScheduleManager(db, tenantId, user, scheduleLike) {
+  if (scheduleLike.scope === 'grade' || !scheduleLike.class_id) {
+    const membership = await db
+      .prepare("SELECT role FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
+      .bind(tenantId, user.id)
+      .first();
+    if (!membership || (membership.role !== 'owner' && membership.role !== 'admin')) {
+      throw new ApiError('FORBIDDEN', '全年段课表仅租户管理员可管理');
+    }
+    return;
+  }
+  const check = await canManageClass(db, tenantId, user.id, scheduleLike.class_id);
+  if (!check.ok) throw new ApiError('FORBIDDEN', check.reason);
+}
+
+/**
+ * POST /api/v1/schedules — 新增课表条目（班级管理者/管理员，不占配额）
  * body: { weekday, period?, class_id?, title?, start_time?, end_time?, lesson_type?, classroom?, scope? }
  */
-app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.post('/', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const body = await c.req.json().catch(() => ({}));
 
   const v = await validateScheduleBody(db, tenantId, body, null);
+  await requireScheduleManager(db, tenantId, user, v);
 
   const id = newId();
   const ts = now();
@@ -151,15 +171,18 @@ async function getScheduleOr404(db, tenantId, id) {
   return row;
 }
 
-/** PUT /api/v1/schedules/:id — 更新课表条目（teacher 起） */
-app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+/** PUT /api/v1/schedules/:id — 更新课表条目（按新旧归属判定管理权限） */
+app.put('/:id', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const schedule = await getScheduleOr404(db, tenantId, c.req.param('id'));
   const body = await c.req.json().catch(() => ({}));
 
+  // 先校验对旧条目有管理权，再按合并后的新归属校验
+  await requireScheduleManager(db, tenantId, user, schedule);
   const v = await validateScheduleBody(db, tenantId, body, schedule);
+  await requireScheduleManager(db, tenantId, user, v);
 
   await db
     .prepare(
@@ -188,12 +211,13 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
   return c.json({ success: true, data: { id: schedule.id, ...v } });
 });
 
-/** DELETE /api/v1/schedules/:id — 删除课表条目（teacher 起，物理删除） */
-app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+/** DELETE /api/v1/schedules/:id — 删除课表条目（该班管理者/管理员，物理删除） */
+app.delete('/:id', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const schedule = await getScheduleOr404(db, tenantId, c.req.param('id'));
+  await requireScheduleManager(db, tenantId, user, schedule);
 
   await db
     .prepare('DELETE FROM schedules WHERE id = ? AND tenant_id = ?')

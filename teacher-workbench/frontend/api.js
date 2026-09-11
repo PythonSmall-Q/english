@@ -93,6 +93,14 @@
     addAccount: (id, body) => request(`/tenants/${id}/accounts`, { method: 'POST', body }),
   };
 
+  // —— GradeGroups 年级组（年级组长 = 本年级子管理员）——
+  const gradeGroups = {
+    list: () => request('/grade-groups'),
+    create: (body) => request('/grade-groups', { method: 'POST', body }),
+    update: (id, body) => request(`/grade-groups/${id}`, { method: 'PUT', body }),
+    remove: (id) => request(`/grade-groups/${id}`, { method: 'DELETE' }),
+  };
+
   // —— Classes（§54）——
   const classes = {
     list: (query) => request('/classes', { query }),
@@ -238,5 +246,5 @@
     updateSettings: (body) => request('/admin/settings', { method: 'PUT', body }),
   };
 
-  window.api = { auth, tenants, classes, students, lessons, schedules, assignments, dictations, exams, dashboard, ai, files, import: imp, export: exp, admin };
+  window.api = { auth, tenants, gradeGroups, classes, students, lessons, schedules, assignments, dictations, exams, dashboard, ai, files, import: imp, export: exp, admin };
 })();

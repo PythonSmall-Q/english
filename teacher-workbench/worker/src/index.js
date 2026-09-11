@@ -27,6 +27,7 @@ import lessonRoutes from './routes/lessons.js';
 import scheduleRoutes from './routes/schedules.js';
 import examRoutes from './routes/exams.js';
 import dashboardRoutes from './routes/dashboard.js';
+import gradeGroupRoutes from './routes/grade-groups.js';
 
 const app = new Hono();
 
@@ -62,6 +63,7 @@ app.route('/api/v1/lessons', lessonRoutes);
 app.route('/api/v1/schedules', scheduleRoutes);
 app.route('/api/v1/exams', examRoutes);
 app.route('/api/v1/dashboard', dashboardRoutes);
+app.route('/api/v1/grade-groups', gradeGroupRoutes);
 
 app.onError(onError);
 app.notFound(notFoundHandler);

@@ -13,7 +13,7 @@
 
 import { Hono } from 'hono';
 import { ApiError, newId, now } from '../db.js';
-import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
+import { requireAuth, requireTenant, requireClassManager, audit } from '../middleware.js';
 import { checkQuota } from '../quota.js';
 
 const app = new Hono();
@@ -129,14 +129,14 @@ async function requireClassInTenant(db, tenantId, classId) {
 }
 
 /**
- * POST /api/v1/students — 新建学生（teacher 起，checkQuota students）
+ * POST /api/v1/students — 新建学生（班级管理者：owner/admin、班主任、年级组长）
  * body: { class_id, name, student_no?, gender?, status?, notes? }
  */
-app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.post('/', requireAuth, requireTenant, requireClassManager(), async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
-  const body = await c.req.json().catch(() => ({}));
+  const body = c.get('_body') || (await c.req.json().catch(() => ({})));
 
   const classId = String(body.class_id || '').trim();
   const name = String(body.name || '').trim();
@@ -240,8 +240,8 @@ app.get('/:id', requireAuth, requireTenant, async (c) => {
   return c.json({ success: true, data: { ...student, class_name: cls?.name ?? null, alert: stats } });
 });
 
-/** PUT /api/v1/students/:id — 更新学生（teacher 起） */
-app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+/** PUT /api/v1/students/:id — 更新学生（该班管理者） */
+app.put('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', table: 'students' }), async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
@@ -279,8 +279,8 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
   return c.json({ success: true, data: { id: student.id, class_id: classId, name } });
 });
 
-/** DELETE /api/v1/students/:id — 删除学生（teacher 起，物理删除） */
-app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+/** DELETE /api/v1/students/:id — 删除学生（该班管理者，物理删除） */
+app.delete('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', table: 'students' }), async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
