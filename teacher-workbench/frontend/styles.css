@@ -174,8 +174,138 @@ body {
   font-weight: 600;
 }
 
+/* ===== 租户切换器：自定义下拉（§22/§69） ===== */
+
 .tenant-switcher {
-  max-width: 220px;
+  position: relative;
+  max-width: 260px;
+}
+
+.ts-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text, #1f2937);
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.ts-btn:hover {
+  border-color: var(--primary, #2563eb);
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.15);
+}
+
+.ts-btn.open {
+  border-color: var(--primary, #2563eb);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.ts-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.ts-name {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-caret {
+  color: var(--text-muted, #6b7280);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.ts-btn.open .ts-caret {
+  transform: rotate(180deg);
+}
+
+.ts-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 240px;
+  max-width: 320px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.14);
+  z-index: 60;
+  animation: ts-pop 0.12s ease-out;
+}
+
+@keyframes ts-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ts-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 13.5px;
+  color: var(--text, #1f2937);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.ts-item:hover {
+  background: var(--bg-hover, #f3f4f6);
+}
+
+.ts-item.active {
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--primary, #2563eb);
+  font-weight: 600;
+}
+
+.ts-item-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.ts-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.ts-check {
+  flex-shrink: 0;
+  font-weight: 700;
 }
 
 .view-container {

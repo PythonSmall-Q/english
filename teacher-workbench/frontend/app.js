@@ -143,23 +143,70 @@ window.App = {
     App.state.tenant = tenant;
     App.state.quota = tenant.quota || null;
     App.updateTenantSwitcher();
+    App.closeTenantMenu();
     await App.showView(App.state.view || 'dashboard');
   },
 
-  /** 租户切换器：>1 个空间时显示，否则隐藏（§69） */
+  closeTenantMenu() {
+    document.getElementById('ts-menu')?.classList.add('hidden');
+    document.getElementById('ts-btn')?.classList.remove('open');
+  },
+
+  /** 租户切换器：>1 个空间时显示，否则隐藏（§69）。自定义下拉。 */
   updateTenantSwitcher() {
-    const select = document.getElementById('tenant-switcher');
-    if (!select) return;
+    const wrap = document.getElementById('tenant-switcher');
+    if (!wrap) return;
     const tenants = App.state.tenants;
     if (!tenants || tenants.length <= 1) {
-      select.classList.add('hidden');
+      wrap.classList.add('hidden');
       return;
     }
-    select.classList.remove('hidden');
-    select.innerHTML = tenants
-      .map((t) => `<option value="${App.esc(t.id)}">${App.esc(t.name)}${t.expired ? '（已到期·只读）' : ''}</option>`)
+    wrap.classList.remove('hidden');
+    const current = App.state.tenant || tenants[0];
+    // 按钮显示当前空间
+    document.getElementById('ts-icon').textContent = current.type === 'personal' ? '🏠' : '🏫';
+    document.getElementById('ts-name').textContent = current.name;
+    document.getElementById('ts-name').title = current.name;
+    // 下拉项
+    const menu = document.getElementById('ts-menu');
+    menu.innerHTML = tenants
+      .map((t) => {
+        const active = current.id === t.id;
+        return `
+          <button type="button" class="ts-item ${active ? 'active' : ''}" data-ts-id="${App.esc(t.id)}">
+            <span class="ts-item-icon">${t.type === 'personal' ? '🏠' : '🏫'}</span>
+            <span class="ts-item-name" title="${App.esc(t.name)}">${App.esc(t.name)}</span>
+            ${t.expired ? '<span class="ts-badge">已到期</span>' : ''}
+            ${active ? '<span class="ts-check">✓</span>' : ''}
+          </button>`;
+      })
       .join('');
-    if (App.state.tenant) select.value = App.state.tenant.id;
+    menu.querySelectorAll('[data-ts-id]').forEach((item) => {
+      item.addEventListener('click', () => App.setTenant(item.dataset.tsId));
+    });
+  },
+
+  /** 切换器交互：点击按钮开合、点击外部/ESC 关闭（只绑一次） */
+  bindTenantSwitcher() {
+    const btn = document.getElementById('ts-btn');
+    const menu = document.getElementById('ts-menu');
+    if (!btn || !menu) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = menu.classList.contains('hidden');
+      menu.classList.toggle('hidden');
+      btn.classList.toggle('open', willOpen);
+    });
+    document.addEventListener('click', (e) => {
+      if (!wrapContains(e.target)) App.closeTenantMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') App.closeTenantMenu();
+    });
+    function wrapContains(target) {
+      const wrap = document.getElementById('tenant-switcher');
+      return wrap && wrap.contains(target);
+    }
   },
 
   /**
@@ -217,8 +264,7 @@ window.App = {
       document.querySelectorAll('.nav-item').forEach((item) => {
         item.addEventListener('click', () => App.showView(item.dataset.view));
       });
-      const switcher = document.getElementById('tenant-switcher');
-      if (switcher) switcher.addEventListener('change', (e) => App.setTenant(e.target.value));
+      App.bindTenantSwitcher();
       const logoutBtn = document.getElementById('logout-btn');
       if (logoutBtn) {
         logoutBtn.addEventListener('click', async () => {

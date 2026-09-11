@@ -41,8 +41,15 @@
       <header class="topbar">
         <div class="breadcrumb" id="breadcrumb">工作台首页</div>
         <div class="topbar-right">
-          <!-- 租户切换器（§22/§69）：>1 个空间时显示 -->
-          <select id="tenant-switcher" class="tenant-switcher hidden" aria-label="切换空间"></select>
+          <!-- 租户切换器（§22/§69）：自定义下拉，>1 个空间时显示 -->
+          <div id="tenant-switcher" class="tenant-switcher hidden">
+            <button type="button" id="ts-btn" class="ts-btn">
+              <span class="ts-icon" id="ts-icon">🏠</span>
+              <span class="ts-name" id="ts-name">我的空间</span>
+              <svg class="ts-caret" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div id="ts-menu" class="ts-menu hidden"></div>
+          </div>
         </div>
       </header>
       <main id="view-container" class="view-container"></main>
