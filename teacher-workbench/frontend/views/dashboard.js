@@ -44,9 +44,6 @@ const DASH_ACTIONS = [
   { label: '🤖 AI 助手', view: 'ai' },
 ];
 
-/** 统一配额提示文案（§21） */
-const DASH_QUOTA_MSG = '已达到当前空间额度。如需使用更多班级和学生，请联系管理员加入正式教学空间。';
-
 /** 注入本模块专属样式（幂等，类名带 dash- 前缀） */
 function dashInjectStyles() {
   if (document.getElementById('dash-styles')) return;

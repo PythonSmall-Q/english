@@ -10,7 +10,7 @@ database_name = "teacher-workbench"
 migrations_dir = "migrations"
 
 [vars]
-ALLOWED_ORIGINS = "http://localhost:8080,http://localhost:3000,http://127.0.0.1:8080"
+ALLOWED_ORIGINS = "http://localhost:8080,http://localhost:3000,http://127.0.0.1:8080,https://fff.xmoj-script.uk,https://fffsaas.is-a.bot"
 PLATFORM_ADMIN_EMAILS = ""
 AI_BASE_URL = "https://api.openai.com/v1"
 AI_MODEL = "gpt-4o-mini"
