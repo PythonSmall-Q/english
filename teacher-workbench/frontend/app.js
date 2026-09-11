@@ -167,8 +167,9 @@ window.App = {
     document.getElementById('auth-screen').classList.add('hidden');
     const frame = document.getElementById('app-frame');
     frame.classList.remove('hidden');
-    // 侧边栏用户区（§68：L / Lynn / 英语）
-    const name = App.state.user?.displayName || 'Lynn';
+    // 侧边栏用户区（§68：显示实际用户名，头像为首字母）
+    const u = App.state.user || {};
+    const name = u.displayName || (u.email ? u.email.split('@')[0] : '老师');
     const avatar = document.querySelector('.sidebar-user .avatar');
     const nameEl = document.querySelector('.sidebar-user-name');
     if (avatar) avatar.textContent = name.charAt(0).toUpperCase();

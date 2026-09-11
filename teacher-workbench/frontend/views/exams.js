@@ -6,7 +6,7 @@
  * - 导入成绩（总分）/ 导入小分：.xlsx / .csv / .json / 粘贴文本 四种来源
  *   · 成绩行：学号,分数 或 姓名,班级,分数
  *   · 小分行：学号,题型,得分,满分 或 姓名,班级,题型,得分,满分
- * - 上传试卷：走 api.files，后端 R2 未上线返回 R2_DEVELOPING → toast 提示
+ * - 上传试卷：api.files.upload → R2，URL 存入 paper_url
  * - 查看分析：KPI / 分数段分布 / 各班均分对比 / 各题型均分与得分率 / 班内排名
  * - 个性化报告：总分 / 班级排名 / 超过全班百分比 / 各题型 vs 班均 / 薄弱题型 / 建议
  * 图表一律原生 SVG 手绘，不引图表库；样式自包含（前缀 ex-）。
@@ -306,7 +306,7 @@
             <button class="btn btn-sm" data-act="import-subscores" data-id="${esc(e.id)}" type="button">导入小分</button>
             <button class="btn btn-sm" data-act="analysis" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">查看分析</button>
             <button class="btn btn-sm" data-act="report" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">个性化报告</button>
-            <button class="btn btn-sm" data-act="paper" data-id="${esc(e.id)}" type="button">上传试卷</button>
+            <button class="btn btn-sm" data-act="paper" data-id="${esc(e.id)}" data-has-paper="${e.paper_url ? '1' : ''}" type="button">${e.paper_url ? '查看试卷' : '上传试卷'}</button>
             <button class="btn btn-sm" data-act="edit" data-id="${esc(e.id)}" type="button">编辑</button>
             <button class="btn btn-sm btn-danger" data-act="del" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">删除</button>
           </td>
@@ -341,7 +341,7 @@
         openReport(d.id, d.name, null);
         break;
       case 'paper':
-        uploadPaper();
+        uploadPaper(d.id, d.hasPaper === '1');
         break;
       case 'edit': {
         try {
@@ -367,15 +367,38 @@
     }
   }
 
-  /** 上传试卷：R2 未上线，后端返回 R2_DEVELOPING（501） */
-  async function uploadPaper() {
-    try {
-      await api.files.create({ name: '考试试卷', purpose: 'exam_paper' });
-      App.toast('试卷已上传');
-    } catch (err) {
-      if (err && err.code === 'R2_DEVELOPING') App.toast('文件存储功能开发中');
-      else reportErr(err);
+  /** 上传/查看试卷：上传到 R2，返回公共 URL 存到 exam.paper_url */
+  function uploadPaper(examId, hasPaper) {
+    if (hasPaper) {
+      // 已有试卷：从详情取 URL 打开
+      api.exams.get(examId).then((exam) => {
+        if (exam.paper_url) window.open(exam.paper_url, '_blank', 'noopener');
+        else App.toast('该考试尚未上传试卷');
+      }).catch(reportErr);
+      return;
     }
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.pdf,image/*,.doc,.docx';
+    input.onchange = async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      if (file.size > 50 * 1024 * 1024) {
+        App.toast('文件超过 50MB 上限');
+        return;
+      }
+      App.toast('上传中…');
+      try {
+        const uploaded = await api.files.upload(file);
+        await api.exams.update(examId, { paper_url: uploaded.url });
+        App.toast('试卷已上传');
+        loadExams();
+      } catch (err) {
+        if (err && err.code === 'R2_DEVELOPING') App.toast('文件存储功能开发中');
+        else reportErr(err);
+      }
+    };
+    input.click();
   }
 
   /** 新建 / 编辑考试 */

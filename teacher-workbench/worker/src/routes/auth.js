@@ -47,7 +47,7 @@ function readCredentials(body) {
 app.post('/register', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const { email, password } = readCredentials(body);
-  const displayName = String(body.displayName || '').trim() || 'Lynn';
+  const displayName = String(body.displayName || '').trim() || email.split('@')[0];
 
   const db = c.env.DB;
   const exists = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
@@ -205,6 +205,26 @@ app.get('/me', requireAuth, async (c) => {
       },
       tenants,
     },
+  });
+});
+
+/**
+ * PUT /api/v1/auth/me — 更新当前用户显示名
+ * body: { displayName(1-30字) }
+ */
+app.put('/me', requireAuth, async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => ({}));
+  const displayName = String(body.displayName || '').trim();
+  if (!displayName || displayName.length > 30) {
+    throw new ApiError('VALIDATION_ERROR', '姓名需为 1-30 个字符');
+  }
+  await c.env.DB.prepare('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?')
+    .bind(displayName, now(), user.id)
+    .run();
+  return c.json({
+    success: true,
+    data: { user: { id: user.id, email: user.email, displayName, platformRole: user.platform_role } },
   });
 });
 

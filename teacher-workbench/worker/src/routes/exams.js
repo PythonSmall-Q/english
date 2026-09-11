@@ -108,7 +108,7 @@ app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) =
 });
 
 /**
- * PUT /api/v1/exams/:id — 编辑考试（name/subject/exam_date）
+ * PUT /api/v1/exams/:id — 编辑考试（name/subject/exam_date/paper_url）
  */
 app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
   const db = c.env.DB;
@@ -121,10 +121,11 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
   if (!name) throw new ApiError('VALIDATION_ERROR', '考试名称不能为空');
   const subject = body.subject !== undefined ? String(body.subject).trim() : exam.subject;
   const examDate = body.exam_date !== undefined ? String(body.exam_date).trim() : exam.exam_date;
+  const paperUrl = body.paper_url !== undefined ? String(body.paper_url).trim() : exam.paper_url;
 
   await db
-    .prepare('UPDATE exams SET name = ?, subject = ?, exam_date = ? WHERE tenant_id = ? AND id = ?')
-    .bind(name, subject, examDate, tenantId, exam.id)
+    .prepare('UPDATE exams SET name = ?, subject = ?, exam_date = ?, paper_url = ? WHERE tenant_id = ? AND id = ?')
+    .bind(name, subject, examDate, paperUrl, tenantId, exam.id)
     .run();
   await audit(db, tenantId, user.id, 'update_exam', '考试', exam.id, { name });
   return c.json({ success: true, data: await getExam(db, tenantId, exam.id) });

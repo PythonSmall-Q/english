@@ -2,7 +2,7 @@
  * views/settings.js — 设置页（§70/§71）
  *
  * 四个区块：
- * 1. 个人资料：姓名（只读 Lynn）/邮箱/学科/年级/绑定教材
+ * 1. 个人资料：姓名（可修改，同步侧边栏）/邮箱/学科/年级/绑定教材
  * 2. 当前空间：空间名称/类型/成员列表/配额用量条（数据来自 auth.me 的 quota 与租户详情 usage）
  * 3. 数据管理：导出全部数据（backup JSON）/恢复数据/导出学生名单
  * 4. 数据导入：班级名单/课表/成绩/小分 四个入口
@@ -19,12 +19,62 @@ const QUOTA_LABELS = {
   ai: 'AI（本月）',
 };
 
-/** 数据导入入口定义（§70 数据导入 / §47-§49） */
+/** 数据导入入口定义（§70 数据导入 / §47-§49）：每个入口独立的字段说明与模板示例 */
 const IMPORT_ENTRIES = [
-  { key: 'students', label: '班级名单', desc: '字段：学号 / 姓名 / 班级 / 性别。按班级名称在租户内匹配 class_id，禁止跨租户匹配。', apiCall: (rows) => api.import.students({ rows }) },
-  { key: 'schedules', label: '课表', desc: '导入教学课表（星期 / 节次 / 班级 / 课题 / 类型）。', apiCall: (rows) => api.import.schedules({ rows }) },
-  { key: 'scores', label: '成绩', desc: '导入考试总成绩。匹配优先级：学号 → 姓名 + 班级；匹配失败不得静默写入。', jumpToExams: true },
-  { key: 'subscores', label: '小分', desc: '导入考试题型小分（xlsx / csv / json / 粘贴）。', jumpToExams: true },
+  {
+    key: 'students',
+    label: '班级名单',
+    desc: '批量导入学生名单。班级名称在当前空间内匹配，匹配不到班级的行不会写入。',
+    hint: `
+      <p><b>字段</b>：学号 studentNo / 姓名 name / 班级 className / 性别 gender（均可选）</p>
+      <p><b>匹配规则</b>：按班级名称在当前空间内匹配，<b>禁止跨空间匹配</b>；班级名不存在时该行计入「未匹配」，请先创建班级再导入。</p>
+      <pre class="import-example">[
+  { "studentNo": "2027001", "name": "张三", "className": "高三6班", "gender": "男" },
+  { "studentNo": "2027002", "name": "李四", "className": "高三6班", "gender": "女" }
+]</pre>`,
+    placeholder: '粘贴学生名单 JSON 数组，格式见上方示例',
+    apiCall: (rows) => api.import.students({ rows }),
+  },
+  {
+    key: 'schedules',
+    label: '课表',
+    desc: '批量导入教学课表。全年段活动（晚自习/英语拓展/导师组）班级留空即可。',
+    hint: `
+      <p><b>字段</b>：星期 weekday（1=周一…7=周日）/ 节次 period（0=早自习，1-10=第一~十节，留空=全天活动）/ 开始时间 startTime / 结束时间 endTime / 课题 title / 班级 className（留空=全年段）/ 教室 classroom / 范围 scope（class=班级 | grade=全年段，默认 class）</p>
+      <p><b>说明</b>：班级名须在当前空间内已存在，否则该行计入「未匹配」。</p>
+      <pre class="import-example">[
+  { "weekday": 1, "period": 1, "startTime": "08:00", "endTime": "08:40", "title": "阅读理解", "className": "高三6班", "classroom": "101", "scope": "class" },
+  { "weekday": 3, "startTime": "19:00", "endTime": "21:00", "title": "晚自习", "scope": "grade" }
+]</pre>`,
+    placeholder: '粘贴课表 JSON 数组，格式见上方示例',
+    apiCall: (rows) => api.import.schedules({ rows }),
+  },
+  {
+    key: 'scores',
+    label: '成绩',
+    desc: '导入考试总成绩。请在「考试成绩」模块中选择具体考试后导入。',
+    hint: `
+      <p><b>入口</b>：考试成绩 → 选择考试 →「导入成绩」，支持 .xlsx / .csv / .json / 粘贴四种方式。</p>
+      <p><b>行格式</b>：<code>学号, 分数</code> 或 <code>姓名, 班级, 分数</code>（也可 JSON：[{ "studentNo": "2027001", "score": 128 }]）</p>
+      <p><b>匹配优先级</b>：学号精确匹配 → 姓名+班级匹配；匹配失败的数据不会写入，导入后明确返回成功/更新/失败/未匹配。</p>
+      <pre class="import-example">2027001, 128
+2027002, 115
+王五, 高三6班, 98</pre>`,
+    jumpToExams: true,
+  },
+  {
+    key: 'subscores',
+    label: '小分',
+    desc: '导入考试题型小分。请在「考试成绩」模块中选择具体考试后导入。',
+    hint: `
+      <p><b>入口</b>：考试成绩 → 选择考试 →「导入小分」，支持 .xlsx / .csv / .json / 粘贴四种方式。</p>
+      <p><b>行格式</b>：<code>学号, 题型, 得分, 满分</code>（也可 JSON：[{ "studentNo": "2027001", "questionType": "阅读", "score": 32, "maxScore": 40 }]）</p>
+      <p><b>说明</b>：题型名称全表统一（如 听力/阅读/写作），同一学生同一题型重复导入会覆盖旧值。</p>
+      <pre class="import-example">2027001, 听力, 26, 30
+2027001, 阅读, 32, 40
+2027002, 听力, 22, 30</pre>`,
+    jumpToExams: true,
+  },
 ];
 
 App.registerView('settings', {
@@ -43,8 +93,8 @@ App.registerView('settings', {
         <div class="form-row">
           <div>
             <label class="form-label">姓名</label>
-            <input class="form-input" value="${App.esc(user.displayName || 'Lynn')}" readonly>
-            <div class="muted" style="font-size:12px;margin-top:4px">统一显示为「Lynn」，不可修改</div>
+            <input class="form-input" id="pref-name" value="${App.esc(user.displayName || '')}" maxlength="30">
+            <div class="muted" style="font-size:12px;margin-top:4px">显示在侧边栏与问候语中，可随时修改</div>
           </div>
           <div>
             <label class="form-label">邮箱</label>
@@ -101,18 +151,123 @@ App.registerView('settings', {
           ${IMPORT_ENTRIES.map((en) => `<button class="btn" data-import="${en.key}" type="button">${en.label}</button>`).join('')}
         </div>
         <div class="muted">支持 .xlsx / .csv / .json / 直接粘贴；导入在服务端解析校验后写入，匹配失败的数据会明确返回。</div>
+      </div>
+
+      <!-- 5. AI 助手设置（§41-43：用户自配 Provider，存数据库） -->
+      <div class="card">
+        <div class="card-title">AI 助手设置</div>
+        <div id="ai-settings-status" class="muted" style="margin-bottom:10px">加载中…</div>
+        <div class="form-row">
+          <div>
+            <label class="form-label">API 端点</label>
+            <input class="form-input" id="ai-base-url" placeholder="https://api.openai.com/v1">
+          </div>
+          <div>
+            <label class="form-label">模型</label>
+            <input class="form-input" id="ai-model" placeholder="如：gpt-4o-mini">
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label class="form-label">API 密钥</label>
+            <input class="form-input" id="ai-api-key" type="password" placeholder="sk-...">
+            <div class="muted" style="font-size:12px;margin-top:4px" id="ai-key-hint">密钥仅存服务端数据库，不会在前端明文回显。</div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" id="ai-clear" type="button">恢复内置演示</button>
+          <button class="btn btn-primary" id="ai-save" type="button">保存 AI 配置</button>
+        </div>
       </div>`;
 
     bindProfile();
     await renderSpace();
     bindDataManagement();
     bindImportEntries();
+    await bindAiSettings();
   },
 });
 
-/** 个人资料保存（偏好存 localStorage，§52 允许 UI 偏好） */
+/** AI 助手设置：加载当前配置（密钥只回显掩码），保存/清除 */
+async function bindAiSettings() {
+  const statusEl = document.getElementById('ai-settings-status');
+  const keyHint = document.getElementById('ai-key-hint');
+  let current = null;
+  try {
+    current = await api.ai.getSettings();
+  } catch (err) {
+    statusEl.textContent = `AI 配置加载失败：${(err && err.message) || '未知错误'}`;
+    return;
+  }
+  const statusText = {
+    user: `当前使用自定义模型（密钥 ${current.keyMasked}）`,
+    env: '当前使用平台预置模型',
+    mock: '当前使用内置演示回复（未配置密钥）',
+  };
+  statusEl.textContent = statusText[current.source] || statusText.mock;
+  document.getElementById('ai-base-url').value = current.baseUrl || '';
+  document.getElementById('ai-model').value = current.model || '';
+  if (current.hasKey) {
+    document.getElementById('ai-api-key').placeholder = `已保存（${current.keyMasked}），留空则保持不变`;
+    keyHint.textContent = '已保存密钥，重新输入可更换；留空保持不变。';
+  }
+
+  document.getElementById('ai-save').addEventListener('click', async () => {
+    const baseUrl = document.getElementById('ai-base-url').value.trim();
+    const model = document.getElementById('ai-model').value.trim();
+    const apiKey = document.getElementById('ai-api-key').value.trim();
+    if (!apiKey && !(current && current.hasKey)) {
+      App.toast('请填写 API 密钥（或点「恢复内置演示」使用内置回复）');
+      return;
+    }
+    try {
+      const data = await api.ai.updateSettings({ baseUrl, model, apiKey });
+      App.toast('AI 配置已保存');
+      current = data;
+      statusEl.textContent = (data.source === 'user' ? `当前使用自定义模型（密钥 ${data.keyMasked}）` : '当前使用内置演示回复（未配置密钥）');
+      document.getElementById('ai-api-key').value = '';
+      document.getElementById('ai-api-key').placeholder = `已保存（${data.keyMasked}），留空则保持不变`;
+    } catch (err) {
+      App.toast((err && err.message) || '保存失败');
+    }
+  });
+
+  document.getElementById('ai-clear').addEventListener('click', async () => {
+    try {
+      await api.ai.updateSettings({ clear: true });
+      App.toast('已恢复内置演示回复');
+      document.getElementById('ai-base-url').value = '';
+      document.getElementById('ai-model').value = '';
+      document.getElementById('ai-api-key').value = '';
+      document.getElementById('ai-api-key').placeholder = 'sk-...';
+      statusEl.textContent = statusText.mock;
+      current = { source: 'mock', hasKey: false };
+    } catch (err) {
+      App.toast((err && err.message) || '操作失败');
+    }
+  });
+}
+
+/** 个人资料保存（姓名存服务端，偏好存 localStorage，§52 允许 UI 偏好） */
 function bindProfile() {
-  document.getElementById('save-prefs').addEventListener('click', () => {
+  document.getElementById('save-prefs').addEventListener('click', async () => {
+    const displayName = document.getElementById('pref-name').value.trim();
+    if (!displayName) {
+      App.toast('姓名不能为空');
+      return;
+    }
+    try {
+      const data = await api.auth.updateMe({ displayName });
+      if (data.user) App.state.user = { ...App.state.user, ...data.user };
+      // 同步刷新侧边栏显示名与头像首字
+      const avatar = document.querySelector('.sidebar-user .avatar');
+      const nameEl = document.querySelector('.sidebar-user-name');
+      if (nameEl) nameEl.textContent = displayName;
+      if (avatar) avatar.textContent = displayName.charAt(0).toUpperCase();
+    } catch (err) {
+      App.toast((err && err.message) || '保存失败');
+      return;
+    }
     localStorage.setItem(
       'profile_prefs',
       JSON.stringify({
@@ -237,17 +392,40 @@ function bindImportEntries() {
 }
 
 function openImportModal(entry) {
+  // 成绩/小分：引导到考试成绩模块（那边支持 xlsx/csv/json/粘贴四种方式）
+  if (entry.jumpToExams) {
+    App.modal(
+      `导入${entry.label}`,
+      `
+      <p class="muted" style="margin-top:0">${entry.desc}</p>
+      ${entry.hint}
+      <div class="modal-actions">
+        <button class="btn" id="import-cancel" type="button">取消</button>
+        <button class="btn btn-primary" id="import-go-exams" type="button">去考试成绩导入</button>
+      </div>`,
+      () => {
+        document.getElementById('import-cancel').onclick = () => App.closeModal();
+        document.getElementById('import-go-exams').onclick = () => {
+          App.closeModal();
+          App.showView('exams');
+        };
+      }
+    );
+    return;
+  }
+
   App.modal(
     `导入${entry.label}`,
     `
       <p class="muted" style="margin-top:0">${entry.desc}</p>
-      <p class="muted">支持 <b>.xlsx / .csv / .json</b> 文件或直接粘贴文本。当前为骨架版本：xlsx/csv 前端解析由后续 agent 补齐（可用 vendor/xlsx.full.min.js），下方可直接粘贴 JSON。</p>
+      ${entry.hint}
+      <p class="muted">此入口支持 <b>.json</b> 文件或直接粘贴 JSON 文本；xlsx/csv 请另存为 JSON 后导入。</p>
       <div class="toolbar">
         <button class="btn" id="import-pick-file" type="button">选择文件</button>
-        <input type="file" id="import-file" accept=".xlsx,.csv,.json" class="hidden">
+        <input type="file" id="import-file" accept=".json" class="hidden">
         <span class="muted" id="import-file-name"></span>
       </div>
-      <textarea class="form-input" id="import-paste" placeholder='粘贴 JSON 数组，如 [{"学号":"01","姓名":"张三","班级":"高三6班"}]'></textarea>
+      <textarea class="form-input" id="import-paste" placeholder="${App.esc(entry.placeholder || '粘贴 JSON 数组')}"></textarea>
       <div class="modal-actions">
         <button class="btn" id="import-cancel" type="button">取消</button>
         <button class="btn btn-primary" id="import-submit" type="button">开始导入</button>
@@ -260,13 +438,12 @@ function openImportModal(entry) {
       };
       document.getElementById('import-cancel').onclick = () => App.closeModal();
       document.getElementById('import-submit').onclick = async () => {
-        // TODO: xlsx/csv 解析由后续 agent 补齐；骨架先支持 JSON 文本/文件
         try {
           let text = document.getElementById('import-paste').value.trim();
           if (!text && fileInput.files[0]) {
             const f = fileInput.files[0];
             if (!/\.json$/i.test(f.name)) {
-              App.toast('骨架版本仅支持 JSON，xlsx/csv 解析待后续 agent 补齐');
+              App.toast('此入口仅支持 JSON 文件，xlsx/csv 请另存为 JSON 后导入');
               return;
             }
             text = await f.text();
@@ -277,16 +454,13 @@ function openImportModal(entry) {
           }
           const rows = JSON.parse(text);
           if (!Array.isArray(rows)) throw new Error('JSON 必须是数组');
-          if (entry.jumpToExams) {
-            // 成绩/小分属于考试模块：跳转考试成绩视图，由该模块调 api.exams.import
-            App.closeModal();
-            App.toast('请在考试成绩模块中选择考试后导入');
-            App.showView('exams');
-            return;
-          }
-          await entry.apiCall(rows);
+          const result = await entry.apiCall(rows);
           App.closeModal();
-          App.toast(`${entry.label}导入完成`);
+          const unmatched = result && result.unmatched ? result.unmatched.length : 0;
+          App.toast(
+            `${entry.label}导入完成：新增 ${result?.created ?? rows.length} 条` +
+              (unmatched ? `，未匹配 ${unmatched} 行（班级不存在或姓名缺失）` : '')
+          );
         } catch (e) {
           App.toast(e.message || '导入失败');
         }

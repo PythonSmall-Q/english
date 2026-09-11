@@ -28,7 +28,7 @@ App.showAuthScreen = function (mode = 'login') {
           <input class="form-input" id="auth-email" type="email" required placeholder="you@example.com">
           ${!isLogin ? `
           <label class="form-label">姓名</label>
-          <input class="form-input" id="auth-name" type="text" placeholder="Lynn">` : ''}
+          <input class="form-input" id="auth-name" type="text" placeholder="你的姓名（选填，默认可稍后在设置中修改）">` : ''}
           <label class="form-label">密码</label>
           <input class="form-input" id="auth-password" type="password" required minlength="8" placeholder="至少 8 位">
           <div class="auth-error hidden" id="auth-error"></div>

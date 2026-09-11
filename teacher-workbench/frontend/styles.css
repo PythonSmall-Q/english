@@ -51,6 +51,20 @@ body {
   color: var(--text-muted);
 }
 
+/* 数据导入 modal 的格式示例块 */
+.import-example {
+  background: var(--bg, #f6f8fa);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  font-family: Consolas, 'Courier New', monospace;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 6px 0;
+}
+
 /* ===== 布局：左侧固定导航 + 右侧内容 ===== */
 
 .app-frame {

@@ -3,7 +3,7 @@
  *
  * 约定：
  * - 页面禁止直接 fetch('/api/...')，一律走本文件的 api.* 命名空间
- * - baseURL：localStorage.API_BASE 覆盖 > 本地开发 localhost:8787 > 同源 /api/v1
+ * - baseURL：localStorage.API_BASE 覆盖 > 本地开发 localhost:8787 > 生产域名配对（fff.xmoj-script.uk → fff-api.xmoj-script.uk）> 同源 /api/v1
  * - 统一 credentials:'include'（Session 走 HttpOnly Cookie）、Content-Type: application/json
  * - 自动携带 X-Tenant-Id 头（当前租户，来自 App.state.tenant）
  * - 响应解包：成功返回 data；失败统一 throw { code, message }
@@ -21,6 +21,10 @@
     if (host === 'localhost' || host === '127.0.0.1') {
       // 本地开发：wrangler dev 默认端口 8787
       return 'http://localhost:8787/api/v1';
+    }
+    // 生产：前端 fff.xmoj-script.uk ↔ API fff-api.xmoj-script.uk（跨域 + Cookie 需后端 CORS 白名单）
+    if (host === 'fff.xmoj-script.uk') {
+      return 'https://fff-api.xmoj-script.uk/api/v1';
     }
     return location.origin + '/api/v1';
   }
@@ -72,6 +76,7 @@
     login: (body) => request('/auth/login', { method: 'POST', body }),
     logout: () => request('/auth/logout', { method: 'POST' }),
     me: () => request('/auth/me'),
+    updateMe: (body) => request('/auth/me', { method: 'PUT', body }),
   };
 
   // —— Tenants（§53/§73/§74/§75）——
@@ -165,11 +170,41 @@
   const ai = {
     generate: (body) => request('/ai/generate', { method: 'POST', body }),
     history: (query) => request('/ai/history', { query }),
+    /** 用户 AI 配置（密钥仅返回掩码） */
+    getSettings: () => request('/ai/settings'),
+    /** 保存/清除 AI 配置；body: { baseUrl?, apiKey?, model?, clear? } */
+    updateSettings: (body) => request('/ai/settings', { method: 'PUT', body }),
   };
 
-  // —— Files（§45，R2 未上线时后端返回 R2_DEVELOPING 501）——
+  // —— Files（§45/§46：二进制上传 → R2，元数据落 D1）——
   const files = {
-    create: (body) => request('/files', { method: 'POST', body }),
+    /** 上传文件（File/Blob），文件名取 file.name；返回 {id,name,url,size,mimeType} */
+    async upload(file) {
+      const headers = { 'X-File-Name': encodeURIComponent(file.name || 'file') };
+      const tenantId = window.App?.state?.tenant?.id;
+      if (tenantId) headers['X-Tenant-Id'] = tenantId;
+      let res;
+      try {
+        res = await fetch(BASE + '/files', {
+          method: 'POST',
+          credentials: 'include',
+          headers,
+          body: file,
+        });
+      } catch (e) {
+        throw { code: 'NETWORK_ERROR', message: '网络异常，请检查后端服务是否启动' };
+      }
+      let payload = null;
+      try {
+        payload = await res.json();
+      } catch (e) {
+        throw { code: 'INTERNAL_ERROR', message: `服务响应异常（HTTP ${res.status}）` };
+      }
+      if (payload && payload.success) return payload.data;
+      const err = payload?.error || {};
+      throw { code: err.code || 'INTERNAL_ERROR', message: err.message || '上传失败' };
+    },
+    list: () => request('/files'),
     get: (id) => request(`/files/${id}`),
     remove: (id) => request(`/files/${id}`, { method: 'DELETE' }),
   };

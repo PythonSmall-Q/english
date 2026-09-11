@@ -102,6 +102,7 @@
           <span class="badge ${d.scope === 'grade' ? 'badge-info' : 'badge-leave'}">${d.scope === 'grade' ? '全年段' : '班级'}</span>
         </div>
         <div class="dct-item-meta">日期：${App.esc(d.dictationDate || '未设置')}</div>
+        ${d.materialUrl ? `<div class="dct-item-meta">材料：<a href="${App.esc(d.materialUrl)}" target="_blank" rel="noopener">查看材料</a></div>` : ''}
         <div class="dct-item-stats">
           <span>通过 <strong>${st.passed}</strong></span>
           <span>未过 <strong class="${st.failed ? '' : ''}" style="color:${st.failed ? 'var(--danger)' : 'inherit'}">${st.failed}</strong></span>
@@ -109,6 +110,7 @@
         </div>
         <div class="dct-item-ops">
           <button class="btn btn-sm btn-primary" data-act="register" type="button">登记</button>
+          <button class="btn btn-sm" data-act="material" type="button">${d.materialUrl ? '重传材料' : '上传材料'}</button>
           <button class="btn btn-sm" data-act="detail" type="button">详情</button>
           <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>
         </div>
@@ -538,6 +540,7 @@
         if (!id) return;
         const act = btn.dataset.act;
         if (act === 'register') openRegister(id);
+        else if (act === 'material') uploadMaterial(id);
         else if (act === 'detail') openDetail(id);
         else if (act === 'del') removeDictation(id);
       });
@@ -545,4 +548,37 @@
       await loadData();
     },
   });
+
+  /** 上传/重传默写材料 → R2，URL 存入 material_url */
+  function uploadMaterial(id) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.pdf,image/*,.doc,.docx,.txt,.mp3,.wav';
+    input.onchange = async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      if (file.size > 50 * 1024 * 1024) {
+        App.toast('文件超过 50MB 上限');
+        return;
+      }
+      App.toast('上传中…');
+      try {
+        const uploaded = await api.files.upload(file);
+        const d = dictations.find((x) => x.id === id);
+        await api.dictations.update(id, {
+          title: d?.title,
+          class_id: d?.classId ?? null,
+          scope: d?.scope,
+          dictation_date: d?.dictationDate ?? null,
+          material_url: uploaded.url,
+        });
+        App.toast('材料已上传');
+        await loadData();
+      } catch (err) {
+        if (err && err.code === 'R2_DEVELOPING') App.toast('文件存储功能开发中');
+        else App.toast(errMsg(err));
+      }
+    };
+    input.click();
+  }
 })();

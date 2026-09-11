@@ -208,15 +208,31 @@
     if (state.messages.some((m) => m.role === 'ai')) loadHistory(); // 有新的生成记录则刷新
   }
 
-  /** 上传附件：R2 未上线，后端返回 R2_DEVELOPING（501） */
-  async function attach() {
-    try {
-      await api.files.create({ name: 'AI 附件', purpose: 'ai_attachment' });
-      App.toast('附件已上传');
-    } catch (err) {
-      if (err && err.code === 'R2_DEVELOPING') App.toast('文件存储功能开发中');
-      else reportErr(err);
-    }
+  /** 上传附件：真实上传到 R2，附件名与链接附在提示词后一起发给 AI */
+  function attach() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.pdf,image/*,.doc,.docx,.txt';
+    input.onchange = async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      if (file.size > 50 * 1024 * 1024) {
+        App.toast('文件超过 50MB 上限');
+        return;
+      }
+      App.toast('上传中…');
+      try {
+        const uploaded = await api.files.upload(file);
+        // 附件以文本形式附在输入框内容末尾（后端 prompt 为纯文本）
+        dom.text.value = `${dom.text.value.trim()}${dom.text.value.trim() ? '\n' : ''}[附件] ${uploaded.name}：${uploaded.url}`;
+        dom.text.focus();
+        App.toast('附件已添加');
+      } catch (err) {
+        if (err && err.code === 'R2_DEVELOPING') App.toast('文件存储功能开发中');
+        else reportErr(err);
+      }
+    };
+    input.click();
   }
 
   App.registerView('ai', {

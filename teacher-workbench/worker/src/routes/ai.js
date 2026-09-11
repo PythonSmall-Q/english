@@ -5,8 +5,10 @@
  * - 快捷指令 type：practice 生成练习题 / lesson_plan 写教案 / essay_feedback 批改作文
  *   / analysis 学情解读 / translate 中英互译
  * - 流程（§42）：身份/租户/角色校验 → checkQuota('ai') → 构造 system prompt
- *   → 有 AI_API_KEY 走真实 Provider，无 key 用内置 mock（保证可演示）→ 写 ai_generations
+ *   → 优先用用户自配 Provider（user_ai_settings 表），其次环境变量 AI_API_KEY，
+ *     都没有则用内置 mock（保证可演示）→ 写 ai_generations
  * - 浏览器不直连 AI Provider，全部经 Worker 代理
+ * - 用户配置端点：GET/PUT /ai/settings（仅本人；密钥只写不读全量，GET 返回掩码）
  */
 
 import { Hono } from 'hono';
@@ -33,6 +35,20 @@ const SYSTEM_PROMPTS = {
 };
 
 const AI_TIMEOUT_MS = 30000;
+
+/** 读取用户自配 AI Provider（无则返回 null） */
+async function getUserAiSettings(db, userId) {
+  return db
+    .prepare('SELECT user_id, base_url, api_key, model FROM user_ai_settings WHERE user_id = ?')
+    .bind(userId)
+    .first();
+}
+
+/** 密钥掩码：只暴露末 4 位 */
+function maskKey(key) {
+  const k = String(key || '');
+  return k ? `****${k.slice(-4)}` : '';
+}
 
 /** 无 AI_API_KEY 时的内置 mock 回复（按 type 模板，含 prompt 关键词，保证可演示） */
 function mockGenerate(type, prompt) {
@@ -96,19 +112,24 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
 
   let result;
   let mock = false;
-  if (c.env.AI_API_KEY) {
+  // Provider 优先级：用户自配（数据库）> 环境变量 > 内置 mock
+  const userSettings = await getUserAiSettings(db, user.id);
+  const apiKey = userSettings?.api_key || c.env.AI_API_KEY || '';
+  if (apiKey) {
     // 真实 Provider：Workers 代理调用（§42），30 秒超时，非 2xx 视为内部错误
+    const baseUrl = (userSettings?.base_url || c.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+    const model = userSettings?.model || c.env.AI_MODEL || 'gpt-4o-mini';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
     try {
-      const resp = await fetch(`${c.env.AI_BASE_URL}/chat/completions`, {
+      const resp = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${c.env.AI_API_KEY}`,
+          Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: c.env.AI_MODEL || 'gpt-4o-mini',
+          model,
           messages: [
             { role: 'system', content: SYSTEM_PROMPTS[type] },
             { role: 'user', content: prompt },
@@ -157,6 +178,73 @@ app.get('/history', requireAuth, requireTenant, requireRole(['teacher']), async 
     .bind(tenantId)
     .all();
   return c.json({ success: true, data: { items: rows.results } });
+});
+
+/**
+ * GET /api/v1/ai/settings — 当前用户的 AI Provider 配置（密钥仅返回掩码）
+ * 响应：{ baseUrl, model, hasKey, keyMasked, source: 'user'|'env'|'mock' }
+ */
+app.get('/settings', requireAuth, async (c) => {
+  const db = c.env.DB;
+  const user = c.get('user');
+  const row = await getUserAiSettings(db, user.id);
+  return c.json({
+    success: true,
+    data: {
+      baseUrl: row?.base_url || '',
+      model: row?.model || '',
+      hasKey: !!row?.api_key,
+      keyMasked: maskKey(row?.api_key),
+      source: row?.api_key ? 'user' : c.env.AI_API_KEY ? 'env' : 'mock',
+    },
+  });
+});
+
+/**
+ * PUT /api/v1/ai/settings — 保存/清除用户 AI Provider 配置
+ * body: { baseUrl?, apiKey?, model?, clear? }
+ * - clear=true：删除配置，回退到环境变量或内置 mock
+ * - 未提供的字段保持原值；apiKey 传空串表示保持原密钥
+ */
+app.put('/settings', requireAuth, async (c) => {
+  const db = c.env.DB;
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => ({}));
+
+  if (body.clear) {
+    await db.prepare('DELETE FROM user_ai_settings WHERE user_id = ?').bind(user.id).run();
+    return c.json({ success: true, data: { cleared: true } });
+  }
+
+  const row = await getUserAiSettings(db, user.id);
+  const baseUrl = body.baseUrl !== undefined ? String(body.baseUrl).trim() : row?.base_url || '';
+  const model = body.model !== undefined ? String(body.model).trim() : row?.model || '';
+  const apiKey = body.apiKey !== undefined ? String(body.apiKey).trim() : row?.api_key || '';
+
+  if (apiKey && baseUrl && !/^https?:\/\/.+/.test(baseUrl)) {
+    throw new ApiError('VALIDATION_ERROR', '端点需以 http:// 或 https:// 开头');
+  }
+  if (apiKey && !model) {
+    throw new ApiError('VALIDATION_ERROR', '请填写模型名称');
+  }
+  if (!apiKey && (baseUrl || model)) {
+    throw new ApiError('VALIDATION_ERROR', '请同时填写 API 密钥');
+  }
+
+  const ts = now();
+  await db
+    .prepare(
+      `INSERT INTO user_ai_settings (user_id, base_url, api_key, model, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET base_url = ?, api_key = ?, model = ?, updated_at = ?`
+    )
+    .bind(user.id, baseUrl, apiKey, model, ts, ts, baseUrl, apiKey, model, ts)
+    .run();
+
+  return c.json({
+    success: true,
+    data: { baseUrl, model, hasKey: !!apiKey, keyMasked: maskKey(apiKey), source: apiKey ? 'user' : 'mock' },
+  });
 });
 
 export default app;
