@@ -1,0 +1,19 @@
+name = "teacher-workbench-api"
+main = "src/index.js"
+compatibility_date = "2026-09-11"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "teacher-workbench"
+ database_id = "2f02d436-7621-4fbf-b673-25fbf42794ac" # Cloudflare D1 数据库 ID
+
+migrations_dir = "migrations"
+
+[vars]
+ALLOWED_ORIGINS = "http://localhost:8080,http://localhost:3000,http://127.0.0.1:8080"
+PLATFORM_ADMIN_EMAILS = ""
+AI_BASE_URL = "https://api.openai.com/v1"
+AI_MODEL = "gpt-4o-mini"
+
+[dev]
+port = 8787

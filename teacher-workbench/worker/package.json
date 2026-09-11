@@ -1,0 +1,16 @@
+{
+  "name": "teacher-workbench-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "migrate:local": "wrangler d1 migrations apply DB --local"
+  },
+  "dependencies": {
+    "hono": "latest"
+  },
+  "devDependencies": {
+    "wrangler": "latest"
+  }
+}
