@@ -100,6 +100,12 @@ export async function canManageClass(db, tenantId, userId, classId) {
   if (!membership) return { ok: false, cls, reason: '你不属于该空间' };
   if (membership.role === 'owner' || membership.role === 'admin') return { ok: true, cls };
   if (cls.teacher_id && cls.teacher_id === userId) return { ok: true, cls };
+  // 任课老师（class_teachers）同为该班管理者
+  const subjectTeacher = await db
+    .prepare('SELECT id FROM class_teachers WHERE tenant_id = ? AND class_id = ? AND user_id = ?')
+    .bind(tenantId, classId, userId)
+    .first();
+  if (subjectTeacher) return { ok: true, cls };
   if (cls.grade_group_id) {
     const group = await db
       .prepare('SELECT id FROM grade_groups WHERE id = ? AND tenant_id = ? AND leader_user_id = ?')
@@ -108,6 +114,28 @@ export async function canManageClass(db, tenantId, userId, classId) {
     if (group) return { ok: true, cls };
   }
   return { ok: false, cls, reason: '你仅可查看该班级，如需修改请联系班主任或年级组长' };
+}
+
+/**
+ * 是否可设置班级的老师（班主任/任课老师）：
+ * owner/admin、该班年级组长、该班班主任
+ */
+export async function canAssignClassTeachers(db, tenantId, userId, cls) {
+  const membership = await db
+    .prepare("SELECT role FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
+    .bind(tenantId, userId)
+    .first();
+  if (!membership) return false;
+  if (membership.role === 'owner' || membership.role === 'admin') return true;
+  if (cls.teacher_id && cls.teacher_id === userId) return true;
+  if (cls.grade_group_id) {
+    const group = await db
+      .prepare('SELECT id FROM grade_groups WHERE id = ? AND tenant_id = ? AND leader_user_id = ?')
+      .bind(cls.grade_group_id, tenantId, userId)
+      .first();
+    if (group) return true;
+  }
+  return false;
 }
 
 /**

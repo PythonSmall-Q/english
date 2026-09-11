@@ -11,12 +11,12 @@
 
 import { Hono } from 'hono';
 import { ApiError, newId, now } from '../db.js';
-import { requireAuth, requireTenant, requireRole, requireClassManager, audit } from '../middleware.js';
+import { requireAuth, requireTenant, requireRole, requireClassManager, canManageClass, canAssignClassTeachers, audit } from '../middleware.js';
 import { checkQuota } from '../quota.js';
 
 const app = new Hono();
 
-/** GET /api/v1/classes — 班级列表（含学生数、班主任、年级组、当前用户可管理标记） */
+/** GET /api/v1/classes — 班级列表（含学生数、班主任、年级组、任课老师、权限标记） */
 app.get('/', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
   const tenantId = c.get('tenantId');
@@ -36,6 +36,22 @@ app.get('/', requireAuth, requireTenant, async (c) => {
     .bind(tenantId)
     .all();
 
+  // 全部任课老师（按班分组）
+  const ctRows = await db
+    .prepare(
+      `SELECT ct.class_id, ct.user_id, ct.subject, u.display_name
+         FROM class_teachers ct JOIN users u ON u.id = ct.user_id
+        WHERE ct.tenant_id = ?
+        ORDER BY ct.created_at`
+    )
+    .bind(tenantId)
+    .all();
+  const teachersByClass = new Map();
+  for (const t of ctRows.results) {
+    if (!teachersByClass.has(t.class_id)) teachersByClass.set(t.class_id, []);
+    teachersByClass.get(t.class_id).push({ userId: t.user_id, name: t.display_name, subject: t.subject });
+  }
+
   // 当前用户担任组长的年级组
   const ledGroups = await db
     .prepare('SELECT id FROM grade_groups WHERE tenant_id = ? AND leader_user_id = ?')
@@ -45,10 +61,20 @@ app.get('/', requireAuth, requireTenant, async (c) => {
   const membership = c.get('membership');
   const isAdmin = membership.role === 'owner' || membership.role === 'admin';
 
-  const classes = rows.results.map((cls) => ({
-    ...cls,
-    canManage: isAdmin || cls.teacher_id === user.id || (cls.grade_group_id && ledSet.has(cls.grade_group_id)) || false,
-  }));
+  const classes = [];
+  for (const cls of rows.results) {
+    const subjectTeachers = teachersByClass.get(cls.id) || [];
+    const isSubjectTeacher = subjectTeachers.some((t) => t.userId === user.id);
+    const isLeader = cls.grade_group_id && ledSet.has(cls.grade_group_id);
+    const canManage = isAdmin || cls.teacher_id === user.id || isSubjectTeacher || isLeader || false;
+    classes.push({
+      ...cls,
+      subjectTeachers,
+      canManage,
+      // 可设置老师的人：owner/admin、本班年级组长、本班班主任
+      canAssignTeachers: isAdmin || isLeader || cls.teacher_id === user.id || false,
+    });
+  }
   return c.json({ success: true, data: { classes } });
 });
 
@@ -126,18 +152,12 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ self: true }),
         : null
       : cls.academic_year;
 
-  // 班主任：须为空间成员；仅 owner/admin 与年级组长可变更（班主任本人不能改自己）
+  // 班主任：须为空间成员；设置权限 = owner/admin、年级组长、本班班主任
   let teacherId = cls.teacher_id;
   if (body.teacher_id !== undefined) {
-    const membership = c.get('membership');
-    const isLeader = cls.grade_group_id
-      ? await db
-          .prepare('SELECT id FROM grade_groups WHERE id = ? AND tenant_id = ? AND leader_user_id = ?')
-          .bind(cls.grade_group_id, tenantId, user.id)
-          .first()
-      : null;
-    const canAssign = membership.role === 'owner' || membership.role === 'admin' || !!isLeader;
-    if (!canAssign) throw new ApiError('FORBIDDEN', '只有租户管理员或年级组长可以设置班主任');
+    if (!(await canAssignClassTeachers(db, tenantId, user.id, cls))) {
+      throw new ApiError('FORBIDDEN', '只有租户管理员、年级组长或班主任可以设置班主任');
+    }
     if (body.teacher_id === null) {
       teacherId = null;
     } else {
@@ -201,6 +221,68 @@ app.delete('/:id', requireAuth, requireTenant, requireClassManager({ self: true 
   await db.prepare('DELETE FROM classes WHERE id = ? AND tenant_id = ?').bind(cls.id, tenantId).run();
   await audit(db, tenantId, user.id, '删除班级', 'class', cls.id, { name: cls.name });
   return c.json({ success: true, data: { deleted: true } });
+});
+
+/**
+ * POST /api/v1/classes/:id/teachers — 添加任课老师（owner/admin、年级组长、本班班主任）
+ * body: { userId, subject? }（科目可选，如 英语/数学）
+ * 任课老师获得该班写权限（canManageClass）
+ */
+app.post('/:id/teachers', requireAuth, requireTenant, async (c) => {
+  const db = c.env.DB;
+  const user = c.get('user');
+  const tenantId = c.get('tenantId');
+  const cls = await getClassOr404(db, tenantId, c.req.param('id'));
+  if (!(await canAssignClassTeachers(db, tenantId, user.id, cls))) {
+    throw new ApiError('FORBIDDEN', '只有租户管理员、年级组长或班主任可以设置任课老师');
+  }
+  const body = await c.req.json().catch(() => ({}));
+  const targetId = String(body.userId || '').trim();
+  if (!targetId) throw new ApiError('VALIDATION_ERROR', 'userId 不能为空');
+  const member = await db
+    .prepare("SELECT user_id FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
+    .bind(tenantId, targetId)
+    .first();
+  if (!member) throw new ApiError('VALIDATION_ERROR', '任课老师必须是当前空间的成员');
+  if (targetId === cls.teacher_id) throw new ApiError('CONFLICT', '该成员已是本班班主任');
+
+  const dup = await db
+    .prepare('SELECT id FROM class_teachers WHERE tenant_id = ? AND class_id = ? AND user_id = ?')
+    .bind(tenantId, cls.id, targetId)
+    .first();
+  if (dup) throw new ApiError('CONFLICT', '该成员已是本班任课老师');
+
+  await db
+    .prepare(
+      `INSERT INTO class_teachers (id, tenant_id, class_id, user_id, subject, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(newId(), tenantId, cls.id, targetId, body.subject != null ? String(body.subject).trim() || null : null, now())
+    .run();
+  await audit(db, tenantId, user.id, '添加任课老师', 'class_teacher', cls.id, { classId: cls.id, userId: targetId, subject: body.subject });
+  return c.json({ success: true, data: { classId: cls.id, userId: targetId } }, 201);
+});
+
+/**
+ * DELETE /api/v1/classes/:id/teachers/:userId — 移除任课老师（同设置权限）
+ */
+app.delete('/:id/teachers/:userId', requireAuth, requireTenant, async (c) => {
+  const db = c.env.DB;
+  const user = c.get('user');
+  const tenantId = c.get('tenantId');
+  const cls = await getClassOr404(db, tenantId, c.req.param('id'));
+  if (!(await canAssignClassTeachers(db, tenantId, user.id, cls))) {
+    throw new ApiError('FORBIDDEN', '只有租户管理员、年级组长或班主任可以设置任课老师');
+  }
+  const targetId = c.req.param('userId');
+  const row = await db
+    .prepare('SELECT id FROM class_teachers WHERE tenant_id = ? AND class_id = ? AND user_id = ?')
+    .bind(tenantId, cls.id, targetId)
+    .first();
+  if (!row) throw new ApiError('NOT_FOUND', '任课老师记录不存在');
+  await db.prepare('DELETE FROM class_teachers WHERE id = ?').bind(row.id).run();
+  await audit(db, tenantId, user.id, '移除任课老师', 'class_teacher', cls.id, { classId: cls.id, userId: targetId });
+  return c.json({ success: true, data: { removed: true } });
 });
 
 export default app;
