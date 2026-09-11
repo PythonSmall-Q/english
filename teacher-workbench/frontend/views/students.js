@@ -108,6 +108,8 @@
     try {
       const [clsData, stuData] = await Promise.all([api.classes.list(), api.students.list()]);
       classes = clsData.classes || [];
+      // 传入的班级可能已被删除，兜底重置为「全部班级」
+      if (filterClassId && !classes.some((c) => c.id === filterClassId)) filterClassId = '';
       const list = stuData.students || [];
       // 列表接口不含预警字段：逐生调详情接口补齐（§55 GET /students/:id 返回 alert）
       const details = await Promise.all(list.map((s) => api.students.get(s.id).catch(() => null)));
@@ -288,10 +290,11 @@
   }
 
   // ===== 个性化成绩分析入口 =====
-  // 说明：跨视图参数传递没有全局契约，这里跳转到考试成绩模块并提示。
-  function openAnalysis(_studentId, name) {
+  // 深链：预选学生写入 sessionStorage，exams.js 渲染时读取并直接打开其最近一场考试的个性化报告
+  function openAnalysis(studentId, name) {
+    sessionStorage.setItem('wb.exams.report', JSON.stringify({ studentId, studentName: name || '' }));
     App.showView('exams');
-    App.toast(`请在「考试成绩」模块查看${name ? ` ${name} ` : ''}的个性化成绩分析`);
+    App.toast(`正在打开${name ? ` ${name} ` : ''}的个性化成绩分析…`);
   }
 
   // ===== 删除 =====
@@ -344,6 +347,13 @@
       filterQ = '';
       alertOnly = false;
       containerEl = el;
+
+      // 消费「我的班级 → 查看学生」传入的班级过滤（classes.js 双通道约定，二选一读取）
+      const presetFilter = App.state.studentsClassFilter || null;
+      const presetClassId = presetFilter?.class_id || sessionStorage.getItem('wb.students.classId') || '';
+      App.state.studentsClassFilter = null;
+      sessionStorage.removeItem('wb.students.classId');
+      filterClassId = presetClassId;
 
       el.innerHTML = `
         <div class="toolbar">

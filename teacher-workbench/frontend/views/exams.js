@@ -262,7 +262,7 @@
   let rootEl = null;
 
   async function loadExams() {
-    if (!rootEl) return;
+    if (!rootEl) return [];
     rootEl.innerHTML = '<div class="card"><div class="muted">加载中…</div></div>';
     let exams;
     try {
@@ -273,10 +273,11 @@
       card.className = 'card';
       card.innerHTML = `<div class="muted">考试列表加载失败：${esc((err && err.message) || '未知错误')}</div>`;
       rootEl.appendChild(card);
-      return;
+      return [];
     }
     rootEl.innerHTML = '';
     rootEl.appendChild(renderList(exams || []));
+    return exams || [];
   }
 
   function renderList(exams) {
@@ -738,7 +739,21 @@
       el.innerHTML = '';
       rootEl = document.createElement('div');
       el.appendChild(rootEl);
-      await loadExams();
+      const exams = await loadExams();
+      // 深链：学生管理 → 成绩分析（students.js 写入 wb.exams.report），打开最近一场考试的个性化报告
+      const pending = sessionStorage.getItem('wb.exams.report');
+      if (pending) {
+        sessionStorage.removeItem('wb.exams.report');
+        try {
+          const { studentId } = JSON.parse(pending);
+          if (studentId) {
+            if (exams.length) openReport(exams[0].id, exams[0].name, studentId);
+            else App.toast('还没有考试，新建考试并导入成绩后可查看个性化分析');
+          }
+        } catch (e) {
+          /* 深链参数异常则忽略，正常展示列表 */
+        }
+      }
     },
   });
 })();

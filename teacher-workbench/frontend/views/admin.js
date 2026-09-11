@@ -8,7 +8,7 @@
 
 /** 租户类型/状态中文映射 */
 const TENANT_TYPE_LABELS = { personal: '个人空间', organization: '组织' };
-const TENANT_STATUS_LABELS = { active: '正常', suspended: '已停用' };
+const TENANT_STATUS_LABELS = { active: '正常', disabled: '已停用' };
 /** 可编辑配额字段（§20） */
 const QUOTA_FIELDS = [
   ['max_classes', '班级上限'],
@@ -104,7 +104,7 @@ async function renderTenants() {
                 <td>${t.memberCount ?? t.member_count ?? '-'}</td>
                 <td>
                   <button class="btn btn-sm" data-quota="${t.id}" data-name="${App.esc(t.name)}" type="button">配额</button>
-                  <button class="btn btn-sm ${t.status === 'active' ? 'btn-danger' : ''}" data-toggle-status="${t.id}" data-status="${t.status === 'active' ? 'suspended' : 'active'}" type="button">
+                  <button class="btn btn-sm ${t.status === 'active' ? 'btn-danger' : ''}" data-toggle-status="${t.id}" data-status="${t.status === 'active' ? 'disabled' : 'active'}" type="button">
                     ${t.status === 'active' ? '停用' : '启用'}
                   </button>
                 </td>
@@ -117,7 +117,7 @@ async function renderTenants() {
     box.querySelectorAll('[data-toggle-status]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const target = btn.dataset.status;
-        if (target === 'suspended' && !(await App.confirmDialog('停用后该空间所有成员将无法访问，确认停用？'))) return;
+        if (target === 'disabled' && !(await App.confirmDialog('停用后该空间所有成员将无法访问，确认停用？'))) return;
         try {
           await api.admin.setStatus(btn.dataset.toggleStatus, target);
           App.toast(target === 'active' ? '已启用' : '已停用');

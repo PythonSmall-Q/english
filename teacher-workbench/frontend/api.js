@@ -127,7 +127,8 @@
     create: (body) => request('/assignments', { method: 'POST', body }),
     update: (id, body) => request(`/assignments/${id}`, { method: 'PUT', body }),
     remove: (id) => request(`/assignments/${id}`, { method: 'DELETE' }),
-    bulkSubmissions: (id, rows) => request(`/assignments/${id}/submissions/bulk`, { method: 'POST', body: { rows } }),
+    // §30 契约：body 直接透传 { submitted: [studentId...], missing: [studentId...] }
+    bulkSubmissions: (id, body) => request(`/assignments/${id}/submissions/bulk`, { method: 'POST', body }),
     submissions: (id) => request(`/assignments/${id}/submissions`),
   };
 
@@ -138,7 +139,8 @@
     get: (id) => request(`/dictations/${id}`),
     update: (id, body) => request(`/dictations/${id}`, { method: 'PUT', body }),
     remove: (id) => request(`/dictations/${id}`, { method: 'DELETE' }),
-    bulkResults: (id, rows) => request(`/dictations/${id}/results/bulk`, { method: 'POST', body: { rows } }),
+    // §58 契约：body 直接透传 { passed: [studentId...], failed: [studentId...] }
+    bulkResults: (id, body) => request(`/dictations/${id}/results/bulk`, { method: 'POST', body }),
     retest: (id, body) => request(`/dictations/${id}/retest`, { method: 'POST', body }),
   };
 
@@ -176,7 +178,7 @@
   const imp = {
     students: (body) => request('/import/students', { method: 'POST', body }),
     schedules: (body) => request('/import/schedules', { method: 'POST', body }),
-    // TODO: 后端恢复备份端点待集成（§51），联调时确认实际路径
+    // 恢复备份（§51）：body 为 GET /export/backup 的 JSON 结构
     restore: (body) => request('/import/restore', { method: 'POST', body }),
   };
 
@@ -191,7 +193,8 @@
     tenants: () => request('/admin/tenants'),
     users: () => request('/admin/users'),
     status: () => request('/admin/status'),
-    setStatus: (id, status) => request(`/admin/tenants/${id}/status`, { method: 'PUT', body: { status } }),
+    // 后端为 POST /admin/tenants/:id/status（body: { status: 'active'|'disabled' }）
+    setStatus: (id, status) => request(`/admin/tenants/${id}/status`, { method: 'POST', body: { status } }),
     setQuota: (id, quotas) => request(`/admin/tenants/${id}/quota`, { method: 'PUT', body: quotas }),
   };
 

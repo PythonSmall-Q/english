@@ -2,7 +2,7 @@
  * routes/export.js — 数据导出（§50/§51）
  *
  * - GET /export/backup：按 §51 JSON 结构导出当前 tenant 全量业务数据
- * - GET /export/students：学生名单（含班级名）
+ * - GET /export/students：学生名单（含班级名、备注）
  */
 
 import { Hono } from 'hono';
@@ -51,14 +51,14 @@ app.get('/backup', requireAuth, requireTenant, requireRole(['admin']), async (c)
 
 /**
  * GET /api/v1/export/students — 导出学生名单（§50，teacher 起）
- * 返回含班级名的学生列表
+ * 返回含班级名与备注的学生列表
  */
 app.get('/students', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
   const db = c.env.DB;
   const tenantId = c.get('tenantId');
   const rows = await db
     .prepare(
-      `SELECT s.student_no, s.name, s.gender, s.status, c.name AS class_name
+      `SELECT s.student_no, s.name, s.gender, s.status, s.notes, c.name AS class_name
          FROM students s LEFT JOIN classes c ON c.id = s.class_id
         WHERE s.tenant_id = ?
         ORDER BY c.name, s.student_no, s.name`
