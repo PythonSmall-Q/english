@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>英语教师教学工作台</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- 登录/注册屏（未认证时显示，由 auth.js 渲染） -->
+  <div id="auth-screen" class="auth-screen hidden"></div>
+
+  <!-- 应用主框架（认证后显示） -->
+  <div id="app-frame" class="app-frame hidden">
+    <aside class="sidebar">
+      <div class="sidebar-user">
+        <div class="avatar">L</div>
+        <div class="sidebar-user-name">Lynn</div>
+        <div class="sidebar-user-sub">英语</div>
+      </div>
+      <nav class="nav">
+        <a class="nav-item" data-view="dashboard">🏠 工作台首页</a>
+        <a class="nav-item" data-view="classes">🏫 我的班级</a>
+        <a class="nav-item" data-view="lessons">📚 备课中心</a>
+        <a class="nav-item" data-view="schedule">📅 教学课表</a>
+        <a class="nav-item" data-view="students">👥 学生管理</a>
+        <a class="nav-item" data-view="assignments">📝 作业统计</a>
+        <a class="nav-item" data-view="dictations">✏️ 默写管理</a>
+        <a class="nav-item" data-view="exams">📊 考试成绩</a>
+        <a class="nav-item" data-view="ai">🤖 AI 教学助手</a>
+        <a class="nav-item" data-view="settings">⚙️ 设置</a>
+        <!-- 仅 platform_admin 可见（§72），默认隐藏，App.enterApp 控制 -->
+        <a class="nav-item hidden" data-view="admin" id="nav-admin">🛡️ 平台管理</a>
+      </nav>
+      <div class="sidebar-footer">
+        <button class="btn btn-block" id="logout-btn" type="button">退出登录</button>
+      </div>
+    </aside>
+    <div class="main-area">
+      <header class="topbar">
+        <div class="breadcrumb" id="breadcrumb">工作台首页</div>
+        <div class="topbar-right">
+          <!-- 租户切换器（§22/§69）：>1 个空间时显示 -->
+          <select id="tenant-switcher" class="tenant-switcher hidden" aria-label="切换空间"></select>
+        </div>
+      </header>
+      <main id="view-container" class="view-container"></main>
+    </div>
+  </div>
+
+  <!-- 弹窗 / 轻提示容器 -->
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+
+  <!-- 全局框架先加载（创建 window.App），视图文件随后注册 -->
+  <script src="app.js"></script>
+  <script src="api.js"></script>
+  <script src="auth.js"></script>
+  <!-- 12 个视图（settings/admin 由骨架完整实现，其余为 stub，由后续 agent 补全） -->
+  <script src="views/dashboard.js"></script>
+  <script src="views/classes.js"></script>
+  <script src="views/lessons.js"></script>
+  <script src="views/schedule.js"></script>
+  <script src="views/students.js"></script>
+  <script src="views/assignments.js"></script>
+  <script src="views/dictations.js"></script>
+  <script src="views/exams.js"></script>
+  <script src="views/ai.js"></script>
+  <script src="views/settings.js"></script>
+  <script src="views/admin.js"></script>
+</body>
+</html>
