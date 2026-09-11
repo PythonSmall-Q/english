@@ -42,7 +42,9 @@ function readCredentials(body) {
 /**
  * POST /api/v1/auth/register
  * body: { email, password(≥8位), displayName? }
- * 成功：创建 user + 个人空间 + owner membership + 默认配额 + session（Set-Cookie）
+ * 成功：创建 user + session（Set-Cookie）。
+ * 平台设置 auto_personal_workspace = false 时不自动创建个人空间（§平台设置）：
+ * 响应 data.needsWorkspace = true，前端提示用户联系学校管理员加入学校账户。
  */
 app.post('/register', async (c) => {
   const body = await c.req.json().catch(() => ({}));
@@ -55,10 +57,15 @@ app.post('/register', async (c) => {
 
   const ts = now();
   const userId = newId();
-  const tenantId = newId();
   const platformRole = resolvePlatformRole(email, c.env);
 
-  // user + personal tenant + owner membership + 默认配额 一次 batch 写入（§18/§19）
+  // 平台设置：新建账户是否自动创建个人空间（默认 true）
+  const setting = await db
+    .prepare('SELECT value FROM platform_settings WHERE key = ?')
+    .bind('auto_personal_workspace')
+    .first();
+  const autoWorkspace = !setting || setting.value !== 'false';
+
   const statements = [
     db
       .prepare(
@@ -66,43 +73,52 @@ app.post('/register', async (c) => {
          VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`
       )
       .bind(userId, email, await hashPassword(password), displayName, platformRole, ts, ts),
-    db
-      .prepare(
-        `INSERT INTO tenants (id, name, slug, type, status, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, 'personal', 'active', ?, ?, ?)`
-      )
-      .bind(tenantId, `${displayName}的空间`, `personal-${userId}`, userId, ts, ts),
-    db
-      .prepare(
-        `INSERT INTO memberships (id, tenant_id, user_id, role, status, created_at)
-         VALUES (?, ?, ?, 'owner', 'active', ?)`
-      )
-      .bind(newId(), tenantId, userId, ts),
-    db
-      .prepare(
-        `INSERT INTO tenant_quotas (tenant_id, max_classes, max_students, max_lessons, max_assignments,
-           max_dictations, max_exams, max_storage_bytes, max_ai_requests_month, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .bind(
-        tenantId,
-        PERSONAL_DEFAULTS.max_classes,
-        PERSONAL_DEFAULTS.max_students,
-        PERSONAL_DEFAULTS.max_lessons,
-        PERSONAL_DEFAULTS.max_assignments,
-        PERSONAL_DEFAULTS.max_dictations,
-        PERSONAL_DEFAULTS.max_exams,
-        PERSONAL_DEFAULTS.max_storage_bytes,
-        PERSONAL_DEFAULTS.max_ai_requests_month,
-        ts,
-        ts
-      ),
   ];
+  if (autoWorkspace) {
+    // user + personal tenant + owner membership + 默认配额 一次 batch 写入（§18/§19）
+    const tenantId = newId();
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO tenants (id, name, slug, type, status, created_by, created_at, updated_at)
+           VALUES (?, ?, ?, 'personal', 'active', ?, ?, ?)`
+        )
+        .bind(tenantId, `${displayName}的空间`, `personal-${userId}`, userId, ts, ts),
+      db
+        .prepare(
+          `INSERT INTO memberships (id, tenant_id, user_id, role, status, created_at)
+           VALUES (?, ?, ?, 'owner', 'active', ?)`
+        )
+        .bind(newId(), tenantId, userId, ts),
+      db
+        .prepare(
+          `INSERT INTO tenant_quotas (tenant_id, max_classes, max_students, max_lessons, max_assignments,
+             max_dictations, max_exams, max_storage_bytes, max_ai_requests_month, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          tenantId,
+          PERSONAL_DEFAULTS.max_classes,
+          PERSONAL_DEFAULTS.max_students,
+          PERSONAL_DEFAULTS.max_lessons,
+          PERSONAL_DEFAULTS.max_assignments,
+          PERSONAL_DEFAULTS.max_dictations,
+          PERSONAL_DEFAULTS.max_exams,
+          PERSONAL_DEFAULTS.max_storage_bytes,
+          PERSONAL_DEFAULTS.max_ai_requests_month,
+          ts,
+          ts
+        )
+    );
+  }
   await db.batch(statements);
 
   const { token } = await createSession(c.env, userId);
   return c.json(
-    { success: true, data: { user: { id: userId, email, displayName, platformRole } } },
+    {
+      success: true,
+      data: { user: { id: userId, email, displayName, platformRole }, needsWorkspace: !autoWorkspace },
+    },
     201,
     { 'Set-Cookie': sessionCookie(token) }
   );
@@ -174,7 +190,7 @@ app.get('/me', requireAuth, async (c) => {
   const db = c.env.DB;
   const rows = await db
     .prepare(
-      `SELECT t.id, t.name, t.slug, t.type, t.status, m.role, m.status AS membership_status
+      `SELECT t.id, t.name, t.slug, t.type, t.status, t.expires_at, m.role, m.status AS membership_status
          FROM memberships m JOIN tenants t ON t.id = m.tenant_id
         WHERE m.user_id = ? AND m.status = 'active' AND t.status = 'active'
         ORDER BY m.created_at`
@@ -190,6 +206,7 @@ app.get('/me', requireAuth, async (c) => {
       slug: row.slug,
       type: row.type,
       role: row.role,
+      expired: !!row.expires_at && row.expires_at <= now(),
       quota: await getQuotaUsage(db, row.id),
     });
   }

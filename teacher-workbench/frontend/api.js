@@ -89,6 +89,8 @@
     invite: (id, body) => request(`/tenants/${id}/members`, { method: 'POST', body }),
     accept: (token) => request('/tenants/invitations/accept', { method: 'POST', body: { token } }),
     removeMember: (id, userId) => request(`/tenants/${id}/members/${userId}`, { method: 'DELETE' }),
+    /** 租户管理员直接添加账户（邮箱已注册直接加入，未注册现场开户） */
+    addAccount: (id, body) => request(`/tenants/${id}/accounts`, { method: 'POST', body }),
   };
 
   // —— Classes（§54）——
@@ -231,6 +233,9 @@
     // 后端为 POST /admin/tenants/:id/status（body: { status: 'active'|'disabled' }）
     setStatus: (id, status) => request(`/admin/tenants/${id}/status`, { method: 'POST', body: { status } }),
     setQuota: (id, quotas) => request(`/admin/tenants/${id}/quota`, { method: 'PUT', body: quotas }),
+    /** 平台设置（如新建账户是否自动创建个人空间） */
+    getSettings: () => request('/admin/settings'),
+    updateSettings: (body) => request('/admin/settings', { method: 'PUT', body }),
   };
 
   window.api = { auth, tenants, classes, students, lessons, schedules, assignments, dictations, exams, dashboard, ai, files, import: imp, export: exp, admin };

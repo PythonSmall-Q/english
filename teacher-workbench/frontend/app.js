@@ -157,9 +157,37 @@ window.App = {
     }
     select.classList.remove('hidden');
     select.innerHTML = tenants
-      .map((t) => `<option value="${App.esc(t.id)}">${App.esc(t.name)}</option>`)
+      .map((t) => `<option value="${App.esc(t.id)}">${App.esc(t.name)}${t.expired ? '（已到期·只读）' : ''}</option>`)
       .join('');
     if (App.state.tenant) select.value = App.state.tenant.id;
+  },
+
+  /**
+   * 无空间账号引导页（平台关闭「自动创建个人空间」后注册的用户）：
+   * 提示联系学校管理员将该邮箱加入学校账户
+   */
+  showNoWorkspace(user) {
+    document.getElementById('app-frame').classList.add('hidden');
+    const screen = document.getElementById('auth-screen');
+    screen.classList.remove('hidden');
+    screen.innerHTML = `
+      <div class="auth-card card">
+        <div class="auth-logo">英语教师教学工作台</div>
+        <p style="margin:16px 0 8px">账号 <b>${App.esc(user?.email || '')}</b> 已创建，但尚未加入任何教学空间。</p>
+        <p class="muted" style="line-height:1.8">
+          请联系你的学校管理员，将你的邮箱添加到学校账户后即可开始使用。<br>
+          学校管理员可在「设置 → 当前空间 → 成员 → 添加账户」中操作。
+        </p>
+        <button class="btn btn-block" id="nows-logout" type="button" style="margin-top:12px">退出登录</button>
+      </div>`;
+    document.getElementById('nows-logout').addEventListener('click', async () => {
+      try {
+        await api.auth.logout();
+      } catch (e) {
+        /* 忽略登出异常 */
+      }
+      location.reload();
+    });
   },
 
   /** 进入应用主框架（认证成功后调用） */
@@ -208,6 +236,11 @@ window.App = {
       const data = await api.auth.me();
       App.state.user = data.user;
       App.state.tenants = data.tenants || [];
+      // 无空间账号（平台关闭自动个人空间后注册）：提示联系学校管理员加入
+      if (App.state.tenants.length === 0) {
+        App.showNoWorkspace(App.state.user);
+        return;
+      }
       // 默认选中 personal 空间，否则第一个（§22）
       const personal = App.state.tenants.find((t) => t.type === 'personal');
       App.state.tenant = personal || App.state.tenants[0] || null;

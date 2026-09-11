@@ -57,8 +57,8 @@
   <script src="app.js"></script>
   <script src="api.js"></script>
   <script src="auth.js"></script>
-  <!-- SheetJS（xlsx 导入导出，views/ 通过 window.XLSX 或懒加载 vendor/ 使用） -->
-  <script src="vendor/xlsx.full.min.js"></script>
+  <!-- SheetJS（xlsx 解析）不全局加载：约 950KB 会阻塞首屏；
+       各视图在真正需要导入/导出 xlsx 时才懒加载 vendor/xlsx.full.min.js -->
 
   <!-- 12 个视图（settings/admin 由骨架完整实现，其余为 stub，由后续 agent 补全） -->
   <script src="views/dashboard.js"></script>

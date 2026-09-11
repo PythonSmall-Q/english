@@ -36,7 +36,7 @@ app.get('/tenants', requireAuth, async (c) => {
     .all();
   const tenants = [];
   for (const row of rows.results) {
-    tenants.push({ ...row, usage: await getQuotaUsage(db, row.id) });
+    tenants.push({ ...row, expired: !!row.expires_at && row.expires_at <= now(), usage: await getQuotaUsage(db, row.id) });
   }
   return c.json({ success: true, data: { tenants, operator: user.email } });
 });
@@ -67,7 +67,7 @@ app.post('/tenants/:id/status', requireAuth, async (c) => {
   return c.json({ success: true, data: { id: tenantId, status } });
 });
 
-/** tenant_quotas 可更新的字段白名单（§19） */
+/** tenant_quotas 可更新的字段白名单（§19 + 成员数上限） */
 const QUOTA_FIELDS = [
   'max_classes',
   'max_students',
@@ -77,11 +77,13 @@ const QUOTA_FIELDS = [
   'max_exams',
   'max_storage_bytes',
   'max_ai_requests_month',
+  'max_members',
 ];
 
 /**
- * PUT /api/v1/admin/tenants/:id/quota — 更新租户配额（§19/§72）
- * body 中可包含白名单内任意字段，值为 number 或 null（null 表示不限）
+ * PUT /api/v1/admin/tenants/:id/quota — 更新租户配额与到期日（§19/§72）
+ * body 中可包含白名单内任意配额字段，值为 number 或 null（null 表示不限）；
+ * 另支持 expiresAt（YYYY-MM-DD 或 null，null=永不过期）
  */
 app.put('/tenants/:id/quota', requireAuth, async (c) => {
   const user = requirePlatformAdmin(c);
@@ -91,6 +93,20 @@ app.put('/tenants/:id/quota', requireAuth, async (c) => {
 
   const tenant = await db.prepare('SELECT id FROM tenants WHERE id = ?').bind(tenantId).first();
   if (!tenant) throw new ApiError('NOT_FOUND', '租户不存在');
+
+  // 到期日单独更新 tenants 表
+  if ('expiresAt' in body) {
+    let expiresAt = null;
+    if (body.expiresAt !== null && body.expiresAt !== '') {
+      const s = String(body.expiresAt).trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s))) {
+        throw new ApiError('VALIDATION_ERROR', 'expiresAt 格式应为 YYYY-MM-DD');
+      }
+      expiresAt = new Date(`${s}T23:59:59.999Z`).toISOString();
+    }
+    await db.prepare('UPDATE tenants SET expires_at = ?, updated_at = ? WHERE id = ?').bind(expiresAt, now(), tenantId).run();
+    await audit(db, tenantId, user.id, '更新到期日', 'tenant', tenantId, { expiresAt });
+  }
 
   const updates = [];
   const values = [];
@@ -105,6 +121,10 @@ app.put('/tenants/:id/quota', requireAuth, async (c) => {
     }
   }
   if (updates.length === 0) {
+    if ('expiresAt' in body) {
+      const quota = await db.prepare('SELECT * FROM tenant_quotas WHERE tenant_id = ?').bind(tenantId).first();
+      return c.json({ success: true, data: { tenantId, quota } });
+    }
     throw new ApiError('VALIDATION_ERROR', '没有可更新的配额字段');
   }
 
@@ -128,8 +148,8 @@ app.put('/tenants/:id/quota', requireAuth, async (c) => {
     await db
       .prepare(
         `INSERT INTO tenant_quotas (tenant_id, max_classes, max_students, max_lessons, max_assignments,
-           max_dictations, max_exams, max_storage_bytes, max_ai_requests_month, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           max_dictations, max_exams, max_storage_bytes, max_ai_requests_month, max_members, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         tenantId,
@@ -141,6 +161,7 @@ app.put('/tenants/:id/quota', requireAuth, async (c) => {
         all.max_exams,
         all.max_storage_bytes,
         all.max_ai_requests_month,
+        all.max_members,
         ts,
         ts
       )
@@ -169,6 +190,54 @@ app.get('/users', requireAuth, async (c) => {
     )
     .all();
   return c.json({ success: true, data: { users: rows.results } });
+});
+
+/**
+ * GET /api/v1/admin/settings — 平台设置
+ * 当前支持：auto_personal_workspace（true=新建账户自动创建个人空间）
+ */
+app.get('/settings', requireAuth, async (c) => {
+  requirePlatformAdmin(c);
+  const db = c.env.DB;
+  const rows = await db.prepare('SELECT key, value FROM platform_settings').all();
+  const settings = Object.fromEntries(rows.results.map((r) => [r.key, r.value]));
+  return c.json({
+    success: true,
+    data: { autoPersonalWorkspace: settings.auto_personal_workspace !== 'false' },
+  });
+});
+
+/**
+ * PUT /api/v1/admin/settings — 更新平台设置
+ * body: { autoPersonalWorkspace?: boolean }
+ */
+app.put('/settings', requireAuth, async (c) => {
+  const user = requirePlatformAdmin(c);
+  const db = c.env.DB;
+  const body = await c.req.json().catch(() => ({}));
+  const ts = now();
+
+  const updates = {};
+  if (body.autoPersonalWorkspace !== undefined) {
+    if (typeof body.autoPersonalWorkspace !== 'boolean') {
+      throw new ApiError('VALIDATION_ERROR', 'autoPersonalWorkspace 必须是布尔值');
+    }
+    updates.auto_personal_workspace = String(body.autoPersonalWorkspace);
+  }
+  if (Object.keys(updates).length === 0) {
+    throw new ApiError('VALIDATION_ERROR', '没有可更新的设置项');
+  }
+  for (const [key, value] of Object.entries(updates)) {
+    await db
+      .prepare(
+        `INSERT INTO platform_settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?`
+      )
+      .bind(key, value, ts, value, ts)
+      .run();
+  }
+  await audit(db, 'platform', user.id, '更新平台设置', 'platform_settings', null, updates);
+  return c.json({ success: true, data: { autoPersonalWorkspace: updates.auto_personal_workspace === 'true' } });
 });
 
 export default app;

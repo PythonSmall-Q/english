@@ -31,6 +31,7 @@ function currentWeekRange() {
 /**
  * GET /api/v1/students — 学生列表
  * 支持 ?class_id= 按班级过滤、?q= 按学号/姓名模糊搜索
+ * 每条附 alert 预警统计（§28），避免前端逐生调详情（N+1）
  */
 app.get('/', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
@@ -54,7 +55,68 @@ app.get('/', requireAuth, requireTenant, async (c) => {
   sql += ' ORDER BY s.class_id, s.student_no, s.created_at';
 
   const rows = await db.prepare(sql).bind(...params).all();
-  return c.json({ success: true, data: { students: rows.results } });
+  const students = rows.results;
+
+  // 预警统计：对整批学生分块聚合查询（每块 ≤300 个参数，避免 SQL 变量上限）
+  const alertMap = new Map();
+  const { from, to } = currentWeekRange();
+  const ids = students.map((s) => s.id);
+  for (let i = 0; i < ids.length; i += 300) {
+    const chunk = ids.slice(i, i + 300);
+    const ph = chunk.map(() => '?').join(',');
+
+    const hw = await db
+      .prepare(
+        `SELECT s.student_id AS sid, COUNT(*) AS n
+           FROM assignment_submissions s
+           JOIN assignments a ON a.id = s.assignment_id AND a.tenant_id = s.tenant_id
+          WHERE s.tenant_id = ? AND s.student_id IN (${ph})
+            AND s.status != 'submitted'
+            AND COALESCE(a.deadline, s.created_at) >= ? AND COALESCE(a.deadline, s.created_at) < ?
+          GROUP BY s.student_id`
+      )
+      .bind(tenantId, ...chunk, from, to)
+      .all();
+
+    const dict = await db
+      .prepare(
+        `SELECT student_id AS sid, COUNT(*) AS n
+           FROM dictation_results
+          WHERE tenant_id = ? AND student_id IN (${ph}) AND passed = 0 AND retest_completed = 0
+          GROUP BY student_id`
+      )
+      .bind(tenantId, ...chunk)
+      .all();
+
+    const retest = await db
+      .prepare(
+        `SELECT student_id AS sid, 1 AS flag
+           FROM dictation_results
+          WHERE tenant_id = ? AND student_id IN (${ph}) AND retest_required = 1 AND retest_completed = 0
+          GROUP BY student_id`
+      )
+      .bind(tenantId, ...chunk)
+      .all();
+
+    for (const r of hw.results) alertMap.set(r.sid, { ...(alertMap.get(r.sid) || {}), hw: r.n });
+    for (const r of dict.results) alertMap.set(r.sid, { ...(alertMap.get(r.sid) || {}), dict: r.n });
+    for (const r of retest.results) alertMap.set(r.sid, { ...(alertMap.get(r.sid) || {}), retest: true });
+  }
+
+  for (const s of students) {
+    const a = alertMap.get(s.id) || {};
+    const missingHomeworkThisWeek = a.hw || 0;
+    const failedDictationsNotRetested = a.dict || 0;
+    s.alert = {
+      missing_homework_this_week: missingHomeworkThisWeek,
+      failed_dictations_not_retested: failedDictationsNotRetested,
+      needs_retest: !!a.retest,
+      homework_alert: missingHomeworkThisWeek > 3,
+      dictation_alert: failedDictationsNotRetested > 5,
+    };
+  }
+
+  return c.json({ success: true, data: { students } });
 });
 
 /** 校验 class 属于本 tenant */

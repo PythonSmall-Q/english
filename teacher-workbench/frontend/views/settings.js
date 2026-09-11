@@ -318,15 +318,19 @@ async function renderSpace() {
       })
       .join('');
 
-  // 成员列表
+  // 成员列表（owner/admin 可添加账户）
   const memberEl = document.getElementById('member-list');
   if (!members.length) {
     memberEl.innerHTML = '<div class="muted">成员列表仅组织空间可见。</div>';
     return;
   }
+  const canManage = ['owner', 'admin'].includes(tenant.role);
   const ROLE_LABELS = { owner: '所有者', admin: '管理员', teacher: '教师', viewer: '查看者' };
   memberEl.innerHTML = `
-    <div class="card-title" style="margin-bottom:8px">成员（${members.length}）</div>
+    <div class="card-title" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+      <span>成员（${members.length}）</span>
+      ${canManage ? '<button class="btn btn-sm" id="member-add" type="button">添加账户</button>' : ''}
+    </div>
     <table class="table">
       <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th></tr></thead>
       <tbody>
@@ -341,6 +345,57 @@ async function renderSpace() {
           .join('')}
       </tbody>
     </table>`;
+  if (canManage) {
+    document.getElementById('member-add').addEventListener('click', () => openAddAccountModal(tenant.id, tenant.name));
+  }
+}
+
+/** 添加账户弹窗：邮箱已注册直接加入，未注册现场开户（§租户管理员添加账户） */
+function openAddAccountModal(tenantId, tenantName) {
+  App.modal(
+    `添加账户 — ${tenantName}`,
+    `
+      <label class="form-label">邮箱 *</label>
+      <input class="form-input" id="ma-email" type="email" placeholder="user@example.com">
+      <label class="form-label">姓名</label>
+      <input class="form-input" id="ma-name" placeholder="未注册时作为开户名">
+      <label class="form-label">初始密码（邮箱未注册时必填，≥8 位）</label>
+      <input class="form-input" id="ma-password" type="password" placeholder="邮箱已注册可留空">
+      <label class="form-label">角色</label>
+      <select class="form-input" id="ma-role">
+        <option value="teacher" selected>教师</option>
+        <option value="admin">管理员</option>
+        <option value="viewer">查看者</option>
+      </select>
+      <div class="modal-actions">
+        <button class="btn" id="ma-cancel" type="button">取消</button>
+        <button class="btn btn-primary" id="ma-save" type="button">添加</button>
+      </div>`,
+    (modal) => {
+      modal.querySelector('#ma-cancel').onclick = () => App.closeModal();
+      modal.querySelector('#ma-save').onclick = async () => {
+        const email = modal.querySelector('#ma-email').value.trim();
+        const password = modal.querySelector('#ma-password').value;
+        if (!email) {
+          App.toast('请填写邮箱');
+          return;
+        }
+        try {
+          const data = await api.tenants.addAccount(tenantId, {
+            email,
+            password,
+            displayName: modal.querySelector('#ma-name').value.trim(),
+            role: modal.querySelector('#ma-role').value,
+          });
+          App.closeModal();
+          App.toast(data.message || '已添加');
+          await renderSpace();
+        } catch (e) {
+          App.toast(e.message || '添加失败');
+        }
+      };
+    }
+  );
 }
 
 /** 数据管理：导出/恢复（§51） */

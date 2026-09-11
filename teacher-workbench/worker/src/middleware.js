@@ -56,12 +56,25 @@ export async function requireTenant(c, next) {
   const tenant = await c.env.DB.prepare('SELECT * FROM tenants WHERE id = ?')
     .bind(tenantId)
     .first();
-  if (!tenant || tenant.status !== 'active') {
+  if (!tenant) {
     throw new ApiError('FORBIDDEN', '空间不存在或已被停用');
+  }
+  // 到期/停用：数据保留、只读放行；写操作一律拒绝（§到期停用策略）
+  const expired = !!tenant.expires_at && tenant.expires_at <= now();
+  if (tenant.status !== 'active' || expired) {
+    const method = c.req.method;
+    const readOnly = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
+    if (!readOnly) {
+      throw new ApiError(
+        'FORBIDDEN',
+        expired ? '空间已到期（只读），如需继续使用请联系平台管理员续期' : '空间已被停用（只读），如需恢复请联系平台管理员'
+      );
+    }
   }
   c.set('tenantId', tenantId);
   c.set('membership', membership);
   c.set('tenant', tenant);
+  c.set('tenantReadOnly', tenant.status !== 'active' || expired);
   await next();
 }
 

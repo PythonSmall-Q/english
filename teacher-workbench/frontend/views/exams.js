@@ -157,21 +157,36 @@
     });
   }
 
-  /** 读取 .xlsx → 行列数组（第一个工作表；依赖 window.XLSX） */
+  /** 懒加载 SheetJS（约 950KB，仅在需要解析 xlsx 时加载，避免拖慢首屏） */
+  function loadXLSX() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    if (loadXLSX._p) return loadXLSX._p;
+    loadXLSX._p = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'vendor/xlsx.full.min.js';
+      s.onload = () => resolve(window.XLSX);
+      s.onerror = () => {
+        loadXLSX._p = null;
+        reject(new Error('表格解析组件加载失败，请检查网络后重试'));
+      };
+      document.head.appendChild(s);
+    });
+    return loadXLSX._p;
+  }
+
+  /** 读取 .xlsx → 行列数组（第一个工作表；懒加载 XLSX） */
   async function readXlsxMatrix(file) {
-    if (!window.XLSX || typeof window.XLSX.read !== 'function') {
-      throw new Error('表格解析组件未加载（index.html 未引入 xlsx 库），暂不支持 .xlsx，请改用 CSV / JSON / 粘贴文本');
-    }
+    const XLSX = await loadXLSX();
     const buf = await new Promise((resolve, reject) => {
       const r = new FileReader();
       r.onload = () => resolve(r.result);
       r.onerror = () => reject(new Error('文件读取失败'));
       r.readAsArrayBuffer(file);
     });
-    const wb = window.XLSX.read(buf, { type: 'array' });
+    const wb = XLSX.read(buf, { type: 'array' });
     const ws = wb.Sheets[wb.SheetNames[0]];
     if (!ws) throw new Error('表格中没有工作表');
-    return window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
   }
 
   /** 统一入口：来源 + 文件/文本 → 导入行数组 */

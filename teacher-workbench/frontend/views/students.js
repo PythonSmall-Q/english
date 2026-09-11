@@ -4,8 +4,7 @@
  * 功能：班级分栏学生列表、搜索、只看预警、添加/编辑/删除、详情（含预警明细）、
  *       个性化成绩分析入口、导出名单（.xlsx）
  * 数据：api.classes / api.students / api.export.students
- * 说明：学生列表接口不含预警字段，进入视图后逐生调详情接口（api.students.get）
- *       补齐 alert 统计（本周作业未交、默写未过未重默、需重默）。
+ * 说明：预警统计由学生列表接口批量返回（alert 字段），无需逐生调详情。
  */
 
 (function () {
@@ -111,9 +110,8 @@
       // 传入的班级可能已被删除，兜底重置为「全部班级」
       if (filterClassId && !classes.some((c) => c.id === filterClassId)) filterClassId = '';
       const list = stuData.students || [];
-      // 列表接口不含预警字段：逐生调详情接口补齐（§55 GET /students/:id 返回 alert）
-      const details = await Promise.all(list.map((s) => api.students.get(s.id).catch(() => null)));
-      students = list.map((s, i) => ({ ...s, alert: (details[i] && details[i].alert) || null }));
+      // 预警统计已由列表接口批量返回（§55），无需逐生调详情
+      students = list;
       renderContent();
     } catch (err) {
       content.innerHTML = `

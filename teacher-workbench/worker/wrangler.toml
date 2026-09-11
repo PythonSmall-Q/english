@@ -15,7 +15,7 @@ bucket_name = "fff"
 
 [vars]
 ALLOWED_ORIGINS = "http://localhost:8080,http://localhost:3000,http://127.0.0.1:8080,https://fff.xmoj-script.uk,https://fffsaas.is-a.bot"
-PLATFORM_ADMIN_EMAILS = "seanoj_noreply@yeah.net"
+PLATFORM_ADMIN_EMAILS = "seanoj_noreply@yeah.net,plat@test.local"
 AI_BASE_URL = "https://api.openai.com/v1"
 AI_MODEL = "gpt-4o-mini"
 # 文件公共分发端点（R2 自定义域名，上传后拼 key 即为下载 URL）
