@@ -44,6 +44,8 @@
   let classes = [];
   let assignments = []; // api.assignments.list() → list，每条含 stats
   let containerEl = null;
+  let canManageMap = new Map(); // class_id → canManage（班级级权限感知）
+  let anyManageable = false; // 是否存在可管理班级
 
   /** 统一错误提示：额度超限给固定文案（§21） */
   function errMsg(err, fallback) {
@@ -81,6 +83,9 @@
     try {
       const [clsData, asgData] = await Promise.all([api.classes.list(), api.assignments.list()]);
       classes = clsData.classes || [];
+      // 班级级权限感知：登记上交/删除按该班 canManage 控制（服务端另有 403 兜底）
+      canManageMap = new Map(classes.map((c) => [c.id, !!c.canManage]));
+      anyManageable = classes.some((c) => !!c.canManage);
       assignments = asgData.list || [];
       renderContent();
     } catch (err) {
@@ -102,6 +107,12 @@
       a.status === 'active'
         ? '<span class="badge badge-success">进行中</span>'
         : `<span class="badge badge-leave">${App.esc(a.status || '未知')}</span>`;
+    // 登记上交/删除仅该班可管理时显示；详情始终可见
+    const canManage = canManageMap.get(a.classId);
+    const writeBtns = canManage
+      ? `<button class="btn btn-sm btn-primary" data-act="register" type="button">登记上交</button>
+         <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>`
+      : '';
     return `
       <div class="asg-item" data-id="${App.esc(a.id)}">
         <div class="asg-item-head">
@@ -115,15 +126,17 @@
           <span>已交 ${st.submitted} / 总 ${st.total}</span>
         </div>
         <div class="asg-item-ops">
-          <button class="btn btn-sm btn-primary" data-act="register" type="button">登记上交</button>
+          ${writeBtns}
           <button class="btn btn-sm" data-act="detail" type="button">详情</button>
-          <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>
         </div>
       </div>`;
   }
 
   function renderContent() {
     const content = containerEl.querySelector('#asg-content');
+    // 「新建作业」仅存在可管理班级时显示
+    const createBtn = containerEl.querySelector('#asg-btn-create');
+    if (createBtn) createBtn.style.display = anyManageable ? '' : 'none';
     if (!classes.length) {
       content.innerHTML = '<div class="card"><div class="muted">当前空间还没有班级，请先在「我的班级」中创建。</div></div>';
       return;
@@ -375,6 +388,8 @@
       injectStyle();
       classes = [];
       assignments = [];
+      canManageMap = new Map();
+      anyManageable = false;
       containerEl = el;
 
       el.innerHTML = `

@@ -42,6 +42,8 @@
   let filterQ = '';
   let alertOnly = false;
   let containerEl = null;
+  let canManageMap = new Map(); // class_id → canManage（班级级权限感知）
+  let anyManageable = false; // 是否存在可管理班级
 
   /** 统一错误提示：额度超限给固定文案（§21） */
   function errMsg(err, fallback) {
@@ -107,6 +109,9 @@
     try {
       const [clsData, stuData] = await Promise.all([api.classes.list(), api.students.list()]);
       classes = clsData.classes || [];
+      // 班级级权限感知：编辑/删除学生、添加学生按 canManage 控制（服务端另有 403 兜底）
+      canManageMap = new Map(classes.map((c) => [c.id, !!c.canManage]));
+      anyManageable = classes.some((c) => !!c.canManage);
       // 传入的班级可能已被删除，兜底重置为「全部班级」
       if (filterClassId && !classes.some((c) => c.id === filterClassId)) filterClassId = '';
       const list = stuData.students || [];
@@ -135,6 +140,12 @@
   }
 
   function studentRow(s) {
+    // 编辑/删除仅在该生班级可管理时显示；只读班级仍可看详情与成绩分析
+    const canManage = canManageMap.get(s.class_id);
+    const editBtns = canManage
+      ? `<button class="btn btn-sm" data-act="edit" type="button">编辑</button>
+         <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>`
+      : '';
     return `
       <div class="stu-row" data-id="${App.esc(s.id)}">
         <span class="stu-no">${App.esc(s.student_no || '—')}</span>
@@ -144,14 +155,16 @@
         <span class="stu-actions">
           <button class="btn btn-sm" data-act="detail" type="button">详情</button>
           <button class="btn btn-sm" data-act="analysis" type="button">成绩分析</button>
-          <button class="btn btn-sm" data-act="edit" type="button">编辑</button>
-          <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>
+          ${editBtns}
         </span>
       </div>`;
   }
 
   function renderContent() {
     const content = containerEl.querySelector('#stu-content');
+    // 「添加学生」仅存在可管理班级时显示
+    const addBtn = containerEl.querySelector('#stu-btn-add');
+    if (addBtn) addBtn.style.display = anyManageable ? '' : 'none';
     if (!classes.length) {
       content.innerHTML = '<div class="card"><div class="muted">当前空间还没有班级，请先在「我的班级」中创建。</div></div>';
       return;
@@ -344,6 +357,8 @@
       filterClassId = '';
       filterQ = '';
       alertOnly = false;
+      canManageMap = new Map();
+      anyManageable = false;
       containerEl = el;
 
       // 消费「我的班级 → 查看学生」传入的班级过滤（classes.js 双通道约定，二选一读取）

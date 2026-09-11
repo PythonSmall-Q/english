@@ -42,6 +42,9 @@
   let classes = [];
   let dictations = []; // api.dictations.list() → list，每条含 stats
   let containerEl = null;
+  let canManageMap = new Map(); // class_id → canManage（班级级权限感知）
+  let anyManageable = false; // 是否存在可管理班级
+  let isTenantAdmin = false; // owner/admin（全年段默写写操作仅管理员）
 
   /** 统一错误提示：额度超限给固定文案（§21） */
   function errMsg(err, fallback) {
@@ -79,6 +82,11 @@
     try {
       const [clsData, dctData] = await Promise.all([api.classes.list(), api.dictations.list()]);
       classes = clsData.classes || [];
+      // 班级级权限感知：登记/重传材料/删除按该班 canManage 控制；全年段默写写操作仅 owner/admin（服务端另有 403 兜底）
+      canManageMap = new Map(classes.map((c) => [c.id, !!c.canManage]));
+      anyManageable = classes.some((c) => !!c.canManage);
+      const role = App.state.tenant?.role;
+      isTenantAdmin = role === 'owner' || role === 'admin';
       dictations = dctData.list || [];
       renderContent();
     } catch (err) {
@@ -95,6 +103,13 @@
 
   function dictationCard(d) {
     const st = d.stats || { passed: 0, failed: 0, retestRequired: 0, retestCompleted: 0 };
+    // 写操作：班级默写按该班 canManage；全年段默写仅 owner/admin（scope=grade 后端仅管理员可写）
+    const canWrite = d.scope === 'grade' ? isTenantAdmin : !!canManageMap.get(d.classId);
+    const writeBtns = canWrite
+      ? `<button class="btn btn-sm btn-primary" data-act="register" type="button">登记</button>
+         <button class="btn btn-sm" data-act="material" type="button">${d.materialUrl ? '重传材料' : '上传材料'}</button>
+         <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>`
+      : '';
     return `
       <div class="dct-item" data-id="${App.esc(d.id)}">
         <div class="dct-item-head">
@@ -109,16 +124,17 @@
           <span>需重默 <strong style="color:${st.retestRequired ? 'var(--warning)' : 'inherit'}">${st.retestRequired}</strong></span>
         </div>
         <div class="dct-item-ops">
-          <button class="btn btn-sm btn-primary" data-act="register" type="button">登记</button>
-          <button class="btn btn-sm" data-act="material" type="button">${d.materialUrl ? '重传材料' : '上传材料'}</button>
+          ${writeBtns}
           <button class="btn btn-sm" data-act="detail" type="button">详情</button>
-          <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>
         </div>
       </div>`;
   }
 
   function renderContent() {
     const content = containerEl.querySelector('#dct-content');
+    // 「新建默写」仅存在可管理班级时显示
+    const createBtn = containerEl.querySelector('#dct-btn-create');
+    if (createBtn) createBtn.style.display = anyManageable ? '' : 'none';
     if (!classes.length) {
       content.innerHTML = '<div class="card"><div class="muted">当前空间还没有班级，请先在「我的班级」中创建。</div></div>';
       return;
@@ -162,7 +178,7 @@
         <label class="form-label">范围 *</label>
         <div class="dct-scope-row">
           <label><input type="radio" name="dct-c-scope" value="class" checked> 班级默写</label>
-          <label><input type="radio" name="dct-c-scope" value="grade"> 全年段默写</label>
+          ${isTenantAdmin ? '<label><input type="radio" name="dct-c-scope" value="grade"> 全年段默写</label>' : ''}
         </div>
         <div id="dct-c-class-wrap">
           <label class="form-label">班级 *</label>
@@ -508,6 +524,9 @@
       injectStyle();
       classes = [];
       dictations = [];
+      canManageMap = new Map();
+      anyManageable = false;
+      isTenantAdmin = false;
       containerEl = el;
 
       el.innerHTML = `
