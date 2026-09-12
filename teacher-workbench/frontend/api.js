@@ -33,13 +33,37 @@
 
   /**
    * 统一请求。query 为对象时拼到 URL 上。
+   * 学年归档（§63）：GET 7 个列表端点未显式传 academic_year 时自动带当前选中学年；
+   * 历史学年模式下拦截这些命名空间的写请求（前端先行拒绝，后端 403 兜底）。
    * @throws {{code:string,message:string}} 业务错误或网络错误
    */
+  // 纳入学年归档过滤/写保护的命名空间（列表 GET 自动带参；非 GET 历史模式拦截）
+  const ACADEMIC_LIST_PREFIXES = ['/classes', '/students', '/lessons', '/schedules', '/assignments', '/dictations', '/exams'];
+  const ACADEMIC_WRITE_PREFIXES = ['/classes', '/students', '/lessons', '/schedules', '/assignments', '/dictations', '/exams', '/import'];
+
   async function request(path, { method = 'GET', body, query } = {}) {
+    const isAcademicListGet =
+      method === 'GET' && ACADEMIC_LIST_PREFIXES.some((p) => path === p || path.startsWith(p + '/'));
+    // 历史学年只读：拦截教学数据的写请求（settings/quota/admin/ai/files 不受影响）
+    if (
+      method !== 'GET' &&
+      window.App?.state?.academicYear &&
+      window.App.state.academicYear !== window.App.state.currentAcademicYear &&
+      ACADEMIC_WRITE_PREFIXES.some((p) => path === p || path.startsWith(p + '/'))
+    ) {
+      window.App?.toast?.('历史学年数据仅可查看');
+      return Promise.reject({ code: 'FORBIDDEN', message: '历史学年数据仅可查看' });
+    }
     let url = BASE + path;
-    if (query) {
+    const q = { ...(query || {}) };
+    // 列表 GET 未显式指定学年时，自动带当前选中学年
+    if (isAcademicListGet && (q.academic_year === undefined || q.academic_year === null || q.academic_year === '')) {
+      const y = window.App?.state?.academicYear;
+      if (y) q.academic_year = y;
+    }
+    if (Object.keys(q).length) {
       const qs = new URLSearchParams(
-        Object.entries(query).filter(([, v]) => v !== undefined && v !== null && v !== '')
+        Object.entries(q).filter(([, v]) => v !== undefined && v !== null && v !== '')
       ).toString();
       if (qs) url += '?' + qs;
     }
@@ -83,6 +107,8 @@
   const tenants = {
     list: () => request('/tenants'),
     get: (id) => request(`/tenants/${id}`),
+    /** 学年归档：当前学年 + 本空间出现过的学年列表（降序） */
+    academicYears: (id) => request(`/tenants/${id}/academic-years`),
     create: (body) => request('/tenants', { method: 'POST', body }),
     // 成员列表随租户详情返回（GET /tenants/:id → data.members）
     members: async (id) => (await request(`/tenants/${id}`)).members || [],

@@ -9,7 +9,7 @@
  */
 
 import { Hono } from 'hono';
-import { ApiError, newId, now } from '../db.js';
+import { ApiError, newId, now, currentAcademicYear } from '../db.js';
 import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
 import { checkQuota } from '../quota.js';
 
@@ -64,10 +64,10 @@ app.post('/students', requireAuth, requireTenant, requireRole(['admin']), async 
     statements.push(
       db
         .prepare(
-          `INSERT INTO students (id, tenant_id, class_id, student_no, name, gender, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'normal', ?, ?)`
+          `INSERT INTO students (id, tenant_id, class_id, student_no, name, gender, status, academic_year, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'normal', ?, ?, ?)`
         )
-        .bind(newId(), tenantId, classId, studentNo || null, name, gender || null, ts, ts)
+        .bind(newId(), tenantId, classId, studentNo || null, name, gender || null, currentAcademicYear(), ts, ts)
     );
   }
 
@@ -129,8 +129,8 @@ app.post('/schedules', requireAuth, requireTenant, requireRole(['teacher']), asy
       db
         .prepare(
           `INSERT INTO schedules (id, tenant_id, teacher_id, class_id, weekday, period, start_time, end_time,
-             title, lesson_type, classroom, scope, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`
+             title, lesson_type, classroom, scope, academic_year, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`
         )
         .bind(
           newId(),
@@ -144,6 +144,7 @@ app.post('/schedules', requireAuth, requireTenant, requireRole(['teacher']), asy
           title,
           classroom,
           scope,
+          currentAcademicYear(),
           ts,
           ts
         )

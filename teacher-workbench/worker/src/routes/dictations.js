@@ -10,8 +10,8 @@
  */
 
 import { Hono } from 'hono';
-import { requireAuth, requireTenant, requireRole, canManageClass, audit } from '../middleware.js';
-import { ApiError, newId, now } from '../db.js';
+import { requireAuth, requireTenant, requireRole, canManageClass, audit, assertCurrentYear } from '../middleware.js';
+import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
 import { checkQuota } from '../quota.js';
 
 const app = new Hono();
@@ -56,13 +56,15 @@ function readScope(value) {
 
 /**
  * GET /dictations — 默写列表
- * 支持 ?class_id= 过滤（仅对班级默写生效，全年段默写 class_id 为空不参与过滤）
+ * 支持 ?class_id= 过滤（仅对班级默写生效，全年段默写 class_id 为空不参与过滤）、
+ * ?academic_year= 学年过滤（缺省/非法回退当前学年）
  * 每条附统计：通过 / 未过（passed=0 且未标记需重默）/ 需重默 / 已重默计数
  */
 app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   const db = c.env.DB;
   const tenantId = c.get('tenantId');
   const classId = c.req.query('class_id');
+  const academicYear = resolveAcademicYear(c.req.query('academic_year'));
 
   const rows = await db
     .prepare(
@@ -76,10 +78,10 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
          (SELECT COUNT(*) FROM dictation_results r
            WHERE r.dictation_id = d.id AND r.retest_completed = 1) AS retest_completed_count
        FROM dictations d
-       WHERE d.tenant_id = ? ${classId ? 'AND d.class_id = ?' : ''}
+       WHERE d.tenant_id = ? AND d.academic_year = ? ${classId ? 'AND d.class_id = ?' : ''}
        ORDER BY d.dictation_date DESC, d.created_at DESC`
     )
-    .bind(...(classId ? [tenantId, classId] : [tenantId]))
+    .bind(...(classId ? [tenantId, academicYear, classId] : [tenantId, academicYear]))
     .all();
 
   const list = rows.results.map((r) => ({
@@ -89,6 +91,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
     scope: r.scope,
     materialUrl: r.material_url,
     dictationDate: r.dictation_date,
+    academicYear: r.academic_year,
     createdAt: r.created_at,
     stats: {
       passed: r.passed_count || 0,
@@ -135,10 +138,10 @@ app.post('/', requireAuth, requireTenant, async (c) => {
   const id = newId();
   await db
     .prepare(
-      `INSERT INTO dictations (id, tenant_id, teacher_id, class_id, title, scope, material_url, dictation_date, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO dictations (id, tenant_id, teacher_id, class_id, title, scope, material_url, dictation_date, academic_year, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(id, tenantId, user.id, classId, title, scope, body.material_url ?? null, body.dictation_date ?? null, now())
+    .bind(id, tenantId, user.id, classId, title, scope, body.material_url ?? null, body.dictation_date ?? null, currentAcademicYear(), now())
     .run();
   await audit(db, tenantId, user.id, '创建默写', 'dictation', id, { title, scope });
 
@@ -187,6 +190,7 @@ app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) =
       scope: dictation.scope,
       materialUrl: dictation.material_url,
       dictationDate: dictation.dictation_date,
+      academicYear: dictation.academic_year,
       createdAt: dictation.created_at,
       list,
     },
@@ -204,6 +208,9 @@ app.put('/:id', requireAuth, requireTenant, async (c) => {
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
   await requireDictationManager(db, tenantId, user, dictation);
   const body = await c.req.json().catch(() => ({}));
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'dictations', dictation.id);
 
   const title = body.title !== undefined ? String(body.title).trim() : dictation.title;
   if (!title) throw new ApiError('VALIDATION_ERROR', '默写标题不能为空');
@@ -246,6 +253,9 @@ app.delete('/:id', requireAuth, requireTenant, async (c) => {
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
   await requireDictationManager(db, tenantId, user, dictation);
 
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'dictations', dictation.id);
+
   await db.batch([
     db
       .prepare('DELETE FROM dictation_results WHERE tenant_id = ? AND dictation_id = ?')
@@ -272,6 +282,9 @@ app.post('/:id/results/bulk', requireAuth, requireTenant, async (c) => {
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
   await requireDictationManager(db, tenantId, user, dictation);
   const body = await c.req.json().catch(() => ({}));
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'dictations', dictation.id);
 
   const passed = Array.isArray(body.passed) ? body.passed.map(String) : [];
   const failed = Array.isArray(body.failed) ? body.failed.map(String) : [];
@@ -343,6 +356,9 @@ app.post('/:id/retest', requireAuth, requireTenant, async (c) => {
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
   await requireDictationManager(db, tenantId, user, dictation);
   const body = await c.req.json().catch(() => ({}));
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'dictations', dictation.id);
 
   const studentIds = Array.isArray(body.studentIds) ? [...new Set(body.studentIds.map(String))] : [];
   if (studentIds.length === 0) throw new ApiError('VALIDATION_ERROR', 'studentIds 不能为空');

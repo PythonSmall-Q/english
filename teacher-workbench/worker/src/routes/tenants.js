@@ -10,7 +10,7 @@
  */
 
 import { Hono } from 'hono';
-import { ApiError, newId, now } from '../db.js';
+import { ApiError, newId, now, currentAcademicYear } from '../db.js';
 import { requireAuth, requireTenant, requireRole, audit, getUserPermissions, TEACHER_PERMS } from '../middleware.js';
 import { getQuotaUsage, PERSONAL_DEFAULTS } from '../quota.js';
 import { hashPassword, resolvePlatformRole } from '../auth-core.js';
@@ -658,6 +658,33 @@ app.put('/:id/members/:userId/quota', requireAuth, requireTenant, requireRole(['
     quota: body.quota ?? null,
   });
   return c.json({ success: true, data: { userId: targetUserId, resource, quota: body.quota ?? null } });
+});
+
+/**
+ * GET /api/v1/tenants/:id/academic-years — 学年列表（任何成员，§学年归档）
+ * 返回 { current: 服务端计算的当前学年, years: 7 张归属表该租户 distinct 学年降序合并 }
+ * current 一定包含在 years 中（无数据时也会列入）。
+ */
+app.get('/:id/academic-years', requireAuth, requireTenant, async (c) => {
+  const tenantId = c.req.param('id');
+  if (tenantId !== c.get('tenantId')) {
+    throw new ApiError('FORBIDDEN', '你不属于该空间');
+  }
+  const db = c.env.DB;
+  // 逐表取 distinct 学年后在内存合并降序（避免 compound SELECT 在 D1 本地模式下的条数限制）
+  const TABLES = ['classes', 'students', 'lessons', 'schedules', 'assignments', 'dictations', 'exams'];
+  const yearSet = new Set();
+  for (const table of TABLES) {
+    const rows = await db
+      .prepare(`SELECT DISTINCT academic_year FROM ${table} WHERE tenant_id = ? AND academic_year IS NOT NULL`)
+      .bind(tenantId)
+      .all();
+    for (const r of rows.results) yearSet.add(r.academic_year);
+  }
+  const current = currentAcademicYear();
+  yearSet.add(current);
+  const years = [...yearSet].sort().reverse();
+  return c.json({ success: true, data: { current, years } });
 });
 
 /**

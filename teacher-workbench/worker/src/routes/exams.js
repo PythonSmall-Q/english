@@ -10,8 +10,8 @@
  */
 
 import { Hono } from 'hono';
-import { requireAuth, requireTenant, requireRole, audit, requireTeacherPerm } from '../middleware.js';
-import { ApiError, newId, now } from '../db.js';
+import { requireAuth, requireTenant, requireRole, audit, requireTeacherPerm, assertCurrentYear } from '../middleware.js';
+import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
 import { checkQuota } from '../quota.js';
 
 const app = new Hono();
@@ -47,10 +47,12 @@ function listScoresStmt(db, tenantId, examId) {
 
 /**
  * GET /api/v1/exams — 考试列表（附每场考试的人数与均分）
+ * 支持 ?academic_year= 学年过滤（缺省/非法回退当前学年）
  */
 app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   const db = c.env.DB;
   const tenantId = c.get('tenantId');
+  const academicYear = resolveAcademicYear(c.req.query('academic_year'));
   const rows = await db
     .prepare(
       `SELECT e.*,
@@ -58,10 +60,10 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
               (SELECT ROUND(AVG(s.score), 2) FROM exam_scores s
                 WHERE s.exam_id = e.id AND s.score IS NOT NULL) AS avg_score
        FROM exams e
-       WHERE e.tenant_id = ?
+       WHERE e.tenant_id = ? AND e.academic_year = ?
        ORDER BY e.exam_date DESC, e.created_at DESC`
     )
-    .bind(tenantId)
+    .bind(tenantId, academicYear)
     .all();
   return c.json({ success: true, data: rows.results });
 });
@@ -86,10 +88,10 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeach
   const id = newId();
   await db
     .prepare(
-      `INSERT INTO exams (id, tenant_id, name, subject, exam_date, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO exams (id, tenant_id, name, subject, exam_date, academic_year, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(id, tenantId, name, subject, examDate, now())
+    .bind(id, tenantId, name, subject, examDate, currentAcademicYear(), now())
     .run();
   await audit(db, tenantId, user.id, 'create_exam', '考试', id, { name });
   const exam = await getExam(db, tenantId, id);
@@ -117,6 +119,9 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
   const exam = await getExam(db, tenantId, c.req.param('id'));
   const body = await c.req.json().catch(() => ({}));
 
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'exams', exam.id);
+
   const name = body.name !== undefined ? String(body.name).trim() : exam.name;
   if (!name) throw new ApiError('VALIDATION_ERROR', '考试名称不能为空');
   const subject = body.subject !== undefined ? String(body.subject).trim() : exam.subject;
@@ -139,6 +144,9 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'exams', exam.id);
 
   await db.batch([
     db
@@ -186,6 +194,9 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
+
+  // 学年归档保护：非当前学年 → 403（历史学年数据仅可查看）
+  await assertCurrentYear(db, tenantId, 'exams', exam.id);
 
   const body = await c.req.json().catch(() => ({}));
   const type = body.type;

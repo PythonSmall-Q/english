@@ -41,6 +41,15 @@
       <header class="topbar">
         <div class="breadcrumb" id="breadcrumb">工作台首页</div>
         <div class="topbar-right">
+          <!-- 学年切换器：自定义下拉（复用 ts-* 样式），登录后加载学年列表时显示 -->
+          <div id="year-switcher" class="tenant-switcher hidden">
+            <button type="button" id="ys-btn" class="ts-btn">
+              <span class="ts-icon" id="ys-icon">🗓️</span>
+              <span class="ts-name" id="ys-name">当前学年</span>
+              <svg class="ts-caret" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div id="ys-menu" class="ts-menu hidden"></div>
+          </div>
           <!-- 租户切换器（§22/§69）：自定义下拉，>1 个空间时显示 -->
           <div id="tenant-switcher" class="tenant-switcher hidden">
             <button type="button" id="ts-btn" class="ts-btn">
@@ -52,6 +61,8 @@
           </div>
         </div>
       </header>
+      <!-- 历史学年只读提示条（查看历史学年时显示，app.js 控制） -->
+      <div id="year-banner" class="year-banner hidden"></div>
       <main id="view-container" class="view-container"></main>
     </div>
   </div>

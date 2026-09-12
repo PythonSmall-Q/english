@@ -9,8 +9,8 @@
  */
 
 import { Hono } from 'hono';
-import { requireAuth, requireTenant, requireRole, requireClassManager, audit } from '../middleware.js';
-import { ApiError, newId, now } from '../db.js';
+import { requireAuth, requireTenant, requireRole, requireClassManager, audit, assertCurrentYear } from '../middleware.js';
+import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
 import { checkQuota } from '../quota.js';
 
 const app = new Hono();
@@ -37,12 +37,13 @@ async function getClassOr404(db, tenantId, classId) {
 
 /**
  * GET /assignments — 作业列表
- * 支持 ?class_id= 过滤；每条附统计：总人数/已交/未交（missing+pending）/提交率
+ * 支持 ?class_id= 过滤、?academic_year= 学年过滤（缺省/非法回退当前学年）；每条附统计：总人数/已交/未交（missing+pending）/提交率
  */
 app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   const db = c.env.DB;
   const tenantId = c.get('tenantId');
   const classId = c.req.query('class_id');
+  const academicYear = resolveAcademicYear(c.req.query('academic_year'));
 
   const rows = await db
     .prepare(
@@ -56,10 +57,10 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
          (SELECT COUNT(*) FROM assignment_submissions x
            WHERE x.assignment_id = a.id AND x.status = 'pending') AS pending_count
        FROM assignments a
-       WHERE a.tenant_id = ? ${classId ? 'AND a.class_id = ?' : ''}
+       WHERE a.tenant_id = ? AND a.academic_year = ? ${classId ? 'AND a.class_id = ?' : ''}
        ORDER BY a.created_at DESC`
     )
-    .bind(...(classId ? [tenantId, classId] : [tenantId]))
+    .bind(...(classId ? [tenantId, academicYear, classId] : [tenantId, academicYear]))
     .all();
 
   const list = rows.results.map((r) => {
@@ -73,6 +74,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
       content: r.content,
       deadline: r.deadline,
       status: r.status,
+      academicYear: r.academic_year,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       stats: {
@@ -109,10 +111,10 @@ app.post('/', requireAuth, requireTenant, requireClassManager(), async (c) => {
   const id = newId();
   await db
     .prepare(
-      `INSERT INTO assignments (id, tenant_id, teacher_id, class_id, title, content, deadline, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
+      `INSERT INTO assignments (id, tenant_id, teacher_id, class_id, title, content, deadline, status, academic_year, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`
     )
-    .bind(id, tenantId, user.id, classId, title, body.content ?? null, body.deadline ?? null, ts, ts)
+    .bind(id, tenantId, user.id, classId, title, body.content ?? null, body.deadline ?? null, currentAcademicYear(), ts, ts)
     .run();
   await audit(db, tenantId, user.id, '创建作业', 'assignment', id, { title });
 
@@ -129,6 +131,9 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', t
   const tenantId = c.get('tenantId');
   const assignment = await getAssignmentOr404(db, tenantId, c.req.param('id'));
   const body = await c.req.json().catch(() => ({}));
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'assignments', assignment.id);
 
   const title = body.title !== undefined ? String(body.title).trim() : assignment.title;
   if (!title) throw new ApiError('VALIDATION_ERROR', '作业标题不能为空');
@@ -153,6 +158,9 @@ app.delete('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id'
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const assignment = await getAssignmentOr404(db, tenantId, c.req.param('id'));
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'assignments', assignment.id);
 
   await db.batch([
     db
@@ -179,6 +187,9 @@ app.post('/:id/submissions/bulk', requireAuth, requireTenant, requireClassManage
   const tenantId = c.get('tenantId');
   const assignment = await getAssignmentOr404(db, tenantId, c.req.param('id'));
   const body = c.get('_body') || (await c.req.json().catch(() => ({})));
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'assignments', assignment.id);
 
   const submitted = Array.isArray(body.submitted) ? body.submitted.map(String) : [];
   const missing = Array.isArray(body.missing) ? body.missing.map(String) : [];

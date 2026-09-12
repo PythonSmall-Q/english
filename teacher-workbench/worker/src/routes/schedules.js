@@ -10,8 +10,8 @@
  */
 
 import { Hono } from 'hono';
-import { ApiError, newId, now } from '../db.js';
-import { requireAuth, requireTenant, canManageClass, audit } from '../middleware.js';
+import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
+import { requireAuth, requireTenant, canManageClass, audit, assertCurrentYear } from '../middleware.js';
 
 const app = new Hono();
 
@@ -73,18 +73,19 @@ async function validateScheduleBody(db, tenantId, body, existing) {
 
 /**
  * GET /api/v1/schedules — 课表列表
- * 支持 ?weekday=1-7 过滤；按 weekday、period 排序
+ * 支持 ?weekday=1-7 过滤、?academic_year= 学年过滤（缺省/非法回退当前学年）；按 weekday、period 排序
  */
 app.get('/', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
   const tenantId = c.get('tenantId');
   const weekday = c.req.query('weekday');
+  const academicYear = resolveAcademicYear(c.req.query('academic_year'));
 
   let sql =
     `SELECT sc.*, cl.name AS class_name
        FROM schedules sc LEFT JOIN classes cl ON cl.id = sc.class_id AND cl.tenant_id = sc.tenant_id
-      WHERE sc.tenant_id = ?`;
-  const params = [tenantId];
+      WHERE sc.tenant_id = ? AND sc.academic_year = ?`;
+  const params = [tenantId, academicYear];
   if (weekday) {
     const w = Number(weekday);
     if (!Number.isInteger(w) || w < 1 || w > 7) {
@@ -136,8 +137,8 @@ app.post('/', requireAuth, requireTenant, async (c) => {
   await db
     .prepare(
       `INSERT INTO schedules (id, tenant_id, teacher_id, class_id, weekday, period, start_time, end_time,
-                              title, lesson_type, classroom, scope, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                              title, lesson_type, classroom, scope, academic_year, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       id,
@@ -152,6 +153,7 @@ app.post('/', requireAuth, requireTenant, async (c) => {
       v.lesson_type,
       v.classroom,
       v.scope,
+      currentAcademicYear(),
       ts,
       ts
     )
@@ -178,6 +180,9 @@ app.put('/:id', requireAuth, requireTenant, async (c) => {
   const tenantId = c.get('tenantId');
   const schedule = await getScheduleOr404(db, tenantId, c.req.param('id'));
   const body = await c.req.json().catch(() => ({}));
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'schedules', schedule.id);
 
   // 先校验对旧条目有管理权，再按合并后的新归属校验
   await requireScheduleManager(db, tenantId, user, schedule);
@@ -218,6 +223,9 @@ app.delete('/:id', requireAuth, requireTenant, async (c) => {
   const tenantId = c.get('tenantId');
   const schedule = await getScheduleOr404(db, tenantId, c.req.param('id'));
   await requireScheduleManager(db, tenantId, user, schedule);
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'schedules', schedule.id);
 
   await db
     .prepare('DELETE FROM schedules WHERE id = ? AND tenant_id = ?')

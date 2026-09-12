@@ -10,8 +10,8 @@
  */
 
 import { Hono } from 'hono';
-import { ApiError, newId, now } from '../db.js';
-import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
+import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
+import { requireAuth, requireTenant, requireRole, audit, assertCurrentYear } from '../middleware.js';
 import { checkQuota } from '../quota.js';
 
 const app = new Hono();
@@ -42,18 +42,19 @@ async function validateClassId(db, tenantId, classId) {
 
 /**
  * GET /api/v1/lessons — 教案列表
- * 支持 ?status=pending|completed 过滤，按创建时间倒序
+ * 支持 ?status=pending|completed 过滤、?academic_year= 学年过滤（缺省/非法回退当前学年），按创建时间倒序
  */
 app.get('/', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
   const tenantId = c.get('tenantId');
   const status = c.req.query('status');
+  const academicYear = resolveAcademicYear(c.req.query('academic_year'));
 
   let sql =
     `SELECT l.*, c.name AS class_name
        FROM lessons l LEFT JOIN classes c ON c.id = l.class_id AND c.tenant_id = l.tenant_id
-      WHERE l.tenant_id = ?`;
-  const params = [tenantId];
+      WHERE l.tenant_id = ? AND l.academic_year = ?`;
+  const params = [tenantId, academicYear];
   if (status) {
     if (!LESSON_STATUSES.includes(status)) {
       throw new ApiError('VALIDATION_ERROR', `status 必须是 ${LESSON_STATUSES.join('|')}`);
@@ -88,8 +89,8 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) =>
   const ts = now();
   await db
     .prepare(
-      `INSERT INTO lessons (id, tenant_id, teacher_id, class_id, title, lesson_type, objective, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
+      `INSERT INTO lessons (id, tenant_id, teacher_id, class_id, title, lesson_type, objective, status, academic_year, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
     )
     .bind(
       id,
@@ -99,6 +100,7 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) =>
       title,
       lessonType,
       body.objective != null ? String(body.objective) : null,
+      currentAcademicYear(),
       ts,
       ts
     )
@@ -128,6 +130,9 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
   const tenantId = c.get('tenantId');
   const lesson = await getLessonOr404(db, tenantId, c.req.param('id'));
   const body = await c.req.json().catch(() => ({}));
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'lessons', lesson.id);
 
   const title = body.title != null ? String(body.title).trim() : lesson.title;
   if (!title) throw new ApiError('VALIDATION_ERROR', '教案标题不能为空');
@@ -167,6 +172,9 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const lesson = await getLessonOr404(db, tenantId, c.req.param('id'));
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'lessons', lesson.id);
 
   await db.prepare('DELETE FROM lessons WHERE id = ? AND tenant_id = ?').bind(lesson.id, tenantId).run();
   await audit(db, tenantId, user.id, '删除教案', 'lesson', lesson.id, { title: lesson.title });

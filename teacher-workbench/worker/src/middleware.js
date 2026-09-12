@@ -18,7 +18,7 @@
 
 import { getCookie } from 'hono/cookie';
 import { getSessionUser, SESSION_COOKIE } from './auth-core.js';
-import { ApiError, newId, now } from './db.js';
+import { ApiError, newId, now, currentAcademicYear } from './db.js';
 
 /**
  * 认证中间件：读取 Cookie 中的 session token，校验后挂载 c.set('user')。
@@ -260,6 +260,27 @@ export function requireTeacherPerm(perm) {
     }
     await next();
   };
+}
+
+/**
+ * 学年归档保护：目标行非当前学年 → 403 FORBIDDEN（历史学年数据仅可查看）。
+ * 在 7 张归属表（classes/students/lessons/schedules/assignments/dictations/exams）的
+ * PUT/DELETE 及其子表写入（如考试导入、批量登记）处理前调用。
+ * @param {object} db D1 binding
+ * @param {string} tenantId
+ * @param {string} table 表名（仅限上述白名单表，调用处硬编码）
+ * @param {string} id 目标行 id
+ * @throws {ApiError} NOT_FOUND（不存在）/ FORBIDDEN（历史学年）
+ */
+export async function assertCurrentYear(db, tenantId, table, id) {
+  const row = await db
+    .prepare(`SELECT academic_year FROM ${table} WHERE id = ? AND tenant_id = ?`)
+    .bind(id, tenantId)
+    .first();
+  if (!row) throw new ApiError('NOT_FOUND', '资源不存在');
+  if (row.academic_year !== currentAcademicYear()) {
+    throw new ApiError('FORBIDDEN', '历史学年数据仅可查看');
+  }
 }
 
 /**

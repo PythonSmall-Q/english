@@ -80,7 +80,7 @@
 
 window.App = {
   /** §66 页面状态 */
-  state: { user: null, tenants: [], tenant: null, quota: null, view: null },
+  state: { user: null, tenants: [], tenant: null, quota: null, view: null, academicYear: null, currentAcademicYear: null, academicYears: [] },
 
   /** 视图注册表：name → { title, icon, render, init? } */
   _views: {},
@@ -222,7 +222,118 @@ window.App = {
     App.state.quota = tenant.quota || null;
     App.updateTenantSwitcher();
     App.closeTenantMenu();
+    await App.loadAcademicYears();
     await App.showView(App.state.view || 'dashboard');
+  },
+
+  /** 加载本空间学年列表（§63），并把选中学年重置为当前学年 */
+  async loadAcademicYears() {
+    const tenantId = App.state.tenant?.id;
+    if (!tenantId) return;
+    try {
+      const data = await api.tenants.academicYears(tenantId);
+      App.state.currentAcademicYear = data.current || null;
+      App.state.academicYears = data.years || [];
+      App.state.academicYear = App.state.currentAcademicYear;
+      App.updateYearSwitcher();
+      App.updateYearBanner();
+    } catch (e) {
+      // 端点不可用时静默降级：不显示学年切换器，请求不带学年参数（后端按当前学年处理）
+      App.state.currentAcademicYear = null;
+      App.state.academicYear = null;
+      App.state.academicYears = [];
+      App.updateYearSwitcher();
+      App.updateYearBanner();
+    }
+  },
+
+  closeYearMenu() {
+    document.getElementById('ys-menu')?.classList.add('hidden');
+    document.getElementById('ys-btn')?.classList.remove('open');
+  },
+
+  /** 学年切换器：加载到学年列表后显示；当前学年置顶标✓ */
+  updateYearSwitcher() {
+    const wrap = document.getElementById('year-switcher');
+    if (!wrap) return;
+    const years = App.state.academicYears || [];
+    const current = App.state.currentAcademicYear;
+    if (!current || !years.length) {
+      wrap.classList.add('hidden');
+      return;
+    }
+    wrap.classList.remove('hidden');
+    const selected = App.state.academicYear || current;
+    const nameEl = document.getElementById('ys-name');
+    nameEl.textContent = selected + (selected === current ? '' : '（历史）');
+    nameEl.title = selected === current ? `当前学年 ${selected}` : `正在查看历史学年 ${selected}`;
+    // 菜单：当前学年置顶标「当前」，其余按后端降序
+    const ordered = [...years].sort((a, b) => (a === current ? -1 : b === current ? 1 : 0));
+    const menu = document.getElementById('ys-menu');
+    menu.innerHTML = ordered
+      .map((y) => {
+        const active = selected === y;
+        return `
+          <button type="button" class="ts-item ${active ? 'active' : ''}" data-ys-year="${App.esc(y)}">
+            <span class="ts-item-icon">🗓️</span>
+            <span class="ts-item-name">${App.esc(y)}${y === current ? '（当前学年）' : ''}</span>
+            ${active ? '<span class="ts-check">✓</span>' : ''}
+          </button>`;
+      })
+      .join('');
+    menu.querySelectorAll('[data-ys-year]').forEach((item) => {
+      item.addEventListener('click', () => App.setAcademicYear(item.dataset.ysYear));
+    });
+  },
+
+  /** 选中学年：历史学年显示只读提示条，并重渲染当前视图（列表自动按学年过滤） */
+  setAcademicYear(y) {
+    if (!y || y === App.state.academicYear) {
+      App.closeYearMenu();
+      return;
+    }
+    App.state.academicYear = y;
+    App.updateYearSwitcher();
+    App.updateYearBanner();
+    App.closeYearMenu();
+    App.showView(App.state.view || 'dashboard');
+  },
+
+  /** 历史学年只读提示条 */
+  updateYearBanner() {
+    const banner = document.getElementById('year-banner');
+    if (!banner) return;
+    const y = App.state.academicYear;
+    const cur = App.state.currentAcademicYear;
+    if (y && cur && y !== cur) {
+      banner.textContent = `正在查看 ${y} 学年 · 历史数据只读`;
+      banner.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+    }
+  },
+
+  /** 学年切换器交互：点击按钮开合、点击外部/ESC 关闭（只绑一次） */
+  bindYearSwitcher() {
+    const btn = document.getElementById('ys-btn');
+    const menu = document.getElementById('ys-menu');
+    if (!btn || !menu) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = menu.classList.contains('hidden');
+      menu.classList.toggle('hidden');
+      btn.classList.toggle('open', willOpen);
+    });
+    document.addEventListener('click', (e) => {
+      if (!wrapContains(e.target)) App.closeYearMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') App.closeYearMenu();
+    });
+    function wrapContains(target) {
+      const wrap = document.getElementById('year-switcher');
+      return wrap && wrap.contains(target);
+    }
   },
 
   closeTenantMenu() {
@@ -343,6 +454,7 @@ window.App = {
         item.addEventListener('click', () => App.showView(item.dataset.view));
       });
       App.bindTenantSwitcher();
+      App.bindYearSwitcher();
       const logoutBtn = document.getElementById('logout-btn');
       if (logoutBtn) {
         logoutBtn.addEventListener('click', async () => {
@@ -369,6 +481,7 @@ window.App = {
       const personal = App.state.tenants.find((t) => t.type === 'personal');
       App.state.tenant = personal || App.state.tenants[0] || null;
       App.state.quota = App.state.tenant?.quota || null;
+      await App.loadAcademicYears();
       App.enterApp();
     } catch (err) {
       if (err && err.code !== 'UNAUTHORIZED') {

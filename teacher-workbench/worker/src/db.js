@@ -24,6 +24,34 @@ export function now() {
 }
 
 /**
+ * 当前学年（东八区，"YYYY-YYYY"）。每年 9 月 1 日起算新学年：
+ * 9–12 月返回 `${当年}-${次年}`，1–8 月返回 `${去年}-${当年}`。
+ * @returns {string} 如 '2025-2026'
+ */
+export function currentAcademicYear() {
+  const d = new Date(Date.now() + 8 * 3600 * 1000);
+  const y = d.getUTCFullYear();
+  return d.getUTCMonth() >= 8 ? `${y}-${y + 1}` : `${y - 1}-${y}`;
+}
+
+/**
+ * 解析 ?academic_year= 查询参数：缺失或非法（不匹配 ^\d{4}-\d{4}$ 或起止不自洽）一律回退当前学年。
+ * @param {string|undefined} value
+ * @returns {string} 合法的学年字符串或当前学年
+ */
+export function resolveAcademicYear(value) {
+  const current = currentAcademicYear();
+  if (typeof value !== 'string') return current;
+  const s = value.trim();
+  const m = /^(\d{4})-(\d{4})$/.exec(s);
+  if (!m) return current;
+  const start = Number(m[1]);
+  const end = Number(m[2]);
+  if (end !== start + 1) return current;
+  return s;
+}
+
+/**
  * §83 错误码 → HTTP 状态码。
  */
 const ERROR_STATUS = {

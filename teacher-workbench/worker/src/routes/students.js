@@ -12,8 +12,8 @@
  */
 
 import { Hono } from 'hono';
-import { ApiError, newId, now } from '../db.js';
-import { requireAuth, requireTenant, requireClassManager, audit, requireTeacherPerm } from '../middleware.js';
+import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
+import { requireAuth, requireTenant, requireClassManager, audit, requireTeacherPerm, assertCurrentYear } from '../middleware.js';
 import { checkQuota } from '../quota.js';
 
 const app = new Hono();
@@ -30,7 +30,7 @@ function currentWeekRange() {
 
 /**
  * GET /api/v1/students — 学生列表
- * 支持 ?class_id= 按班级过滤、?q= 按学号/姓名模糊搜索
+ * 支持 ?class_id= 按班级过滤、?q= 按学号/姓名模糊搜索、?academic_year= 按学年过滤（缺省/非法回退当前学年）
  * 每条附 alert 预警统计（§28），避免前端逐生调详情（N+1）
  */
 app.get('/', requireAuth, requireTenant, async (c) => {
@@ -38,12 +38,13 @@ app.get('/', requireAuth, requireTenant, async (c) => {
   const tenantId = c.get('tenantId');
   const classId = c.req.query('class_id');
   const q = (c.req.query('q') || '').trim();
+  const academicYear = resolveAcademicYear(c.req.query('academic_year'));
 
   let sql =
     `SELECT s.*, c.name AS class_name
        FROM students s LEFT JOIN classes c ON c.id = s.class_id AND c.tenant_id = s.tenant_id
-      WHERE s.tenant_id = ?`;
-  const params = [tenantId];
+      WHERE s.tenant_id = ? AND s.academic_year = ?`;
+  const params = [tenantId, academicYear];
   if (classId) {
     sql += ' AND s.class_id = ?';
     params.push(classId);
@@ -150,8 +151,8 @@ app.post('/', requireAuth, requireTenant, requireClassManager(), requireTeacherP
   const ts = now();
   await db
     .prepare(
-      `INSERT INTO students (id, tenant_id, class_id, student_no, name, gender, status, notes, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO students (id, tenant_id, class_id, student_no, name, gender, status, notes, academic_year, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       id,
@@ -162,6 +163,7 @@ app.post('/', requireAuth, requireTenant, requireClassManager(), requireTeacherP
       body.gender != null ? String(body.gender) : null,
       body.status != null ? String(body.status) : 'normal',
       body.notes != null ? String(body.notes) : null,
+      currentAcademicYear(),
       ts,
       ts
     )
@@ -248,6 +250,9 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', t
   const student = await getStudentOr404(db, tenantId, c.req.param('id'));
   const body = await c.req.json().catch(() => ({}));
 
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'students', student.id);
+
   const classId = body.class_id !== undefined ? String(body.class_id || '').trim() : student.class_id;
   if (!classId) throw new ApiError('VALIDATION_ERROR', 'class_id 不能为空');
   if (body.class_id !== undefined) await requireClassInTenant(db, tenantId, classId);
@@ -285,6 +290,9 @@ app.delete('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id'
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const student = await getStudentOr404(db, tenantId, c.req.param('id'));
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'students', student.id);
 
   await db.prepare('DELETE FROM students WHERE id = ? AND tenant_id = ?').bind(student.id, tenantId).run();
   await audit(db, tenantId, user.id, '删除学生', 'student', student.id, { name: student.name });

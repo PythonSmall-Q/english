@@ -5,7 +5,7 @@
  *  - 班级卡片网格（班级名/年级/学年/学生数/班主任/年级组）
  *  - 「查看学生」→ 传递 class_id 给「学生管理」视图后跳转
  *  - 「编辑 / 删除」：编辑在 cls.canManage 时渲染；删除仅 cls.canDelete（owner/admin、本班年级组长）
- *  - 右上「新建班级」→ modal 表单（名称/年级/学年），受配额限制
+ *  - 右上「新建班级」→ modal 表单（名称/年级；学年由服务端按当前学年自动填入），受配额限制
  *  - 「年级组」管理区：owner/admin 见全部组（建组/删组/设组长）；
  *    年级组长见「我带领的年级组」（组内班级 + 每班「设置老师」入口）
  *  - owner/admin：卡片上「年级组」下拉（change 即保存）；canAssignTeachers（owner/admin、
@@ -402,16 +402,8 @@ App.registerView('classes', {
       `
       <label class="form-label" for="cls-f-name">班级名称</label>
       <input class="form-input" id="cls-f-name" type="text" placeholder="如：高三 6 班" value="${App.esc(cls?.name || '')}">
-      <div class="form-row">
-        <div>
-          <label class="form-label" for="cls-f-grade">年级</label>
-          <input class="form-input" id="cls-f-grade" type="text" placeholder="如：高三" value="${App.esc(cls?.grade || '')}">
-        </div>
-        <div>
-          <label class="form-label" for="cls-f-year">学年</label>
-          <input class="form-input" id="cls-f-year" type="text" placeholder="如：2026-2027" value="${App.esc(cls?.academic_year || '')}">
-        </div>
-      </div>
+      <label class="form-label" for="cls-f-grade">年级</label>
+      <input class="form-input" id="cls-f-grade" type="text" placeholder="如：高三" value="${App.esc(cls?.grade || '')}">
       <div class="modal-actions">
         <button class="btn" type="button" id="cls-f-cancel">取消</button>
         <button class="btn btn-primary" type="button" id="cls-f-save">${isEdit ? '保存' : '创建'}</button>
@@ -427,7 +419,6 @@ App.registerView('classes', {
           const body = {
             name,
             grade: document.getElementById('cls-f-grade').value.trim() || null,
-            academic_year: document.getElementById('cls-f-year').value.trim() || null,
           };
           const saveBtn = document.getElementById('cls-f-save');
           saveBtn.disabled = true;
