@@ -117,6 +117,25 @@ export async function canManageClass(db, tenantId, userId, classId) {
 }
 
 /**
+ * 导入权限（课表/成绩/小分）：owner/admin 不受限；班主任（classes.teacher_id）可导入
+ * 本班；该班年级组长可导入；任课老师不算班主任，不可导入。cls 只需含
+ * id / teacher_id / grade_group_id 三字段。
+ */
+export async function canImportForClass(db, tenantId, user, membership, cls) {
+  if (!cls) return true; // 无班级维度（个人课表/未分班学生）不限制
+  if (membership && (membership.role === 'owner' || membership.role === 'admin')) return true;
+  if (cls.teacher_id && cls.teacher_id === user.id) return true;
+  if (cls.grade_group_id) {
+    const group = await db
+      .prepare('SELECT id FROM grade_groups WHERE id = ? AND tenant_id = ? AND leader_user_id = ?')
+      .bind(cls.grade_group_id, tenantId, user.id)
+      .first();
+    if (group) return true;
+  }
+  return false;
+}
+
+/**
  * 是否可设置班级的老师（班主任/任课老师）：
  * owner/admin、该班年级组长、该班班主任
  */

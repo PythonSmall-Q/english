@@ -19,6 +19,10 @@
     .dct-item-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dct-item-meta { color: var(--text-muted); font-size: 12px; margin: 6px 0; }
     .dct-item-stats { font-size: 12px; color: var(--text-muted); margin: 6px 0; display: flex; gap: 10px; flex-wrap: wrap; }
+    .dct-item-progress { font-size: 12px; margin: 6px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
+    .dct-item-progress .dct-prog-done { color: var(--success); }
+    .dct-item-progress .dct-prog-mine { color: var(--warning); }
+    .dct-item-progress .dct-prog-sep { margin: 0 4px; }
     .dct-item-ops { display: flex; gap: 6px; flex-wrap: wrap; }
     .dct-check-list { max-height: 46vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; }
     .dct-check-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
@@ -68,10 +72,17 @@
     return loadXLSX._p;
   }
 
-  /** 该默写适用的学生名单：班级默写取本班，全年段取全空间 */
+  /** 该默写适用的学生名单：班级默写取本班；全年段只取当前用户可管理班级的学生 */
   async function rosterOf(d) {
-    const data = d.scope === 'class' ? await api.students.list({ class_id: d.classId }) : await api.students.list();
-    return data.students || [];
+    if (d.scope === 'class') {
+      const data = await api.students.list({ class_id: d.classId });
+      return data.students || [];
+    }
+    const manageable = classes.filter((c) => canManageMap.get(c.id)).map((c) => c.id);
+    if (!manageable.length) return []; // 无可管理班级：全年段默写仅该班老师可登记
+    const set = new Set(manageable);
+    const data = await api.students.list();
+    return (data.students || []).filter((s) => set.has(s.class_id));
   }
 
   // ===== 数据加载 =====
@@ -82,7 +93,7 @@
     try {
       const [clsData, dctData] = await Promise.all([api.classes.list(), api.dictations.list()]);
       classes = clsData.classes || [];
-      // 班级级权限感知：登记/重传材料/删除按该班 canManage 控制；全年段默写写操作仅 owner/admin（服务端另有 403 兜底）
+      // 班级级权限感知：登记/重传材料/删除按该班 canManage 控制；全年段默写登记对有可管理班级的老师开放，材料/删除仅 owner/admin（服务端另有 403 兜底）
       canManageMap = new Map(classes.map((c) => [c.id, !!c.canManage]));
       anyManageable = classes.some((c) => !!c.canManage);
       const role = App.state.tenant?.role;
@@ -103,21 +114,39 @@
 
   function dictationCard(d) {
     const st = d.stats || { passed: 0, failed: 0, retestRequired: 0, retestCompleted: 0 };
-    // 写操作：班级默写按该班 canManage；全年段默写仅 owner/admin（scope=grade 后端仅管理员可写）
-    const canWrite = d.scope === 'grade' ? isTenantAdmin : !!canManageMap.get(d.classId);
-    const writeBtns = canWrite
-      ? `<button class="btn btn-sm btn-primary" data-act="register" type="button">登记</button>
-         <button class="btn btn-sm" data-act="material" type="button">${d.materialUrl ? '重传材料' : '上传材料'}</button>
-         <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>`
-      : '';
+    const isGrade = d.scope === 'grade';
+    // 登记：全年段 = 管理员或有可管理班级的老师（后端按学生所在班再校验）；班级默写 = 该班 canManage
+    const canRegister = isGrade ? isTenantAdmin || anyManageable : !!canManageMap.get(d.classId);
+    // 上传/重传材料、删除：全年段仅管理员；班级默写 = 该班 canManage
+    const canManageItem = isGrade ? isTenantAdmin : !!canManageMap.get(d.classId);
+    const writeBtns = [
+      canRegister ? '<button class="btn btn-sm btn-primary" data-act="register" type="button">登记</button>' : '',
+      canManageItem
+        ? `<button class="btn btn-sm" data-act="material" type="button">${d.materialUrl ? '重传材料' : '上传材料'}</button>
+           <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>`
+        : '',
+    ].join('');
+    // 全年段下派进度：完成班标绿✓，我管理且未完成的班标黄
+    const progress =
+      isGrade && Array.isArray(d.classProgress) && d.classProgress.length
+        ? `<div class="dct-item-progress">${d.classProgress
+            .map((p) => {
+              const done = p.total > 0 && p.registered >= p.total;
+              const mine = !done && !!canManageMap.get(p.classId);
+              const cls = done ? 'dct-prog-done' : mine ? 'dct-prog-mine' : '';
+              return `<span class="${cls}">${done ? '✓ ' : ''}${App.esc(p.className)} ${p.registered}/${p.total}</span>`;
+            })
+            .join('<span class="dct-prog-sep">｜</span>')}</div>`
+        : '';
     return `
       <div class="dct-item" data-id="${App.esc(d.id)}">
         <div class="dct-item-head">
           <span class="dct-item-title" title="${App.esc(d.title)}">${App.esc(d.title)}</span>
-          <span class="badge ${d.scope === 'grade' ? 'badge-info' : 'badge-leave'}">${d.scope === 'grade' ? '全年段' : '班级'}</span>
+          <span class="badge ${isGrade ? 'badge-info' : 'badge-leave'}">${isGrade ? '全年段' : '班级'}</span>
         </div>
         <div class="dct-item-meta">日期：${App.esc(d.dictationDate || '未设置')}</div>
         ${d.materialUrl ? `<div class="dct-item-meta">材料：<a href="${App.esc(d.materialUrl)}" target="_blank" rel="noopener">查看材料</a></div>` : ''}
+        ${progress}
         <div class="dct-item-stats">
           <span>通过 <strong>${st.passed}</strong></span>
           <span>未过 <strong class="${st.failed ? '' : ''}" style="color:${st.failed ? 'var(--danger)' : 'inherit'}">${st.failed}</strong></span>
@@ -242,7 +271,11 @@
       return;
     }
     if (!roster.length) {
-      App.modal('登记默写结果', '<div class="muted">暂无学生名单，请先在学生管理中添加学生。</div>');
+      const hint =
+        d.scope === 'grade' && !isTenantAdmin && !anyManageable
+          ? '仅该班老师可登记本次全年段默写'
+          : '暂无学生名单，请先在学生管理中添加学生。';
+      App.modal('登记默写结果', `<div class="muted">${App.esc(hint)}</div>`);
       return;
     }
     const passedMap = new Map(existed.map((r) => [r.studentId, r.passed]));

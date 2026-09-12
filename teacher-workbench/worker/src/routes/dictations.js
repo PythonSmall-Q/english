@@ -3,7 +3,7 @@
  *
  * 约定：
  * - 支持班级默写（scope='class'，class_id 必填）与全年段默写（scope='grade'，class_id 可空，
- *   结果学生可来自全年级任何班）
+ *   创建后自动下派到每个班；班级老师仅可登记自己班级学生的结果）
  * - 结果名单：passed=1 通过；passed=0 未过；retest_required=1 需重默；retest_completed=1 已重默
  * - 批量登记 / 重默标记均使用 D1 batch 一次提交，保证事务性
  * - 写操作 teacher 起；读操作 viewer 起
@@ -43,6 +43,79 @@ async function requireDictationManager(db, tenantId, user, dictation) {
   }
   const check = await canManageClass(db, tenantId, user.id, dictation.class_id);
   if (!check.ok) throw new ApiError('FORBIDDEN', check.reason);
+}
+
+/**
+ * 默写结果登记权限（全年段下派登记）：
+ * - scope='class'：维持 requireDictationManager 语义（该班管理者）
+ * - scope='grade'：owner/admin 直接放行；其余用户须对所涉每个学生所属班级
+ *   都有 canManageClass，任一学生所在班无权管理 → 403（报出该班班名）
+ * 调用方需保证 studentIds 已确认存在于本租户（results/bulk 在学生归属校验后调用）
+ */
+async function requireDictationResultRegistrar(db, tenantId, user, dictation, studentIds) {
+  if (dictation.scope !== 'grade') {
+    await requireDictationManager(db, tenantId, user, dictation);
+    return;
+  }
+  const membership = await db
+    .prepare("SELECT role FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
+    .bind(tenantId, user.id)
+    .first();
+  if (membership && (membership.role === 'owner' || membership.role === 'admin')) return;
+
+  const ids = [...new Set((studentIds || []).map(String))];
+  if (!ids.length) return;
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await db
+    .prepare(
+      `SELECT s.id, s.class_id, c.name AS class_name
+       FROM students s LEFT JOIN classes c ON c.id = s.class_id
+       WHERE s.tenant_id = ? AND s.id IN (${placeholders})`
+    )
+    .bind(tenantId, ...ids)
+    .all();
+  // 按班级分组逐个判定 canManageClass，避免对同班学生重复查询
+  const classesToCheck = new Map();
+  for (const r of rows.results) {
+    if (r.class_id && !classesToCheck.has(r.class_id)) classesToCheck.set(r.class_id, r.class_name);
+  }
+  for (const [classId, className] of classesToCheck) {
+    const check = await canManageClass(db, tenantId, user.id, classId);
+    if (!check.ok) {
+      throw new ApiError('FORBIDDEN', `你不能登记「${className}」学生的默写，仅该班老师可登记`);
+    }
+  }
+  // 未分班学生：无任何班级的管理权，同样拒绝
+  const checkedCount = rows.results.filter((r) => r.class_id).length;
+  if (checkedCount < rows.results.length) {
+    throw new ApiError('FORBIDDEN', '你不能登记「未分班」学生的默写，仅该班老师可登记');
+  }
+}
+
+/**
+ * 全年段默写下派进度：该默写学年下每个班
+ * [{ classId, className, total, registered }]
+ * total=该班该学年学生数；registered=已有默写结果（dictation_results 有行即算）的学生数
+ */
+async function classProgressOf(db, tenantId, dictationId, academicYear) {
+  const rows = await db
+    .prepare(
+      `SELECT c.id, c.name, COUNT(s.id) AS total, COUNT(r.student_id) AS registered
+       FROM classes c
+       LEFT JOIN students s ON s.class_id = c.id AND s.academic_year = ?
+       LEFT JOIN dictation_results r ON r.dictation_id = ? AND r.student_id = s.id
+       WHERE c.tenant_id = ? AND c.academic_year = ?
+       GROUP BY c.id
+       ORDER BY c.created_at`
+    )
+    .bind(academicYear, dictationId, tenantId, academicYear)
+    .all();
+  return rows.results.map((r) => ({
+    classId: r.id,
+    className: r.name,
+    total: r.total || 0,
+    registered: r.registered || 0,
+  }));
 }
 
 /** 校验 scope 取值 */
@@ -100,6 +173,13 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
       retestCompleted: r.retest_completed_count || 0,
     },
   }));
+
+  // 全年段默写附下派进度（逐条查询，N 条 grade 循环 N 次）
+  for (const item of list) {
+    if (item.scope === 'grade') {
+      item.classProgress = await classProgressOf(db, tenantId, item.id, item.academicYear);
+    }
+  }
 
   return c.json({ success: true, data: { list } });
 });
@@ -192,6 +272,10 @@ app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) =
       dictationDate: dictation.dictation_date,
       academicYear: dictation.academic_year,
       createdAt: dictation.created_at,
+      classProgress:
+        dictation.scope === 'grade'
+          ? await classProgressOf(db, tenantId, dictation.id, dictation.academic_year)
+          : undefined,
       list,
     },
   });
@@ -273,14 +357,16 @@ app.delete('/:id', requireAuth, requireTenant, async (c) => {
  * POST /dictations/:id/results/bulk — 批量登记默写结果
  * body: { passed: [studentId...], failed: [studentId...] }
  * UPSERT：passed → passed=1, retest_required=0；failed → passed=0, retest_required=1
- * 全部 db.batch 一次提交；scope='class' 时学生必须属于该班，scope='grade' 时可来自全年级任何班
+ * 全部 db.batch 一次提交；scope='class' 时学生必须属于该班；
+ * scope='grade' 时任一学生所在班须为当前用户可管理班级（owner/admin 不受限）
  */
 app.post('/:id/results/bulk', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
-  await requireDictationManager(db, tenantId, user, dictation);
+  // scope='class' 维持原有语义：该班管理者；scope='grade' 在学生归属校验后按下派登记权限判定
+  if (dictation.scope !== 'grade') await requireDictationManager(db, tenantId, user, dictation);
   const body = await c.req.json().catch(() => ({}));
 
   // 学年归档保护：非当前学年 → 403
@@ -306,6 +392,11 @@ app.post('/:id/results/bulk', requireAuth, requireTenant, async (c) => {
       'VALIDATION_ERROR',
       dictation.scope === 'class' ? '存在不属于该班级的学生' : '存在不属于当前空间的学生'
     );
+  }
+
+  // 全年段下派登记权限：学生已确认存在后，逐个学生所属班级判定 canManageClass
+  if (dictation.scope === 'grade') {
+    await requireDictationResultRegistrar(db, tenantId, user, dictation, allIds);
   }
 
   // UPSERT：全部语句一次 batch 提交（D1 batch 具有事务性）
@@ -354,7 +445,8 @@ app.post('/:id/retest', requireAuth, requireTenant, async (c) => {
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
-  await requireDictationManager(db, tenantId, user, dictation);
+  // scope='class' 维持原有语义；scope='grade' 按 studentIds 查班级后判定下派登记权限
+  if (dictation.scope !== 'grade') await requireDictationManager(db, tenantId, user, dictation);
   const body = await c.req.json().catch(() => ({}));
 
   // 学年归档保护：非当前学年 → 403
@@ -364,6 +456,9 @@ app.post('/:id/retest', requireAuth, requireTenant, async (c) => {
   if (studentIds.length === 0) throw new ApiError('VALIDATION_ERROR', 'studentIds 不能为空');
   if (body.completed !== true) {
     throw new ApiError('VALIDATION_ERROR', 'completed 必须为 true');
+  }
+  if (dictation.scope === 'grade') {
+    await requireDictationResultRegistrar(db, tenantId, user, dictation, studentIds);
   }
 
   const statements = studentIds.map((studentId) =>

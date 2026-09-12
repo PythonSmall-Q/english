@@ -10,7 +10,7 @@
  */
 
 import { Hono } from 'hono';
-import { requireAuth, requireTenant, requireRole, audit, requireTeacherPerm, assertCurrentYear } from '../middleware.js';
+import { requireAuth, requireTenant, requireRole, audit, requireTeacherPerm, assertCurrentYear, canImportForClass } from '../middleware.js';
 import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
 import { checkQuota } from '../quota.js';
 
@@ -193,6 +193,7 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
+  const membership = c.get('membership');
   const exam = await getExam(db, tenantId, c.req.param('id'));
 
   // 学年归档保护：非当前学年 → 403（历史学年数据仅可查看）
@@ -223,6 +224,13 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
     if (st.name && st.class_name) byNameClass.set(`${String(st.name).trim()}|${String(st.class_name).trim()}`, st);
   }
 
+  // 导入权限：班级 id → { teacher_id, grade_group_id }（班主任/年级组长/owner/admin 可导入）
+  const classRows = await db
+    .prepare('SELECT id, teacher_id, grade_group_id FROM classes WHERE tenant_id = ?')
+    .bind(tenantId)
+    .all();
+  const classMap = new Map(classRows.results.map((cls) => [cls.id, cls]));
+
   const stmts = [];
   let created = 0;
   let updated = 0;
@@ -235,6 +243,18 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
     if (!student) {
       unmatched.push(row);
       continue;
+    }
+    // 导入权限：按学生所属班级限制（班主任 / owner / admin / 年级组长）；未分班学生不限制
+    if (student.class_id) {
+      const cls = classMap.get(student.class_id);
+      const allowed = await canImportForClass(db, tenantId, user, membership, cls);
+      if (!allowed) {
+        unmatched.push({
+          row,
+          reason: type === 'scores' ? '你不是该班班主任，无权导入该班成绩' : '你不是该班班主任，无权导入该班小分',
+        });
+        continue;
+      }
     }
     const score = Number(row.score);
     if (!Number.isFinite(score)) {

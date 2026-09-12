@@ -43,6 +43,12 @@
   let alertOnly = false;
   let containerEl = null;
   let canManageMap = new Map(); // class_id → canManage（班级级权限感知）
+  let myId = ''; // 当前用户 id：用于「我的班级」置顶排序
+
+  /** 我是该班班主任或任课老师 */
+  const isMyClass = (c) => c.teacher_id === myId || (c.subjectTeachers || []).some((t) => t.userId === myId);
+  /** 班级排序：我的班级（班主任/任课）在前 */
+  const sortedClasses = () => [...classes].sort((a, b) => Number(isMyClass(b)) - Number(isMyClass(a)));
   let anyManageable = false; // 是否存在可管理班级
   let canCreateStudents = true; // create_students 功能权限（my-quota，取不到默认 true，后端 403 兜底）
 
@@ -176,7 +182,7 @@
       content.innerHTML = '<div class="card"><div class="muted">当前空间还没有班级，请先在「我的班级」中创建。</div></div>';
       return;
     }
-    const cols = classes
+    const cols = sortedClasses()
       .filter((c) => !filterClassId || c.id === filterClassId)
       .map((c) => {
         const list = filteredStudents(c.id);
@@ -197,7 +203,7 @@
 
   function openForm(student) {
     const isEdit = !!student;
-    const classOptions = classes
+    const classOptions = sortedClasses()
       .map((c) => {
         const selected = student && student.class_id === c.id ? ' selected' : '';
         return `<option value="${App.esc(c.id)}"${selected}>${App.esc(c.name)}</option>`;
@@ -361,6 +367,7 @@
       // 重置状态
       classes = [];
       students = [];
+      myId = App.state.user?.id || '';
       filterClassId = '';
       filterQ = '';
       alertOnly = false;
@@ -393,7 +400,7 @@
       const syncClassOptions = () => {
         classSelect.innerHTML =
           `<option value="">全部班级</option>` +
-          classes.map((c) => `<option value="${App.esc(c.id)}">${App.esc(c.name)}</option>`).join('');
+          sortedClasses().map((c) => `<option value="${App.esc(c.id)}">${App.esc(c.name)}</option>`).join('');
         classSelect.value = filterClassId;
       };
       // 初次渲染工具栏时班级还没加载，先给默认选项

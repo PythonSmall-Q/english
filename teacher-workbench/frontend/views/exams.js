@@ -573,6 +573,11 @@
           try {
             const res = await api.exams.import(examId, { type, rows: pendingRows });
             const unmatched = res.unmatched || [];
+            // 兼容两种形状：旧版为原始 row，新版可能为 { row, reason }
+            const withReason = unmatched.filter((u) => u && u.reason);
+            const unmatchedRow = (u) => (u && u.row !== undefined ? u.row : u);
+            const firstRow = unmatchedRow(unmatched[0]) || {};
+            const cols = Object.keys(firstRow);
             resultEl.innerHTML = `
               <div class="ex-result-stats">
                 <span class="badge badge-success">新增 ${res.created || 0}</span>
@@ -582,11 +587,14 @@
               </div>
               ${
                 unmatched.length
-                  ? `<div class="ex-hint muted">以下 ${unmatched.length} 行未能匹配到学生（学号或 姓名+班级 需在系统中已存在），请核对：</div>
+                  ? `<div class="ex-hint muted">以下 ${unmatched.length} 行未能写入（学生未匹配，或 ${withReason.length ? `${withReason.length} 行` : '部分行'}无导入权限），请核对：</div>
                      <div class="ex-preview-table"><table class="table">
-                       <thead><tr>${Object.keys(unmatched[0]).map((k) => `<th>${esc(k)}</th>`).join('')}</tr></thead>
+                       <thead><tr>${cols.map((k) => `<th>${esc(k)}</th>`).join('')}${withReason.length ? '<th>原因</th>' : ''}</tr></thead>
                        <tbody>${unmatched
-                         .map((r) => `<tr>${Object.keys(unmatched[0]).map((k) => `<td>${esc(r[k] ?? '')}</td>`).join('')}</tr>`)
+                         .map((u) => {
+                           const r = unmatchedRow(u) || {};
+                           return `<tr>${cols.map((k) => `<td>${esc(r[k] ?? '')}</td>`).join('')}${withReason.length ? `<td>${esc(u.reason || '')}</td>` : ''}</tr>`;
+                         })
                          .join('')}</tbody>
                      </table></div>`
                   : '<div class="ex-hint muted">全部行已匹配并写入。</div>'

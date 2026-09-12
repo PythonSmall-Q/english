@@ -10,22 +10,23 @@
 
 import { Hono } from 'hono';
 import { ApiError, newId, now, currentAcademicYear } from '../db.js';
-import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
+import { requireAuth, requireTenant, requireRole, audit, canImportForClass } from '../middleware.js';
 import { checkQuota } from '../quota.js';
 
 const app = new Hono();
 
 /**
- * 在 tenant 内按班级名称匹配 class_id（§48），未匹配返回 null
+ * 在 tenant 内按班级名称匹配班级整行（§48），未匹配返回 null
+ * 仅取 id / teacher_id / grade_group_id（导入权限判定用）
  */
-async function matchClassId(db, tenantId, className) {
+async function matchClass(db, tenantId, className) {
   const name = String(className || '').trim();
   if (!name) return null;
   const row = await db
-    .prepare('SELECT id FROM classes WHERE tenant_id = ? AND name = ?')
+    .prepare('SELECT id, teacher_id, grade_group_id FROM classes WHERE tenant_id = ? AND name = ?')
     .bind(tenantId, name)
     .first();
-  return row ? row.id : null;
+  return row || null;
 }
 
 /**
@@ -54,11 +55,12 @@ app.post('/students', requireAuth, requireTenant, requireRole(['admin']), async 
       unmatched.push({ row, reason: '缺少姓名' });
       continue;
     }
-    const classId = await matchClassId(db, tenantId, row?.className);
-    if (!classId) {
+    const matched = await matchClass(db, tenantId, row?.className);
+    if (!matched) {
       unmatched.push({ row, reason: '班级未匹配' });
       continue;
     }
+    const classId = matched.id;
     const studentNo = row?.studentNo != null ? String(row.studentNo).trim() : null;
     const gender = row?.gender != null ? String(row.gender).trim() : null;
     statements.push(
@@ -95,6 +97,7 @@ app.post('/schedules', requireAuth, requireTenant, requireRole(['teacher']), asy
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
+  const membership = c.get('membership');
   const body = await c.req.json().catch(() => ({}));
   const rows = Array.isArray(body.rows) ? body.rows : null;
   if (!rows || rows.length === 0) {
@@ -114,11 +117,18 @@ app.post('/schedules', requireAuth, requireTenant, requireRole(['teacher']), asy
     // className 给了就必须在本 tenant 内匹配，否则计入 unmatched（§48 禁止跨租户）
     let classId = null;
     if (row?.className != null && String(row.className).trim() !== '') {
-      classId = await matchClassId(db, tenantId, row.className);
-      if (!classId) {
+      const cls = await matchClass(db, tenantId, row.className);
+      if (!cls) {
         unmatched.push({ row, reason: '班级未匹配' });
         continue;
       }
+      // 导入权限：仅班主任 / owner / admin / 年级组长可给该班导入课表
+      const allowed = await canImportForClass(db, tenantId, user, membership, cls);
+      if (!allowed) {
+        unmatched.push({ row, reason: '你不是该班班主任，无权导入该班课表' });
+        continue;
+      }
+      classId = cls.id;
     }
     const period = row?.period != null && row.period !== '' ? Number(row.period) : null;
     const startTime = row?.startTime != null ? String(row.startTime).trim() : null;

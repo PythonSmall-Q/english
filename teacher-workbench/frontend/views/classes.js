@@ -181,10 +181,8 @@ App.registerView('classes', {
         ${canCreateClass ? '<button class="btn btn-primary" type="button" id="cls-new">＋ 新建班级</button>' : ''}
       </div>`;
 
-    // 空状态 / 卡片网格
-    const bodyHtml = classes.length
-      ? `<div class="card-grid">${classes
-          .map((c) => {
+    // 班级卡片：先「我的班级」（班主任/任课），再「其他班级」（仅当两类都有时才分区展示）
+    const classCardHtml = (c) => {
             // 年级组下拉（owner/admin 专属，后端仅放行 owner/admin）
             const ggSelect = isAdmin
               ? `<div class="cls-field"><label>年级组</label>
@@ -260,8 +258,21 @@ App.registerView('classes', {
             ${deleteBtn}
           </div>
         </div>`;
-          })
-          .join('')}</div>`
+    };
+
+    // 我的班级 = 我是班主任或任课老师；其余归入其他班级
+    const myClasses = classes.filter(
+      (c) => c.teacher_id === myId || (c.subjectTeachers || []).some((t) => t.userId === myId)
+    );
+    const otherClasses = classes.filter((c) => !myClasses.includes(c));
+    const classGridHtml = (list) => `<div class="card-grid">${list.map(classCardHtml).join('')}</div>`;
+    const classSecHtml = (title, list) =>
+      `<div class="card cls-sec"><div class="cls-sec-head"><span class="cls-sec-title">${title}</span></div>${classGridHtml(list)}</div>`;
+    const bodyHtml = classes.length
+      ? myClasses.length && otherClasses.length
+        ? classSecHtml(`我的班级（${myClasses.length}）`, myClasses) +
+          classSecHtml(`其他班级（${otherClasses.length}）`, otherClasses)
+        : classGridHtml(classes)
       : `<div class="card"><div class="cls-empty">还没有班级，点击右上角「新建班级」开始创建<br><span class="muted" style="font-size:13px">也可以通过「设置 → 数据导入」批量导入班级与学生</span></div></div>`;
 
     el.innerHTML = groupsHtml + headHtml + bodyHtml;

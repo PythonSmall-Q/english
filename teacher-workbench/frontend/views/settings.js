@@ -83,6 +83,9 @@ App.registerView('settings', {
   async render(el) {
     const user = App.state.user || {};
     const tenant = App.state.tenant || {};
+    // 数据管理权限（§50/§51）：无权限的入口不渲染
+    const isAdmin = ['owner', 'admin'].includes(tenant.role);
+    const canExportStudents = isAdmin || tenant.role === 'teacher';
     // 个人资料偏好允许存 localStorage（§52：UI 偏好）
     const prefs = JSON.parse(localStorage.getItem('profile_prefs') || '{}');
 
@@ -138,17 +141,18 @@ App.registerView('settings', {
         <div id="my-quota"><div class="muted">加载中…</div></div>
       </div>
 
-      <!-- 3. 数据管理（§50/§51） -->
+      <!-- 3. 数据管理（§50/§51）：按角色只渲染有权限的入口 -->
+      ${isAdmin || canExportStudents ? `
       <div class="card">
         <div class="card-title">数据管理</div>
         <div class="toolbar">
-          <button class="btn" id="export-backup" type="button">导出全部数据</button>
-          <button class="btn" id="import-restore" type="button">恢复数据</button>
-          <button class="btn" id="export-students" type="button">导出学生名单</button>
+          ${isAdmin ? '<button class="btn" id="export-backup" type="button">导出全部数据</button>' : ''}
+          ${isAdmin ? '<button class="btn" id="import-restore" type="button">恢复数据</button>' : ''}
+          ${canExportStudents ? '<button class="btn" id="export-students" type="button">导出学生名单</button>' : ''}
           <input type="file" id="restore-file" accept=".json" class="hidden">
         </div>
         <div class="muted">导出全部数据：下载当前空间的完整备份 JSON（§51 Backup 结构）；恢复数据：选择备份 JSON 文件恢复。</div>
-      </div>
+      </div>` : ''}
 
       <!-- 4. 数据导入（§47） -->
       <div class="card">
@@ -502,9 +506,9 @@ function openAddAccountModal(tenantId, tenantName) {
   );
 }
 
-/** 数据管理：导出/恢复（§51） */
+/** 数据管理：导出/恢复（§51）。按钮按角色渲染，缺失时跳过绑定 */
 function bindDataManagement() {
-  document.getElementById('export-backup').addEventListener('click', async () => {
+  document.getElementById('export-backup')?.addEventListener('click', async () => {
     try {
       const data = await api.export.backup();
       App.downloadJSON(`backup-${new Date().toISOString().slice(0, 10)}.json`, data);
@@ -514,7 +518,7 @@ function bindDataManagement() {
     }
   });
 
-  document.getElementById('export-students').addEventListener('click', async () => {
+  document.getElementById('export-students')?.addEventListener('click', async () => {
     try {
       const data = await api.export.students();
       App.downloadJSON(`students-${new Date().toISOString().slice(0, 10)}.json`, data);
@@ -525,8 +529,8 @@ function bindDataManagement() {
   });
 
   const fileInput = document.getElementById('restore-file');
-  document.getElementById('import-restore').addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', async () => {
+  document.getElementById('import-restore')?.addEventListener('click', () => fileInput.click());
+  fileInput?.addEventListener('change', async () => {
     const file = fileInput.files[0];
     if (!file) return;
     try {
@@ -615,10 +619,15 @@ function openImportModal(entry) {
           if (!Array.isArray(rows)) throw new Error('JSON 必须是数组');
           const result = await entry.apiCall(rows);
           App.closeModal();
-          const unmatched = result && result.unmatched ? result.unmatched.length : 0;
+          const unmatchedList = (result && result.unmatched) || [];
+          const unmatched = unmatchedList.length;
+          // 新版 unmatched 条目可能是 { row, reason } 形状，汇总无权限行数
+          const denied = unmatchedList.filter((u) => u && u.reason && u.reason.includes('无权')).length;
           App.toast(
             `${entry.label}导入完成：新增 ${result?.created ?? rows.length} 条` +
-              (unmatched ? `，未匹配 ${unmatched} 行（班级不存在或姓名缺失）` : '')
+              (unmatched
+                ? `，未匹配 ${unmatched} 行（班级不存在或姓名缺失${denied ? `，其中 ${denied} 行无权限导入` : ''}）`
+                : '')
           );
         } catch (e) {
           App.toast(e.message || '导入失败');
