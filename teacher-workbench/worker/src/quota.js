@@ -17,7 +17,7 @@ import { ApiError } from './db.js';
  */
 export const PLAN_PRESETS = {
   free: {
-    label: '免费版',
+    label: '基础版',
     quotas: {
       max_classes: 1,
       max_students: 30,

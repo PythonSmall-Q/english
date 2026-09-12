@@ -47,7 +47,8 @@ app.get('/', requireAuth, requireTenant, requireRole(['admin']), async (c) => {
  */
 app.get('/:id/download', requireAuth, requireTenant, requireRole(['admin']), async (c) => {
   const gradDb = gradDbOrThrow(c);
-  const db = c.env.DB;
+  // 毕业归档本体在 GRAD_DB；审计日志是租户级数据，随租户所在库（正式=主库，试用=TRIAL_DB）
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const id = c.req.param('id');
 

@@ -2,9 +2,14 @@
  * routes/trial.js — 3 天试用（POST /api/v1/trials/start）
  *
  * 规则：
- * - requireAuth，任何登录用户可调用；每个账号一生只能试用一次（users.trial_used）
+ * - requireAuth，任何登录用户可调用；每个账号一生只能试用一次（主库 users.trial_used）
  * - 创建 plan='trial' 的租户：3 天到期，业务配额全 1，AI=0，存储=0，成员=1，本人为 owner
- * - 创建成功即置 trial_used=1（即使之后试用空间被物理删除也不可再建）
+ * - 创建成功即置主库 trial_used=1（即使之后试用空间被物理删除也不可再建）
+ *
+ * 双库机制：试用租户整体迁入独立试用库 TRIAL_DB——tenants/memberships/tenant_quotas/
+ * 审计日志全部写 TRIAL_DB（slug 查重也在 TRIAL_DB 内进行），主库不再存任何试用数据；
+ * 仅 users.trial_used 检查/置位在主库 users 表（全局用户表永远在主库）。
+ * TRIAL_DB binding 缺失 → 500 TRIAL_NOT_CONFIGURED「试用数据库未配置」。
  */
 
 import { Hono } from 'hono';
@@ -31,23 +36,28 @@ const TRIAL_QUOTAS = {
 
 /**
  * POST /api/v1/trials/start — 创建试用空间
- * 每个账号只能试用一次；slug 自动生成 'trial-xxxxxxxx' 并查重（参考 admin.js migrate 的 mig- 写法）
+ * 每个账号只能试用一次；slug 自动生成 'trial-xxxxxxxx' 并在 TRIAL_DB 内查重
  */
 app.post('/start', requireAuth, async (c) => {
-  const db = c.env.DB;
+  const mainDb = c.env.DB;
+  const trialDb = c.env.TRIAL_DB;
+  if (!trialDb) {
+    throw new ApiError('TRIAL_NOT_CONFIGURED', '试用数据库未配置');
+  }
   const user = c.get('user');
 
+  // users.trial_used 是主库全局用户字段
   if (user.trial_used) {
     throw new ApiError('CONFLICT', '每个账号只能试用一次');
   }
 
-  // slug：'trial-' + 8 位随机字符，查重直到唯一
+  // slug：'trial-' + 8 位随机字符，在 TRIAL_DB 内查重直到唯一
   const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let slug;
   for (;;) {
     const bytes = crypto.getRandomValues(new Uint8Array(8));
     slug = 'trial-' + Array.from(bytes, (b) => ALPHABET[b % ALPHABET.length]).join('');
-    const taken = await db.prepare('SELECT id FROM tenants WHERE slug = ?').bind(slug).first();
+    const taken = await trialDb.prepare('SELECT id FROM tenants WHERE slug = ?').bind(slug).first();
     if (!taken) break;
   }
 
@@ -57,14 +67,15 @@ app.post('/start', requireAuth, async (c) => {
   const name = `${user.display_name || user.email.split('@')[0]} 的试用空间`;
 
   const q = TRIAL_QUOTAS;
-  await db.batch([
-    db
+  // 试用租户的租户行/成员关系/配额/审计全部写 TRIAL_DB（与主库是两个库，分开 batch）
+  await trialDb.batch([
+    trialDb
       .prepare(
         `INSERT INTO tenants (id, name, slug, type, status, plan, created_by, expires_at, created_at, updated_at)
          VALUES (?, ?, ?, 'organization', 'active', 'trial', ?, ?, ?, ?)`
       )
       .bind(tenantId, name, slug, user.id, expiresAt, ts, ts),
-    db
+    trialDb
       .prepare(
         `INSERT INTO tenant_quotas (tenant_id, max_classes, max_students, max_lessons, max_assignments,
            max_dictations, max_exams, max_storage_bytes, max_ai_requests_month, max_members, created_at, updated_at)
@@ -84,22 +95,24 @@ app.post('/start', requireAuth, async (c) => {
         ts,
         ts
       ),
-    db
+    trialDb
       .prepare(
         `INSERT INTO memberships (id, tenant_id, user_id, role, status, created_at)
          VALUES (?, ?, ?, 'owner', 'active', ?)`
       )
       .bind(newId(), tenantId, user.id, ts),
-    db.prepare('UPDATE users SET trial_used = 1, updated_at = ? WHERE id = ?').bind(ts, user.id),
   ]);
 
-  await audit(db, tenantId, user.id, '创建试用空间', 'tenant', tenantId, {
+  // 主库唯一写入：users.trial_used 置位（一生一次，即使试用数据日后被物理删除）
+  await mainDb.prepare('UPDATE users SET trial_used = 1, updated_at = ? WHERE id = ?').bind(ts, user.id).run();
+
+  await audit(trialDb, tenantId, user.id, '创建试用空间', 'tenant', tenantId, {
     plan: 'trial',
     expiresAt,
     operatorEmail: user.email,
   });
 
-  const tenant = await db.prepare('SELECT * FROM tenants WHERE id = ?').bind(tenantId).first();
+  const tenant = await trialDb.prepare('SELECT * FROM tenants WHERE id = ?').bind(tenantId).first();
   return c.json({ success: true, data: { tenant } }, 201);
 });
 

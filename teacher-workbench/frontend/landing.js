@@ -91,7 +91,7 @@ App.showLanding = function () {
         <p class="landing-section-sub muted">随教学规模自由升级，随时联系管理员调整</p>
         <div class="landing-pricing-grid">
           <div class="landing-price-card">
-            <div class="landing-price-name">免费版</div>
+            <div class="landing-price-name">基础版</div>
             <div class="landing-price-amount">¥${LANDING_PRICING.free.price}<span class="landing-price-period"> / ${LANDING_PRICING.free.period}</span></div>
             <ul class="landing-price-list">
               <li>1 个班级</li>
@@ -151,7 +151,7 @@ App.showLanding = function () {
             <thead>
               <tr>
                 <th>功能</th>
-                <th>免费版</th>
+                <th>基础版</th>
                 <th class="col-featured">专业版</th>
                 <th>学校版</th>
                 <th>定制版</th>

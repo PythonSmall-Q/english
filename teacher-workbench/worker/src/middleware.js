@@ -356,7 +356,7 @@ export async function assertCurrentYear(db, tenantId, table, id) {
 
 /**
  * 写审计日志（§63）。metadata 为任意对象，将序列化为 JSON 字符串。
- * 用法：await audit(c.env.DB, c.get('tenantId'), c.get('user').id, '创建学生', 'student', id, {...})
+ * 用法：await audit(c.get('tenantDb') || c.env.DB, c.get('tenantId'), c.get('user').id, '创建学生', 'student', id, {...})
  */
 export async function audit(db, tenantId, userId, action, resourceType, resourceId, metadata) {
   await db

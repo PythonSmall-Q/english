@@ -160,6 +160,7 @@ app.post('/', requireAuth, async (c) => {
   if (!name) throw new ApiError('VALIDATION_ERROR', '租户名称不能为空');
   if (!slug) throw new ApiError('VALIDATION_ERROR', 'slug 不能为空');
 
+  // 平台管理员创建的正式租户只写主库（试用租户由 routes/trial.js 写 TRIAL_DB）
   const db = c.env.DB;
   const slugTaken = await db.prepare('SELECT id FROM tenants WHERE slug = ?').bind(slug).first();
   if (slugTaken) throw new ApiError('CONFLICT', 'slug 已被使用');
@@ -840,7 +841,7 @@ app.post('/:id/members/:userId/purge', requireAuth, requireTenant, requireRole([
   const tenantId = c.get('tenantId');
   const operator = c.get('user');
   const targetUserId = c.req.param('userId');
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const body = await c.req.json().catch(() => ({}));
 
   const membership = await db

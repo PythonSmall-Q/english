@@ -10,7 +10,7 @@
 const TENANT_TYPE_LABELS = { personal: '个人空间', organization: '组织' };
 const TENANT_STATUS_LABELS = { active: '正常', disabled: '已停用' };
 /** 定价套餐（创建租户三选一预设，缺省 custom=商议/手动配额） */
-const PLAN_LABELS = { free: '免费版', pro: '专业版', school: '学校版', custom: '商议' };
+const PLAN_LABELS = { free: '基础版', pro: '专业版', school: '学校版', custom: '商议' };
 const PLAN_SUMMARIES = {
   free: '1 个班级 · 30 名学生 · AI 20 次/月 · 10MB 存储 · 最多 5 名成员',
   pro: '10 个班级 · 300 名学生 · AI 500 次/月 · 5GB 存储 · 最多 30 名成员',
@@ -63,7 +63,7 @@ App.registerView('admin', {
           <div style="grid-column:1/-1">
             <label class="form-label">定价套餐</label>
             <div style="display:flex;gap:16px;flex-wrap:wrap">
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="t-plan" value="free"><span>免费版</span></label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="t-plan" value="free"><span>基础版</span></label>
               <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="t-plan" value="pro"><span>专业版</span></label>
               <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="t-plan" value="school"><span>学校版</span></label>
               <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="t-plan" value="custom" checked><span>商议（自定义）</span></label>
