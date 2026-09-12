@@ -172,9 +172,17 @@
   // —— Lessons 备课中心（§56）——
   const lessons = {
     list: (query) => request('/lessons', { query }),
+    /** 单份教案完整字段（含 content 正文与 class_name） */
+    get: (id) => request(`/lessons/${id}`),
     create: (body) => request('/lessons', { method: 'POST', body }),
     update: (id, body) => request(`/lessons/${id}`, { method: 'PUT', body }),
     remove: (id) => request(`/lessons/${id}`, { method: 'DELETE' }),
+    /** 复制教案到当前用户名下（新 id、标题加「（副本）」、status=pending、当前学年），复制附件关联 */
+    duplicate: (id) => request(`/lessons/${id}/duplicate`, { method: 'POST', body: {} }),
+    /** 关联附件：file_id 须为本租户 files 表已有文件；重复关联返回 400 */
+    addFile: (id, fileId) => request(`/lessons/${id}/files`, { method: 'POST', body: { file_id: fileId } }),
+    /** 移除附件关联（不删文件本体） */
+    removeFile: (id, fileId) => request(`/lessons/${id}/files/${fileId}`, { method: 'DELETE' }),
   };
 
   // —— Schedules 教学课表（§60）——
