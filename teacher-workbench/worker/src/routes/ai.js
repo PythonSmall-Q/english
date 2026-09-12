@@ -108,7 +108,7 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
   if (!prompt) throw new ApiError('VALIDATION_ERROR', 'prompt 不能为空');
 
   // §43：写操作前先校验 AI 月度配额
-  await checkQuota(db, tenantId, 'ai');
+  await checkQuota(db, tenantId, 'ai', user.id);
 
   let result;
   let mock = false;

@@ -32,6 +32,39 @@ const RESOURCE_MAP = {
   ai: { table: 'ai_generations', quotaColumn: 'max_ai_requests_month' },
 };
 
+/** 支持按用户配额覆盖的资源 → 归属列（owner/admin 可在 user_quotas 中单独设限） */
+const USER_RESOURCE_COLUMN = {
+  lessons: { table: 'lessons', column: 'teacher_id' },
+  assignments: { table: 'assignments', column: 'teacher_id' },
+  dictations: { table: 'dictations', column: 'teacher_id' },
+  ai: { table: 'ai_generations', column: 'user_id' },
+  files: { table: 'files', column: 'created_by' },
+};
+
+/** 按归属列统计某用户在本租户的用量（ai 限当月） */
+async function countUserUsage(db, tenantId, userId, resource) {
+  const mapping = USER_RESOURCE_COLUMN[resource];
+  if (!mapping) return null;
+  if (resource === 'ai') {
+    const monthPrefix = new Date().toISOString().slice(0, 7);
+    return (
+      await db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM ${mapping.table}
+             WHERE tenant_id = ? AND ${mapping.column} = ? AND substr(created_at, 1, 7) = ?`
+        )
+        .bind(tenantId, userId, monthPrefix)
+        .first()
+    ).n;
+  }
+  return (
+    await db
+      .prepare(`SELECT COUNT(*) AS n FROM ${mapping.table} WHERE tenant_id = ? AND ${mapping.column} = ?`)
+      .bind(tenantId, userId)
+      .first()
+  ).n;
+}
+
 const QUOTA_ERROR_MESSAGE = '已达到当前空间额度';
 
 /**
@@ -39,24 +72,44 @@ const QUOTA_ERROR_MESSAGE = '已达到当前空间额度';
  * 用法（写操作 handler 中，在 INSERT 之前）：
  *   await checkQuota(c.env.DB, c.get('tenantId'), 'students');
  *
+ * 按用户配额：若传入 userId 且 user_quotas 表中该用户对此资源有覆盖（含 files），
+ * 则按用户归属列计数裁决（ai 按用户+当月）；无覆盖时走原租户逻辑。
+ *
  * @param {object} db D1Database（c.env.DB）
  * @param {string} tenantId 当前租户（c.get('tenantId')）
- * @param {string} resource 'classes'|'students'|'lessons'|'assignments'|'dictations'|'exams'|'ai'
+ * @param {string} resource 'classes'|'students'|'lessons'|'assignments'|'dictations'|'exams'|'ai'|'files'
+ * @param {string} [userId] 当前用户 id（启用按用户配额覆盖）
  * @returns {Promise<{quota: number|null, used: number}>}
  * @throws {ApiError} QUOTA_EXCEEDED / BAD_REQUEST（未知 resource）
  */
-export async function checkQuota(db, tenantId, resource) {
+export async function checkQuota(db, tenantId, resource, userId = null) {
   const mapping = RESOURCE_MAP[resource];
-  if (!mapping) {
+  if (!mapping && !USER_RESOURCE_COLUMN[resource]) {
     throw new ApiError('BAD_REQUEST', `未知配额资源: ${resource}`);
+  }
+
+  // 按用户配额覆盖优先
+  if (userId && USER_RESOURCE_COLUMN[resource]) {
+    const override = await db
+      .prepare('SELECT quota FROM user_quotas WHERE tenant_id = ? AND user_id = ? AND resource = ?')
+      .bind(tenantId, userId, resource)
+      .first();
+    if (override && override.quota !== null && override.quota !== undefined) {
+      const used = await countUserUsage(db, tenantId, userId, resource);
+      if (used >= override.quota) {
+        throw new ApiError('QUOTA_EXCEEDED', QUOTA_ERROR_MESSAGE);
+      }
+      return { quota: override.quota, used };
+    }
+    // 无覆盖行 → 回退租户逻辑
   }
 
   const quotaRow = await db
     .prepare('SELECT * FROM tenant_quotas WHERE tenant_id = ?')
     .bind(tenantId)
     .first();
-  if (!quotaRow) {
-    // 无配额记录 = 未配置，视为不限
+  if (!quotaRow || !mapping) {
+    // 无配额记录（或该资源无租户级配额，如 files 仅支持按用户覆盖）= 视为不限
     return { quota: null, used: 0 };
   }
   const quota = quotaRow[mapping.quotaColumn];

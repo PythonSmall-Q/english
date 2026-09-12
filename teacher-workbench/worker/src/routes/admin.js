@@ -193,6 +193,60 @@ app.get('/users', requireAuth, async (c) => {
 });
 
 /**
+ * PATCH /api/v1/admin/users/:userId — 设置/取消平台管理员（仅 platform_admin）
+ * body: { platformRole: 'platform_admin' | 'user' }
+ * 保护：不能取消自己；不能取消最后一个平台管理员（至少保留一个）。
+ * 平台级操作不属于任何租户，审计 tenant_id 记 'platform'。
+ */
+app.patch('/users/:userId', requireAuth, async (c) => {
+  const operator = requirePlatformAdmin(c);
+  const db = c.env.DB;
+  const userId = c.req.param('userId');
+  const body = await c.req.json().catch(() => ({}));
+  const platformRole = String(body.platformRole || '');
+  if (platformRole !== 'platform_admin' && platformRole !== 'user') {
+    throw new ApiError('VALIDATION_ERROR', "platformRole 必须是 'platform_admin' 或 'user'");
+  }
+
+  const target = await db
+    .prepare('SELECT id, email, display_name, platform_role FROM users WHERE id = ?')
+    .bind(userId)
+    .first();
+  if (!target) throw new ApiError('NOT_FOUND', '用户不存在');
+
+  if (platformRole === 'user' && target.platform_role === 'platform_admin') {
+    if (target.id === operator.id) {
+      throw new ApiError('BAD_REQUEST', '不能取消自己的平台管理员身份');
+    }
+    const admins = await db
+      .prepare("SELECT COUNT(*) AS n FROM users WHERE platform_role = 'platform_admin'")
+      .first();
+    if (admins.n <= 1) {
+      throw new ApiError('BAD_REQUEST', '至少保留一个平台管理员');
+    }
+  }
+  if (platformRole === target.platform_role) {
+    return c.json({
+      success: true,
+      data: { user: { id: target.id, email: target.email, displayName: target.display_name, platformRole } },
+    });
+  }
+
+  await db
+    .prepare('UPDATE users SET platform_role = ?, updated_at = ? WHERE id = ?')
+    .bind(platformRole, now(), userId)
+    .run();
+  await audit(db, 'platform', operator.id, platformRole === 'platform_admin' ? '设为平台管理员' : '取消平台管理员', 'user', userId, {
+    targetEmail: target.email,
+    platformRole,
+  });
+  return c.json({
+    success: true,
+    data: { user: { id: target.id, email: target.email, displayName: target.display_name, platformRole } },
+  });
+});
+
+/**
  * GET /api/v1/admin/settings — 平台设置
  * 当前支持：auto_personal_workspace（true=新建账户自动创建个人空间）
  */

@@ -82,7 +82,7 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) =>
   const classId = await validateClassId(db, tenantId, body.class_id);
   const lessonType = validateLessonType(body.lesson_type);
 
-  await checkQuota(db, tenantId, 'lessons');
+  await checkQuota(db, tenantId, 'lessons', user.id);
 
   const id = newId();
   const ts = now();

@@ -88,9 +88,18 @@
     members: async (id) => (await request(`/tenants/${id}`)).members || [],
     invite: (id, body) => request(`/tenants/${id}/members`, { method: 'POST', body }),
     accept: (token) => request('/tenants/invitations/accept', { method: 'POST', body: { token } }),
+    /** 移除成员（软删除：数据保留，可重新添加恢复）；owner/admin 可用，admin 不能移除 owner */
     removeMember: (id, userId) => request(`/tenants/${id}/members/${userId}`, { method: 'DELETE' }),
     /** 租户管理员直接添加账户（邮箱已注册直接加入，未注册现场开户） */
     addAccount: (id, body) => request(`/tenants/${id}/accounts`, { method: 'POST', body }),
+    /** 成员配额明细：active+removed 成员、各人用量与按用户配额、租户总用量 */
+    quotaDetail: (id) => request(`/tenants/${id}/quota-detail`),
+    /** 设置/清除成员按用户配额（quota 为 ≥0 整数或 null=不限） */
+    updateMemberQuota: (id, userId, resource, quota) =>
+      request(`/tenants/${id}/members/${userId}/quota`, { method: 'PUT', body: { resource, quota } }),
+    /** 硬删除已移除成员在本空间的内容；resources 可选，默认全部 */
+    purgeMember: (id, userId, resources) =>
+      request(`/tenants/${id}/members/${userId}/purge`, { method: 'POST', body: resources ? { resources } : {} }),
   };
 
   // —— GradeGroups 年级组（年级组长 = 本年级子管理员）——
@@ -244,6 +253,8 @@
     // 后端为 POST /admin/tenants/:id/status（body: { status: 'active'|'disabled' }）
     setStatus: (id, status) => request(`/admin/tenants/${id}/status`, { method: 'POST', body: { status } }),
     setQuota: (id, quotas) => request(`/admin/tenants/${id}/quota`, { method: 'PUT', body: quotas }),
+    /** 设置/取消用户平台管理员（PATCH /admin/users/:userId，body {platformRole}） */
+    updateUserPlatformRole: (userId, platformRole) => request(`/admin/users/${userId}`, { method: 'PATCH', body: { platformRole } }),
     /** 平台设置（如新建账户是否自动创建个人空间） */
     getSettings: () => request('/admin/settings'),
     updateSettings: (body) => request('/admin/settings', { method: 'PUT', body }),

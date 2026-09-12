@@ -103,7 +103,7 @@ app.post('/', requireAuth, requireTenant, requireClassManager(), async (c) => {
   if (!title) throw new ApiError('VALIDATION_ERROR', '作业标题不能为空');
 
   await getClassOr404(db, tenantId, classId);
-  await checkQuota(db, tenantId, 'assignments');
+  await checkQuota(db, tenantId, 'assignments', user.id);
 
   const ts = now();
   const id = newId();

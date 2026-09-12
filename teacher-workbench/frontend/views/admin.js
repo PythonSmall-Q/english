@@ -271,21 +271,45 @@ async function renderUsers() {
     }
     box.innerHTML = `
       <table class="table">
-        <thead><tr><th>邮箱</th><th>姓名</th><th>平台角色</th><th>状态</th><th>注册时间</th></tr></thead>
+        <thead><tr><th>邮箱</th><th>姓名</th><th>平台角色</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead>
         <tbody>
           ${users
-            .map(
-              (u) => `<tr>
+            .map((u) => {
+              const isAdminUser = u.platform_role === 'platform_admin';
+              const isSelf = u.id === App.state.user?.id;
+              const action = isSelf
+                ? '<span class="muted">—</span>'
+                : `<button class="btn btn-sm ${isAdminUser ? 'btn-danger' : ''}" data-role-toggle="${App.esc(u.id)}" data-to="${isAdminUser ? 'user' : 'platform_admin'}" type="button">
+                     ${isAdminUser ? '取消平台管理员' : '设为平台管理员'}
+                   </button>`;
+              return `<tr>
                 <td>${App.esc(u.email)}</td>
                 <td>${App.esc(u.display_name || u.displayName || '')}</td>
-                <td>${u.platform_role === 'platform_admin' ? '平台管理员' : '用户'}</td>
+                <td>${isAdminUser ? '平台管理员' : '用户'}</td>
                 <td><span class="badge ${u.status === 'active' ? 'badge-success' : 'badge-leave'}">${u.status === 'active' ? '正常' : '已停用'}</span></td>
                 <td class="muted">${App.esc((u.created_at || '').slice(0, 10))}</td>
-              </tr>`
-            )
+                <td>${action}</td>
+              </tr>`;
+            })
             .join('')}
         </tbody>
       </table>`;
+
+    // 平台管理员开关（不能操作自己；后端兜底至少保留一个平台管理员）
+    box.querySelectorAll('[data-role-toggle]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const to = btn.dataset.to;
+        const msg = to === 'platform_admin' ? '确认将该用户设为平台管理员？' : '确认取消该用户的平台管理员身份？';
+        if (!(await App.confirmDialog(msg))) return;
+        try {
+          await api.admin.updateUserPlatformRole(btn.dataset.roleToggle, to);
+          App.toast('平台角色已更新');
+          await renderUsers();
+        } catch (e) {
+          App.toast(e.message || '操作失败');
+        }
+      });
+    });
   } catch (e) {
     box.innerHTML = `<div class="muted">加载失败：${App.esc(e.message || '未知错误')}</div>`;
   }

@@ -325,28 +325,62 @@ async function renderSpace() {
     return;
   }
   const canManage = ['owner', 'admin'].includes(tenant.role);
+  const myUserId = App.state.user?.id;
+  // owner 可移除所有成员（含 admin/teacher/viewer）；admin 不能移除 owner（后端 403 兜底）
+  const canRemove = (m) => {
+    const uid = m.user_id ?? m.userId;
+    if (uid && uid === myUserId) return false;
+    if (tenant.role === 'owner') return true;
+    return m.role !== 'owner';
+  };
   const ROLE_LABELS = { owner: '所有者', admin: '管理员', teacher: '教师', viewer: '查看者' };
   memberEl.innerHTML = `
     <div class="card-title" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
       <span>成员（${members.length}）</span>
-      ${canManage ? '<button class="btn btn-sm" id="member-add" type="button">添加账户</button>' : ''}
+      <span>
+        ${canManage ? '<button class="btn btn-sm" id="member-quota" type="button">配额管理</button>' : ''}
+        ${canManage ? '<button class="btn btn-sm" id="member-add" type="button">添加账户</button>' : ''}
+      </span>
     </div>
     <table class="table">
-      <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th></tr></thead>
+      <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th>${canManage ? '<th>操作</th>' : ''}</tr></thead>
       <tbody>
         ${members
-          .map(
-            (m) => `<tr>
+          .map((m) => {
+            const uid = m.user_id ?? m.userId ?? '';
+            const removeBtn = canManage && canRemove(m)
+              ? `<button class="btn btn-sm btn-danger" data-remove-member="${App.esc(uid)}" data-name="${App.esc(m.display_name || m.email || '')}" type="button">移除</button>`
+              : '';
+            return `<tr>
               <td>${App.esc(m.email)}</td>
               <td>${App.esc(m.display_name || '')}</td>
               <td><span class="badge badge-info">${ROLE_LABELS[m.role] || App.esc(m.role)}</span></td>
-            </tr>`
-          )
+              ${canManage ? `<td>${removeBtn}</td>` : ''}
+            </tr>`;
+          })
           .join('')}
       </tbody>
     </table>`;
   if (canManage) {
     document.getElementById('member-add').addEventListener('click', () => openAddAccountModal(tenant.id, tenant.name));
+    document.getElementById('member-quota').addEventListener('click', () => App.showView('quota'));
+    memberEl.querySelectorAll('[data-remove-member]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (
+          !(await App.confirmDialog(
+            `确认移除成员「${btn.dataset.name}」？移除后该成员失去本空间权限，数据保留，可重新添加恢复。`
+          ))
+        )
+          return;
+        try {
+          await api.tenants.removeMember(tenant.id, btn.dataset.removeMember);
+          App.toast('成员已移除');
+          await renderSpace();
+        } catch (e) {
+          App.toast(e.message || '移除失败');
+        }
+      });
+    });
   }
 }
 

@@ -22,7 +22,7 @@ teacher-workbench/
 │   │   ├── auth-core.js / middleware.js / quota.js / db.js
 │   │   └── routes/      # auth/tenants/classes/students/lessons/schedules/
 │   │                    #   assignments/dictations/exams/dashboard/ai/files/import/export/admin
-│   ├── migrations/      # D1 迁移（0001_init.sql）
+│   ├── migrations/      # D1 迁移（0001_init … 0008_user_admin_quota：user_quotas 按用户配额 + memberships.updated_at）
 │   └── wrangler.toml
 └── scripts/
     └── smoke-test.mjs   # 端到端冒烟测试（Node 18+，需先启动本地后端）
@@ -92,12 +92,33 @@ AI 用量按租户配额 `max_ai_requests_month` 限制（个人空间默认 20 
 - 查看/管理全部租户（创建正式组织空间、启用/停用：POST `/admin/tenants/:id/status`，
   body `{ status: 'active' | 'disabled' }`）
 - 调整租户配额（PUT `/admin/tenants/:id/quota`）
-- 查看全部用户
+- 查看全部用户；设置/取消平台管理员（PATCH `/admin/users/:id`，body `{ platformRole }`，
+  不能取消自己、至少保留一个平台管理员；数据库中已有的平台管理员登录时不会被降级）
+- `PLATFORM_ADMIN_EMAILS` 变化不会降级：env 命中 **或** 库中已是 `platform_admin` 均保持平台管理员
 
 ```bash
 # worker/.dev.vars 或 wrangler.toml [vars] / 部署时 wrangler secret/vars
 PLATFORM_ADMIN_EMAILS="admin@example.com,ops@example.com"
 ```
+
+## 成员移除、按用户配额与数据清除
+
+- **移除成员**（DELETE `/tenants/:id/members/:userId`，owner/admin）：软删除
+  （memberships.status='removed'），数据保留；admin 不能移除 owner 角色成员，
+  最后一个 active owner 受保护。被移除成员可通过「添加账户」或邀请链接重新加入，
+  成员资格与原有数据自动恢复。
+- **配额明细**（GET `/tenants/:id/quota-detail`，owner/admin）：每个成员
+  （含已移除）的教案/作业/默写/文件/AI 本月用量、存储字节与按用户配额覆盖，
+  以及租户总用量（getQuotaUsage）。
+- **按用户配额**（PUT `/tenants/:id/members/:userId/quota`，owner/admin）：
+  body `{ resource: lessons|assignments|dictations|ai|files, quota: ≥0 整数 | null }`，
+  UPSERT 进 `user_quotas`；`null` 删除覆盖。创建教案/作业/默写、AI 生成时按用户归属列
+  计数优先裁决，无覆盖时走租户配额。
+- **清除数据**（POST `/tenants/:id/members/:userId/purge`，owner/admin）：
+  仅允许对已移除成员，硬删除其在本空间的教案/作业/默写（先删提交/结果子表）、
+  文件（含 R2 对象）、AI 生成记录，并把 classes.teacher_id 置 NULL、删除
+  class_teachers 行。可选 body `{ resources: [...] }` 指定资源子集；
+  **不可恢复**，重新加入不会恢复已清除的数据。
 
 ## 部署
 

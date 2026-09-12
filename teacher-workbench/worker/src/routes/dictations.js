@@ -130,7 +130,7 @@ app.post('/', requireAuth, requireTenant, async (c) => {
     if (!check.ok) throw new ApiError(check.cls ? 'FORBIDDEN' : 'NOT_FOUND', check.reason);
   }
 
-  await checkQuota(db, tenantId, 'dictations');
+  await checkQuota(db, tenantId, 'dictations', user.id);
 
   const id = newId();
   await db

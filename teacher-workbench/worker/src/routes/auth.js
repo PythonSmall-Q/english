@@ -142,8 +142,13 @@ app.post('/login', async (c) => {
     throw new ApiError('FORBIDDEN', '账号已被停用');
   }
 
-  // 登录时刷新平台角色（PLATFORM_ADMIN_EMAILS 可能变化）
-  const platformRole = resolvePlatformRole(email, c.env);
+  // 登录时刷新平台角色（PLATFORM_ADMIN_EMAILS 可能变化）。
+  // 永不降级：env 命中或数据库中已是 platform_admin 则保持平台管理员，
+  // 否则才设为 'user'（避免 env 列表变化把库中已有的平台管理员降级）。
+  const platformRole =
+    resolvePlatformRole(email, c.env) === 'platform_admin' || user.platform_role === 'platform_admin'
+      ? 'platform_admin'
+      : 'user';
   if (platformRole !== user.platform_role) {
     await db
       .prepare('UPDATE users SET platform_role = ?, updated_at = ? WHERE id = ?')

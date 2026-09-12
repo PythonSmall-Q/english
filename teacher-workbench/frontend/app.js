@@ -119,6 +119,10 @@ window.App = {
     });
     const container = document.getElementById('view-container');
     container.innerHTML = '';
+    // 同步 hash（#/name），使浏览器前进/后退与直达链接可用
+    if (location.hash !== '#/' + name) {
+      try { history.replaceState(null, '', '#/' + name); } catch (e) { /* 忽略 */ }
+    }
     await def.render(container);
     def.init?.();
     container.scrollTop = 0;
@@ -377,3 +381,9 @@ window.App = {
 };
 
 document.addEventListener('DOMContentLoaded', () => App.boot());
+
+// hash 路由（#/name）：前进/后退与页面内 #/ 链接直达视图
+window.addEventListener('hashchange', () => {
+  const name = location.hash.replace(/^#\/?/, '');
+  if (name && App._views[name] && App.state.view !== name) App.showView(name);
+});

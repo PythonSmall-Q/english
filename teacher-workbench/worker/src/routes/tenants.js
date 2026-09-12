@@ -3,7 +3,9 @@
  *
  * 约定：
  * - 成功响应 { success: true, data }；错误 { success: false, error: { code, message } }
- * - POST /tenants 仅 platform_admin（§5）；成员邀请 owner/admin；移除成员仅 owner
+ * - POST /tenants 仅 platform_admin（§5）；成员邀请 owner/admin；
+ *   移除成员 owner/admin（软删除保留数据，可重新添加恢复）；
+ *   按用户配额覆盖（user_quotas）与已移除成员数据清除（purge）owner/admin
  * - 邀请 token：原始值只在创建响应返回一次，库存 SHA-256；7 天有效
  */
 
@@ -249,7 +251,9 @@ app.post('/:id/members', requireAuth, requireTenant, requireRole(['admin']), asy
 
   const db = c.env.DB;
   const existing = await db
-    .prepare("SELECT id FROM memberships WHERE tenant_id = ? AND user_id = (SELECT id FROM users WHERE email = ?)")
+    .prepare(
+      "SELECT id FROM memberships WHERE tenant_id = ? AND status = 'active' AND user_id = (SELECT id FROM users WHERE email = ?)"
+    )
     .bind(tenantId, email)
     .first();
   if (existing) throw new ApiError('CONFLICT', '该用户已是空间成员');
@@ -301,11 +305,33 @@ app.post('/:id/accounts', requireAuth, requireTenant, requireRole(['admin']), as
   const db = c.env.DB;
   const existingUser = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
   if (existingUser) {
-    const already = await db
-      .prepare('SELECT id FROM memberships WHERE tenant_id = ? AND user_id = ?')
+    const membership = await db
+      .prepare('SELECT * FROM memberships WHERE tenant_id = ? AND user_id = ?')
       .bind(tenantId, existingUser.id)
       .first();
-    if (already) throw new ApiError('CONFLICT', '该邮箱对应的用户已是空间成员');
+    if (membership && membership.status === 'active') {
+      throw new ApiError('CONFLICT', '该邮箱对应的用户已是空间成员');
+    }
+    if (membership && membership.status === 'removed') {
+      // 曾被移除（软删除）：恢复成员资格并按本次指定角色更新，数据自然恢复
+      await checkMemberQuota(db, tenantId);
+      await db
+        .prepare("UPDATE memberships SET status = 'active', role = ?, updated_at = ? WHERE id = ?")
+        .bind(role, now(), membership.id)
+        .run();
+      await audit(db, tenantId, operator.id, '重新添加成员（恢复数据）', 'membership', membership.id, {
+        email,
+        role,
+        restored: true,
+      });
+      return c.json(
+        {
+          success: true,
+          data: { userId: existingUser.id, email, role, created: false, restored: true, message: '已重新加入空间，原有数据已恢复' },
+        },
+        200
+      );
+    }
   } else {
     const password = String(body.password || '');
     if (password.length < 8) throw new ApiError('VALIDATION_ERROR', '该邮箱未注册，需设置 ≥8 位的初始密码');
@@ -383,11 +409,37 @@ app.post('/invitations/accept', requireAuth, async (c) => {
   const tenant = await db.prepare('SELECT * FROM tenants WHERE id = ?').bind(invite.tenant_id).first();
   if (!tenant || tenant.status !== 'active') throw new ApiError('FORBIDDEN', '空间不存在或已停用');
 
-  const already = await db
-    .prepare('SELECT id FROM memberships WHERE tenant_id = ? AND user_id = ?')
+  const membership = await db
+    .prepare('SELECT * FROM memberships WHERE tenant_id = ? AND user_id = ?')
     .bind(invite.tenant_id, user.id)
     .first();
-  if (already) throw new ApiError('CONFLICT', '你已经是该空间成员');
+  if (membership && membership.status === 'active') {
+    throw new ApiError('CONFLICT', '你已经是该空间成员');
+  }
+  if (membership && membership.status === 'removed') {
+    // 曾被移除（软删除）：恢复成员资格并按邀请角色更新，数据自然恢复
+    await checkMemberQuota(db, invite.tenant_id);
+    await db
+      .prepare("UPDATE memberships SET status = 'active', role = ?, updated_at = ? WHERE id = ?")
+      .bind(invite.role, now(), membership.id)
+      .run();
+    await audit(db, invite.tenant_id, user.id, '接受邀请（恢复成员资格）', 'membership', membership.id, {
+      invitedAs: invite.role,
+      restored: true,
+    });
+    return c.json(
+      {
+        success: true,
+        data: {
+          membershipId: membership.id,
+          tenant: { id: tenant.id, name: tenant.name },
+          role: invite.role,
+          restored: true,
+        },
+      },
+      200
+    );
+  }
 
   await checkMemberQuota(db, invite.tenant_id);
 
@@ -413,12 +465,14 @@ app.post('/invitations/accept', requireAuth, async (c) => {
 });
 
 /**
- * DELETE /api/v1/tenants/:id/members/:userId — 移除成员（仅 owner，§10）
- * 保护：不允许移除最后一个 owner
+ * DELETE /api/v1/tenants/:id/members/:userId — 移除成员（owner/admin，§10）
+ * 软删除：memberships.status='removed'，数据保留，可重新添加恢复。
+ * 保护：admin 不能移除 owner；不允许移除最后一个 active owner。
  */
-app.delete('/:id/members/:userId', requireAuth, requireTenant, requireRole(['owner']), async (c) => {
+app.delete('/:id/members/:userId', requireAuth, requireTenant, requireRole(['owner', 'admin']), async (c) => {
   const tenantId = c.get('tenantId');
   const operator = c.get('user');
+  const operatorRole = c.get('membership').role;
   const targetUserId = c.req.param('userId');
   const db = c.env.DB;
 
@@ -428,6 +482,9 @@ app.delete('/:id/members/:userId', requireAuth, requireTenant, requireRole(['own
     .first();
   if (!target) throw new ApiError('NOT_FOUND', '成员不存在');
 
+  if (target.role === 'owner' && operatorRole !== 'owner') {
+    throw new ApiError('FORBIDDEN', '仅 owner 可以移除 owner 角色成员');
+  }
   if (target.role === 'owner') {
     const owners = await db
       .prepare(
@@ -441,13 +498,273 @@ app.delete('/:id/members/:userId', requireAuth, requireTenant, requireRole(['own
   }
 
   await db
-    .prepare('DELETE FROM memberships WHERE id = ?')
-    .bind(target.id)
+    .prepare("UPDATE memberships SET status = 'removed', updated_at = ? WHERE id = ?")
+    .bind(now(), target.id)
     .run();
-  await audit(db, tenantId, operator.id, '移除成员', 'membership', target.id, {
+  await audit(db, tenantId, operator.id, '移除成员（保留数据）', 'membership', target.id, {
     removedUserId: targetUserId,
+    removedRole: target.role,
   });
   return c.json({ success: true, data: { removed: true } });
+});
+
+/** 按用户配额覆盖支持的资源（files 按数量） */
+const USER_QUOTA_RESOURCES = ['lessons', 'assignments', 'dictations', 'ai', 'files'];
+
+/**
+ * GET /api/v1/tenants/:id/quota-detail — 成员用量与配额明细（owner/admin）
+ * 返回 active 与 removed 成员各自的内容用量 + 按用户配额覆盖 + 租户总用量。
+ */
+app.get('/:id/quota-detail', requireAuth, requireTenant, requireRole(['owner', 'admin']), async (c) => {
+  const tenantId = c.get('tenantId');
+  const db = c.env.DB;
+
+  const members = await db
+    .prepare(
+      `SELECT m.user_id, m.role, m.status, u.email, u.display_name
+         FROM memberships m JOIN users u ON u.id = m.user_id
+        WHERE m.tenant_id = ?
+        ORDER BY m.status = 'removed', m.created_at`
+    )
+    .bind(tenantId)
+    .all();
+
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  const users = [];
+  for (const m of members.results) {
+    const userId = m.user_id;
+    const usage = {
+      lessons: (
+        await db.prepare('SELECT COUNT(*) AS n FROM lessons WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId).first()
+      ).n,
+      assignments: (
+        await db.prepare('SELECT COUNT(*) AS n FROM assignments WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId).first()
+      ).n,
+      dictations: (
+        await db.prepare('SELECT COUNT(*) AS n FROM dictations WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId).first()
+      ).n,
+      files: (
+        await db.prepare('SELECT COUNT(*) AS n FROM files WHERE tenant_id = ? AND created_by = ?').bind(tenantId, userId).first()
+      ).n,
+      aiMonth: (
+        await db
+          .prepare('SELECT COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND user_id = ? AND substr(created_at, 1, 7) = ?')
+          .bind(tenantId, userId, monthPrefix)
+          .first()
+      ).n,
+      storageBytes:
+        (
+          await db
+            .prepare('SELECT COALESCE(SUM(size), 0) AS n FROM files WHERE tenant_id = ? AND created_by = ?')
+            .bind(tenantId, userId)
+            .first()
+        ).n || 0,
+    };
+    const quotaRows = await db
+      .prepare('SELECT resource, quota FROM user_quotas WHERE tenant_id = ? AND user_id = ?')
+      .bind(tenantId, userId)
+      .all();
+    const quotas = {};
+    for (const r of quotaRows.results) quotas[r.resource] = r.quota;
+    users.push({
+      userId,
+      email: m.email,
+      displayName: m.display_name,
+      role: m.role,
+      membershipStatus: m.status,
+      usage,
+      quotas,
+    });
+  }
+
+  return c.json({
+    success: true,
+    data: { users, tenantUsage: await getQuotaUsage(db, tenantId) },
+  });
+});
+
+/**
+ * PUT /api/v1/tenants/:id/members/:userId/quota — 设置按用户配额（owner/admin）
+ * body: { resource: lessons|assignments|dictations|ai|files, quota: ≥0 整数 | null }
+ * quota 为 null 时删除该覆盖（不限）。
+ */
+app.put('/:id/members/:userId/quota', requireAuth, requireTenant, requireRole(['owner', 'admin']), async (c) => {
+  const tenantId = c.get('tenantId');
+  const operator = c.get('user');
+  const targetUserId = c.req.param('userId');
+  const db = c.env.DB;
+  const body = await c.req.json().catch(() => ({}));
+
+  const resource = String(body.resource || '');
+  if (!USER_QUOTA_RESOURCES.includes(resource)) {
+    throw new ApiError('VALIDATION_ERROR', `resource 必须是 ${USER_QUOTA_RESOURCES.join('|')}`);
+  }
+  if (body.quota !== null && body.quota !== undefined) {
+    if (!Number.isInteger(body.quota) || body.quota < 0) {
+      throw new ApiError('VALIDATION_ERROR', 'quota 必须是非负整数或 null');
+    }
+  }
+
+  const membership = await db
+    .prepare('SELECT id, role, status FROM memberships WHERE tenant_id = ? AND user_id = ?')
+    .bind(tenantId, targetUserId)
+    .first();
+  if (!membership) throw new ApiError('NOT_FOUND', '成员不存在');
+
+  const ts = now();
+  if (body.quota === null || body.quota === undefined) {
+    await db
+      .prepare('DELETE FROM user_quotas WHERE tenant_id = ? AND user_id = ? AND resource = ?')
+      .bind(tenantId, targetUserId, resource)
+      .run();
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO user_quotas (tenant_id, user_id, resource, quota, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(tenant_id, user_id, resource) DO UPDATE SET quota = ?, updated_at = ?`
+      )
+      .bind(tenantId, targetUserId, resource, body.quota, ts, body.quota, ts)
+      .run();
+  }
+
+  await audit(db, tenantId, operator.id, '更新成员配额', 'user_quota', targetUserId, {
+    targetUserId,
+    resource,
+    quota: body.quota ?? null,
+  });
+  return c.json({ success: true, data: { userId: targetUserId, resource, quota: body.quota ?? null } });
+});
+
+/**
+ * POST /api/v1/tenants/:id/members/:userId/purge — 清除已移除成员的数据（owner/admin）
+ * 仅允许对 status='removed' 的成员；硬删除其在本租户的内容（不可恢复）：
+ * lessons/assignments/dictations（先删子表 submissions/results）、files（含 R2 对象）、ai_generations；
+ * classes.teacher_id 置 NULL、删除 class_teachers 行。
+ * body 可选 { resources: [...] }，默认全部。
+ */
+app.post('/:id/members/:userId/purge', requireAuth, requireTenant, requireRole(['owner', 'admin']), async (c) => {
+  const tenantId = c.get('tenantId');
+  const operator = c.get('user');
+  const targetUserId = c.req.param('userId');
+  const db = c.env.DB;
+  const body = await c.req.json().catch(() => ({}));
+
+  const membership = await db
+    .prepare('SELECT id, role, status FROM memberships WHERE tenant_id = ? AND user_id = ?')
+    .bind(tenantId, targetUserId)
+    .first();
+  if (!membership || membership.status !== 'removed') {
+    throw new ApiError('FORBIDDEN', '仅允许清除已移除成员的数据');
+  }
+
+  let resources = Array.isArray(body.resources) && body.resources.length > 0 ? body.resources.map(String) : USER_QUOTA_RESOURCES;
+  const invalid = resources.filter((r) => !USER_QUOTA_RESOURCES.includes(r));
+  if (invalid.length > 0) {
+    throw new ApiError('VALIDATION_ERROR', `resources 必须是 ${USER_QUOTA_RESOURCES.join('|')} 的子集`);
+  }
+  // 去重
+  resources = [...new Set(resources)];
+  const deleted = { lessons: 0, assignments: 0, dictations: 0, files: 0, ai: 0 };
+
+  if (resources.includes('assignments')) {
+    deleted.assignments = (
+      await db
+        .prepare('SELECT COUNT(*) AS n FROM assignments WHERE tenant_id = ? AND teacher_id = ?')
+        .bind(tenantId, targetUserId)
+        .first()
+    ).n;
+    await db
+      .prepare(
+        `DELETE FROM assignment_submissions
+          WHERE tenant_id = ? AND assignment_id IN (SELECT id FROM assignments WHERE tenant_id = ? AND teacher_id = ?)`
+      )
+      .bind(tenantId, tenantId, targetUserId)
+      .run();
+    await db
+      .prepare('DELETE FROM assignments WHERE tenant_id = ? AND teacher_id = ?')
+      .bind(tenantId, targetUserId)
+      .run();
+  }
+
+  if (resources.includes('dictations')) {
+    deleted.dictations = (
+      await db
+        .prepare('SELECT COUNT(*) AS n FROM dictations WHERE tenant_id = ? AND teacher_id = ?')
+        .bind(tenantId, targetUserId)
+        .first()
+    ).n;
+    await db
+      .prepare(
+        `DELETE FROM dictation_results
+          WHERE tenant_id = ? AND dictation_id IN (SELECT id FROM dictations WHERE tenant_id = ? AND teacher_id = ?)`
+      )
+      .bind(tenantId, tenantId, targetUserId)
+      .run();
+    await db
+      .prepare('DELETE FROM dictations WHERE tenant_id = ? AND teacher_id = ?')
+      .bind(tenantId, targetUserId)
+      .run();
+  }
+
+  if (resources.includes('lessons')) {
+    deleted.lessons = (
+      await db
+        .prepare('SELECT COUNT(*) AS n FROM lessons WHERE tenant_id = ? AND teacher_id = ?')
+        .bind(tenantId, targetUserId)
+        .first()
+    ).n;
+    await db
+      .prepare('DELETE FROM lessons WHERE tenant_id = ? AND teacher_id = ?')
+      .bind(tenantId, targetUserId)
+      .run();
+  }
+
+  if (resources.includes('files')) {
+    const fileRows = await db
+      .prepare('SELECT file_key FROM files WHERE tenant_id = ? AND created_by = ?')
+      .bind(tenantId, targetUserId)
+      .all();
+    deleted.files = fileRows.results.length;
+    for (const f of fileRows.results) {
+      // R2 对象删除失败（如 404/不存在）不影响数据库清理
+      try {
+        await c.env.FILES.delete(f.file_key);
+      } catch {
+        /* 忽略 */
+      }
+    }
+    await db
+      .prepare('DELETE FROM files WHERE tenant_id = ? AND created_by = ?')
+      .bind(tenantId, targetUserId)
+      .run();
+  }
+
+  if (resources.includes('ai')) {
+    deleted.ai = (
+      await db
+        .prepare('DELETE FROM ai_generations WHERE tenant_id = ? AND user_id = ?')
+        .bind(tenantId, targetUserId)
+        .run()
+    ).meta?.changes ?? 0;
+  }
+
+  // 权限关联清理：classes.teacher_id 置 NULL、删除 class_teachers 行
+  await db
+    .prepare('UPDATE classes SET teacher_id = NULL WHERE tenant_id = ? AND teacher_id = ?')
+    .bind(tenantId, targetUserId)
+    .run();
+  await db
+    .prepare('DELETE FROM class_teachers WHERE tenant_id = ? AND user_id = ?')
+    .bind(tenantId, targetUserId)
+    .run();
+
+  await audit(db, tenantId, operator.id, '清除成员数据', 'membership', membership.id, {
+    purgedUserId: targetUserId,
+    resources,
+    deleted,
+  });
+  return c.json({ success: true, data: { deleted } });
 });
 
 export default app;
