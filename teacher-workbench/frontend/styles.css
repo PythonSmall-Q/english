@@ -459,6 +459,12 @@ body {
   color: var(--cyan);
 }
 
+/* 已归档（§63 学年归档）：历史学年被压缩归档的列表行徽标，灰底 */
+.badge-archived {
+  background: #eceff3;
+  color: #8a94a6;
+}
+
 /* ===== 表格 ===== */
 
 .table {
@@ -712,29 +718,63 @@ select.form-input {
   gap: 12px;
 }
 
-.landing-cards {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-  margin-bottom: 40px;
+.landing-nav {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  margin-bottom: 20px;
 }
 
-.landing-card {
+.landing-nav-link {
+  font-size: 14px;
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.landing-nav-link:hover {
+  color: var(--primary);
+}
+
+.landing-section {
+  margin-bottom: 56px;
+  scroll-margin-top: 24px;
+}
+
+.landing-section-title {
+  margin: 0 0 6px;
+  text-align: center;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.landing-section-sub {
+  margin: 0 0 24px;
+  text-align: center;
+  font-size: 14px;
+}
+
+/* 功能介绍：4 列（2 行），窄屏降列 */
+.landing-features-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+.landing-feature-card {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-  padding: 16px;
+  padding: 18px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: #fff;
-  cursor: pointer;
-  text-align: left;
-  font-size: 14px;
+  box-shadow: var(--shadow);
   transition: border-color 0.15s;
 }
 
-.landing-card:hover {
+.landing-feature-card:hover {
   border-color: var(--primary);
 }
 
@@ -751,14 +791,171 @@ select.form-input {
   line-height: 1.5;
 }
 
+/* 定价三档卡片 */
+.landing-pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  align-items: stretch;
+  margin-bottom: 32px;
+}
+
+.landing-price-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+.landing-price-card-featured {
+  border: 1px solid var(--primary);
+  background: #eff6ff;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.12), 0 6px 18px rgba(37, 99, 235, 0.14);
+}
+
+.landing-price-badge {
+  position: absolute;
+  top: -11px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 12px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.landing-price-name {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.landing-price-amount {
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--primary);
+  line-height: 1.2;
+}
+
+.landing-price-period {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.landing-price-yearly {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.landing-price-list {
+  list-style: none;
+  margin: 16px 0 20px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  flex: 1;
+}
+
+.landing-price-list li::before {
+  content: '✓';
+  color: var(--success);
+  margin-right: 8px;
+}
+
+.landing-price-cta {
+  width: 100%;
+}
+
+/* 功能对比表：斑马行 + 中间列高亮 */
+.landing-compare-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+.landing-compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.landing-compare th,
+.landing-compare td {
+  padding: 10px 14px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.landing-compare th:first-child,
+.landing-compare td:first-child {
+  text-align: left;
+}
+
+.landing-compare thead th {
+  background: #f8fafc;
+  font-weight: 600;
+}
+
+.landing-compare tbody tr:nth-child(even) {
+  background: #f8fafc;
+}
+
+.landing-compare tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.landing-compare .col-featured {
+  background: #eff6ff;
+  font-weight: 600;
+}
+
+.landing-compare thead .col-featured {
+  color: var(--primary);
+}
+
+.landing-compare-note {
+  margin: 12px 0 0;
+  text-align: center;
+  font-size: 12px;
+}
+
 .landing-footer {
   text-align: center;
   font-size: 12px;
 }
 
-@media (max-width: 760px) {
-  .landing-cards {
+@media (max-width: 900px) {
+  .landing-features-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .landing-pricing-grid {
+    grid-template-columns: 1fr;
+    max-width: 420px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .landing {
+    padding: 36px 0 24px;
+  }
+
+  .landing-features-grid {
+    grid-template-columns: 1fr;
   }
 }
 

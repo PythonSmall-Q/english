@@ -45,9 +45,10 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   const classId = c.req.query('class_id');
   const academicYear = resolveAcademicYear(c.req.query('academic_year'));
 
+  // 历史学年：主表行保留（明细已删），统计直接读行上 archived_stats（见下方 DTO 映射）
   const rows = await db
     .prepare(
-      `SELECT a.*,
+      `SELECT a.*, a.archived_stats,
          (SELECT COUNT(*) FROM students s
            WHERE s.tenant_id = a.tenant_id AND s.class_id = a.class_id) AS total_count,
          (SELECT COUNT(*) FROM assignment_submissions x
@@ -63,11 +64,13 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
     .bind(...(classId ? [tenantId, academicYear, classId] : [tenantId, academicYear]))
     .all();
 
+  // 已归档行（archived_stats 非空）：统计用留存汇总，标 archived:true
   const list = rows.results.map((r) => {
-    const total = r.total_count || 0;
-    const submitted = r.submitted_count || 0;
-    const missing = (r.missing_count || 0) + (r.pending_count || 0);
-    return {
+    const retained = r.archived_stats ? JSON.parse(r.archived_stats) : null;
+    const total = retained ? retained.total || 0 : r.total_count || 0;
+    const submitted = retained ? retained.submitted || 0 : r.submitted_count || 0;
+    const missing = retained ? retained.missing || 0 : (r.missing_count || 0) + (r.pending_count || 0);
+    const item = {
       id: r.id,
       classId: r.class_id,
       title: r.title,
@@ -84,9 +87,12 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
         submitRate: total > 0 ? Math.round((submitted / total) * 100) / 100 : 0,
       },
     };
+    if (retained) item.archived = true;
+    return item;
   });
 
-  return c.json({ success: true, data: { list } });
+  const archived = list.some((item) => item.archived);
+  return c.json({ success: true, data: { list, ...(archived ? { archived: true } : {}) } });
 });
 
 /**

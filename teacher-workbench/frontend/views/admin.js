@@ -26,6 +26,15 @@ App.registerView('admin', {
   title: '平台管理',
   icon: '🛡️',
   async render(el) {
+    // 平台管理员守卫：导航隐藏之外，直连路由/视图切换也要兜底
+    if (App.state.user?.platformRole !== 'platform_admin') {
+      el.innerHTML = `
+        <div class="card">
+          <div class="card-title">平台管理</div>
+          <div class="muted">无权限：该页面仅平台管理员可用。</div>
+        </div>`;
+      return;
+    }
     el.innerHTML = `
       <!-- 创建正式租户（§73，仅 platform_admin） -->
       <div class="card">
@@ -46,6 +55,45 @@ App.registerView('admin', {
         <div class="modal-actions">
           <button class="btn btn-primary" id="t-create" type="button">创建租户</button>
         </div>
+      </div>
+
+      <!-- 数据迁入（迁移指南：跨租户迁入 version 3 备份 JSON，覆盖式，仅 platform_admin） -->
+      <div class="card">
+        <div class="card-title">数据迁入</div>
+        <div class="muted" style="margin-bottom:10px;font-size:12.5px">
+          迁入格式见迁移文档，支持 version 3 备份 JSON；迁入为覆盖式，会清空目标空间现有业务数据。
+        </div>
+        <div class="form-row" style="align-items:flex-end">
+          <div>
+            <label class="form-label">迁移文件（.json，≤50MB）</label>
+            <input type="file" id="mig-file" accept=".json,application/json">
+          </div>
+          <div>
+            <button class="btn" id="mig-template" type="button">下载迁移模板</button>
+          </div>
+        </div>
+        <div id="mig-file-status" class="muted" style="font-size:12.5px;margin-bottom:10px">尚未选择文件</div>
+        <div class="form-row" style="align-items:flex-end">
+          <div>
+            <label class="form-label">迁入目标</label>
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px;cursor:pointer">
+              <input type="radio" name="mig-target" value="existing" checked>
+              <span>迁入已有空间</span>
+            </label>
+            <select class="form-input" id="mig-tenant"><option value="">加载中…</option></select>
+          </div>
+          <div>
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px;cursor:pointer">
+              <input type="radio" name="mig-target" value="new">
+              <span>新建空间</span>
+            </label>
+            <input class="form-input" id="mig-new-name" placeholder="学校名称">
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-primary" id="mig-start" type="button">开始迁入</button>
+        </div>
+        <div id="mig-result" style="margin-top:10px"></div>
       </div>
 
       <!-- 平台设置 -->
@@ -69,6 +117,7 @@ App.registerView('admin', {
       </div>`;
 
     bindCreate(el);
+    bindMigrate(el);
     await renderPlatformSettings();
     await Promise.all([renderTenants(), renderUsers()]);
   },
@@ -104,6 +153,157 @@ async function renderPlatformSettings() {
     box.innerHTML = `<div class="muted">平台设置加载失败：${App.esc(e.message || '未知错误')}</div>`;
   }
 }
+
+/** 备份 11 张业务表的键名与中文名（迁移指南 §2） */
+const MIGRATE_TABLE_KEYS = [
+  ['classes', '班级'],
+  ['students', '学生'],
+  ['lessons', '教案'],
+  ['schedules', '课表'],
+  ['assignments', '作业'],
+  ['submissions', '作业提交'],
+  ['dictations', '默写'],
+  ['dictationResults', '默写结果'],
+  ['exams', '考试'],
+  ['scores', '成绩'],
+  ['subscores', '小分'],
+];
+const MIGRATE_MAX_BYTES = 50 * 1024 * 1024;
+
+/** 数据迁入（迁移指南 §5：version 3 备份 JSON → 已有租户 / 新建租户，覆盖式） */
+function bindMigrate(el) {
+  const fileInput = el.querySelector('#mig-file');
+  const fileStatus = el.querySelector('#mig-file-status');
+  const tenantSelect = el.querySelector('#mig-tenant');
+  const newNameInput = el.querySelector('#mig-new-name');
+  const startBtn = el.querySelector('#mig-start');
+  const resultBox = el.querySelector('#mig-result');
+  /** @type {object|null} 预检通过的备份 JSON */
+  let backup = null;
+
+  // 下载迁移模板：空骨架（version 3 + tenant 参考块 + 11 个空数组）
+  el.querySelector('#mig-template').addEventListener('click', () => {
+    const tpl = { version: 3, tenant: { name: '学校名称' } };
+    MIGRATE_TABLE_KEYS.forEach(([key]) => (tpl[key] = []));
+    const blob = new Blob([JSON.stringify(tpl, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '迁移模板.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  // 选择文件：大小限制 + 本地 JSON.parse 预检
+  fileInput.addEventListener('change', () => {
+    backup = null;
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) {
+      fileStatus.textContent = '尚未选择文件';
+      return;
+    }
+    if (file.size > MIGRATE_MAX_BYTES) {
+      App.toast('文件过大，迁入 JSON 不能超过 50MB');
+      fileInput.value = '';
+      fileStatus.textContent = '尚未选择文件';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('bad shape');
+        backup = parsed;
+        fileStatus.textContent = `已选择：${file.name}（${(file.size / 1024).toFixed(1)} KB）`;
+      } catch (e) {
+        App.toast('JSON 解析失败');
+        fileInput.value = '';
+        fileStatus.textContent = '尚未选择文件';
+      }
+    };
+    reader.onerror = () => {
+      App.toast('文件读取失败');
+      fileInput.value = '';
+      fileStatus.textContent = '尚未选择文件';
+    };
+    reader.readAsText(file);
+  });
+
+  // 目标 radio：已有空间 ↔ 新建空间 联动禁用
+  el.querySelectorAll('input[name="mig-target"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      const mode = el.querySelector('input[name="mig-target"]:checked').value;
+      tenantSelect.disabled = mode !== 'existing';
+      newNameInput.disabled = mode !== 'new';
+    });
+  });
+
+  // 目标空间下拉
+  (async () => {
+    try {
+      const data = await api.admin.tenants();
+      const tenants = data.tenants || data || [];
+      tenantSelect.innerHTML = tenants.length
+        ? tenants.map((t) => `<option value="${App.esc(t.id)}">${App.esc(t.name)}</option>`).join('')
+        : '<option value="">暂无租户</option>';
+    } catch (e) {
+      tenantSelect.innerHTML = '<option value="">加载失败</option>';
+    }
+  })();
+
+  startBtn.addEventListener('click', async () => {
+    if (!backup) {
+      App.toast('请先选择备份 JSON 文件');
+      return;
+    }
+    const mode = el.querySelector('input[name="mig-target"]:checked').value;
+    const body = { backup };
+    if (mode === 'existing') {
+      if (!tenantSelect.value) {
+        App.toast('请选择目标空间');
+        return;
+      }
+      body.target_tenant_id = tenantSelect.value;
+    } else {
+      const name = newNameInput.value.trim();
+      if (!name) {
+        App.toast('请填写学校名称');
+        return;
+      }
+      body.new_tenant_name = name;
+    }
+    const ok = await App.confirmDialog(
+      '迁入为覆盖式：将清空目标空间现有业务数据（班级、学生、教案、课表、作业、默写、考试等，成员与配额不受影响），然后写入备份内容。确认继续？'
+    );
+    if (!ok) return;
+
+    startBtn.disabled = true;
+    startBtn.textContent = '迁入中…';
+    resultBox.innerHTML = '';
+    try {
+      const data = await api.admin.migrate(body);
+      const counts = data.counts || {};
+      const total = data.restored ?? Object.values(counts).reduce((a, b) => a + (b || 0), 0);
+      const summary = MIGRATE_TABLE_KEYS.map(([key, label]) => {
+        const n = counts[key];
+        return n === undefined ? null : `${label} ${n} 条`;
+      })
+        .filter(Boolean)
+        .join('，');
+      resultBox.innerHTML = `
+        <div class="muted" style="font-size:12.5px">
+          迁入完成：${App.esc(data.tenant_name || '')}（共 ${total} 条）${summary ? '<br>' + App.esc(summary) : ''}
+        </div>`;
+      App.toast(`迁入完成，共 ${total} 条`);
+      await renderTenants();
+    } catch (e) {
+      App.toast(e.message || '迁入失败');
+    } finally {
+      startBtn.disabled = false;
+      startBtn.textContent = '开始迁入';
+    }
+  });
+}
+
 
 /** 创建租户（§73：tenant → quota → owner membership → 发送/生成邀请 由后端完成） */
 function bindCreate(el) {

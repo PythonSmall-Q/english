@@ -9,6 +9,8 @@
  * - 上传试卷：api.files.upload → R2，URL 存入 paper_url
  * - 查看分析：KPI / 分数段分布 / 各班均分对比 / 各题型均分与得分率 / 班内排名
  * - 个性化报告：总分 / 班级排名 / 超过全班百分比 / 各题型 vs 班均 / 薄弱题型 / 建议
+ * 归档（§63）：已归档学年的行（archived:true）只读展示汇总列，隐藏全部操作按钮（明细接口已 404），
+ *   行首显示「已归档」徽标；「新建考试」在已归档学年隐藏；历史学年 + owner/admin 在工具条提供「下载归档」
  * 图表一律原生 SVG 手绘，不引图表库；样式自包含（前缀 ex-）。
  */
 
@@ -332,42 +334,54 @@
   }
 
   function renderList(exams) {
+    // 已归档学年（明细已删）：隐藏「新建考试」入口
+    const archivedView = exams.some((e) => e.archived);
+    // 「下载归档」（§63 新版：仅历史学年 + 本学年已归档 + owner/admin 可见）
+    const role = App.state.tenant?.role;
+    const isHistory = App.state.academicYear && App.state.academicYear !== App.state.currentAcademicYear;
+    const showDownload = isHistory && archivedView && (role === 'owner' || role === 'admin');
     const wrap = document.createElement('div');
     wrap.innerHTML = `
       <div class="ex-toolbar">
         <span class="muted">共 ${exams.length} 场考试</span>
         <span style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" id="ex-download-archive" type="button" style="display:${showDownload ? '' : 'none'}">下载归档</button>
           <button class="btn" id="ex-stu-scores" type="button">学生成绩</button>
-          ${canCreateExams ? '<button class="btn btn-primary" id="ex-new" type="button">＋ 新建考试</button>' : ''}
+          ${canCreateExams && !archivedView ? '<button class="btn btn-primary" id="ex-new" type="button">＋ 新建考试</button>' : ''}
         </span>
       </div>
       <div id="ex-list"></div>`;
     wrap.querySelector('#ex-stu-scores').addEventListener('click', openStudentScores);
+    wrap.querySelector('#ex-download-archive').addEventListener('click', (e) => downloadArchive(e.currentTarget));
     const listEl = wrap.querySelector('#ex-list');
     if (!exams.length) {
       listEl.innerHTML = `<div class="card"><div class="muted">还没有考试。点击右上角「新建考试」，再导入成绩即可查看分析。</div></div>`;
     } else {
       const rows = exams
-        .map(
-          (e) => `
-        <tr>
-          <td>${esc(e.name)}${scopeBadge(e)}</td>
-          <td>${esc(e.subject || '—')}</td>
-          <td>${esc(e.exam_date || '—')}</td>
-          <td>${Number(e.student_count || 0)}</td>
-          <td>${fmtScore(e.avg_score)}</td>
-          <td class="ex-ops">
-            ${canCreateExams ? `<button class="btn btn-sm" data-act="import-scores" data-id="${esc(e.id)}" type="button">导入成绩</button>
+        .map((e) => {
+          // 已归档（§63）：明细已删，隐藏导入/分析/成绩/报告/试卷/编辑/删除等全部操作（点击均会 404），
+          // 仅展示汇总列并在行首显示「已归档」徽标
+          const archived = !!e.archived;
+          const ops = archived
+            ? '<span class="muted" style="font-size:12px">明细已归档</span>'
+            : `${canCreateExams ? `<button class="btn btn-sm" data-act="import-scores" data-id="${esc(e.id)}" type="button">导入成绩</button>
             <button class="btn btn-sm" data-act="import-subscores" data-id="${esc(e.id)}" type="button">导入小分</button>` : ''}
             <button class="btn btn-sm" data-act="analysis" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">查看分析</button>
             <button class="btn btn-sm" data-act="scores" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">学生成绩</button>
             <button class="btn btn-sm" data-act="report" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">个性化报告</button>
             <button class="btn btn-sm" data-act="paper" data-id="${esc(e.id)}" data-has-paper="${e.paper_url ? '1' : ''}" type="button">${e.paper_url ? '查看试卷' : '上传试卷'}</button>
             <button class="btn btn-sm" data-act="edit" data-id="${esc(e.id)}" type="button">编辑</button>
-            <button class="btn btn-sm btn-danger" data-act="del" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">删除</button>
-          </td>
-        </tr>`
-        )
+            <button class="btn btn-sm btn-danger" data-act="del" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">删除</button>`;
+          return `
+        <tr>
+          <td>${esc(e.name)}${scopeBadge(e)}${archived ? '<span class="badge badge-archived">已归档</span>' : ''}</td>
+          <td>${esc(e.subject || '—')}</td>
+          <td>${esc(e.exam_date || '—')}</td>
+          <td>${Number(e.student_count || 0)}</td>
+          <td>${fmtScore(e.avg_score)}</td>
+          <td class="ex-ops">${ops}</td>
+        </tr>`;
+        })
         .join('');
       listEl.innerHTML = `
         <div class="card"><table class="table">
@@ -381,6 +395,29 @@
     const exNewBtn = wrap.querySelector('#ex-new');
     if (exNewBtn) exNewBtn.addEventListener('click', () => openExamForm(null));
     return wrap;
+  }
+
+  /** 下载当前学年压缩归档（owner/admin，历史学年已归档时可用）→ JSON 文件 */
+  async function downloadArchive(btn) {
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = '下载中…';
+    try {
+      const data = await api.archive.download('exams', App.state.academicYear);
+      const blob = new Blob([JSON.stringify(data)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `归档-考试-${App.state.academicYear}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      App.toast('归档文件已开始下载');
+    } catch (err) {
+      reportErr(err, '下载归档失败');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
   }
 
   async function onRowAction(d) {

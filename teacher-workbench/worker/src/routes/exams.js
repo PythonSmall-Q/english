@@ -77,9 +77,11 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   const db = c.env.DB;
   const tenantId = c.get('tenantId');
   const academicYear = resolveAcademicYear(c.req.query('academic_year'));
+
+  // 历史学年：主表行保留（明细已删），student_count/avg_score 读行上 archived_stats
   const rows = await db
     .prepare(
-      `SELECT e.*, cl.name AS class_name,
+      `SELECT e.*, e.archived_stats, cl.name AS class_name,
               (SELECT COUNT(*) FROM exam_scores s WHERE s.exam_id = e.id) AS student_count,
               (SELECT ROUND(AVG(s.score), 2) FROM exam_scores s
                 WHERE s.exam_id = e.id AND s.score IS NOT NULL) AS avg_score
@@ -90,7 +92,15 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
     )
     .bind(tenantId, academicYear)
     .all();
-  return c.json({ success: true, data: rows.results });
+  // 已归档行（archived_stats 非空）：人数/均分用留存汇总，标 archived:true；
+  // archived_stats 原列从行上剥离，非归档行保持原响应形状不变
+  const list = rows.results.map((r) => {
+    const { archived_stats, ...rest } = r;
+    if (!archived_stats) return rest;
+    const s = JSON.parse(archived_stats);
+    return { ...rest, student_count: s.studentCount || 0, avg_score: s.avgScore ?? null, archived: true };
+  });
+  return c.json({ success: true, data: list });
 });
 
 /**

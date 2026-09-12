@@ -16,6 +16,21 @@ import { checkQuota } from '../quota.js';
 
 const app = new Hono();
 
+/**
+ * 解析可选 graduation_year：undefined=未传（不改），null/''=清空，
+ * 其余必须 2000–2100 正整数，否则 400。
+ * @returns {number|null|undefined}
+ */
+function parseGraduationYear(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 2000 || n > 2100) {
+    throw new ApiError('VALIDATION_ERROR', 'graduation_year 必须是 2000–2100 的整数或 null（留空表示未设置）');
+  }
+  return n;
+}
+
 /** GET /api/v1/classes — 班级列表（含学生数、班主任、年级组、任课老师、权限标记） */
 app.get('/', requireAuth, requireTenant, async (c) => {
   const db = c.env.DB;
@@ -85,7 +100,7 @@ app.get('/', requireAuth, requireTenant, async (c) => {
  * POST /api/v1/classes — 新建班级（teacher 起，checkQuota classes）
  * 创建者自动成为班主任；年级组/班主任调整走 PUT。
  * 学年由服务端自动归为当前学年，忽略客户端传入的 academic_year。
- * body: { name, grade? }
+ * body: { name, grade?, graduation_year? }
  */
 app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeacherPerm('create_classes'), async (c) => {
   const db = c.env.DB;
@@ -95,6 +110,7 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeach
 
   const name = String(body.name || '').trim();
   if (!name) throw new ApiError('VALIDATION_ERROR', '班级名称不能为空');
+  const graduationYear = parseGraduationYear(body.graduation_year);
 
   await checkQuota(db, tenantId, 'classes');
 
@@ -102,10 +118,10 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeach
   const ts = now();
   await db
     .prepare(
-      `INSERT INTO classes (id, tenant_id, name, grade, academic_year, teacher_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO classes (id, tenant_id, name, grade, academic_year, teacher_id, graduation_year, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(id, tenantId, name, body.grade != null ? String(body.grade) : null, currentAcademicYear(), user.id, ts, ts)
+    .bind(id, tenantId, name, body.grade != null ? String(body.grade) : null, currentAcademicYear(), user.id, graduationYear ?? null, ts, ts)
     .run();
 
   await audit(db, tenantId, user.id, '创建班级', 'class', id, { name });
@@ -137,7 +153,7 @@ app.get('/:id', requireAuth, requireTenant, async (c) => {
 /**
  * PUT /api/v1/classes/:id — 更新班级（owner/admin、本班班主任、年级组长）
  * 历史学年数据仅可查看（403）；academic_year 不接受修改（客户端传了也忽略）。
- * body: { name?, grade?, teacher_id?(班主任，须为空间成员，null=解除),
+ * body: { name?, grade?, graduation_year?(2000–2100 整数或 null=清空), teacher_id?(班主任，须为空间成员，null=解除),
  *         grade_group_id?(须为本空间年级组，null=移出组) }
  */
 app.put('/:id', requireAuth, requireTenant, requireClassManager({ self: true }), async (c) => {
@@ -154,6 +170,9 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ self: true }),
   const name = body.name != null ? String(body.name).trim() : cls.name;
   if (!name) throw new ApiError('VALIDATION_ERROR', '班级名称不能为空');
   const grade = body.grade !== undefined ? (body.grade != null ? String(body.grade) : null) : cls.grade;
+  // graduation_year：未传则保持原值；显式传 null 清空
+  const parsedGraduationYear = parseGraduationYear(body.graduation_year);
+  const graduationYear = parsedGraduationYear === undefined ? (cls.graduation_year ?? null) : parsedGraduationYear;
 
   // 班主任：须为空间成员；设置权限 = owner/admin、本班年级组长（班主任本人不可改班主任字段）
   let teacherId = cls.teacher_id;
@@ -202,13 +221,16 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ self: true }),
 
   await db
     .prepare(
-      'UPDATE classes SET name = ?, grade = ?, teacher_id = ?, grade_group_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ?'
+      'UPDATE classes SET name = ?, grade = ?, teacher_id = ?, grade_group_id = ?, graduation_year = ?, updated_at = ? WHERE id = ? AND tenant_id = ?'
     )
-    .bind(name, grade, teacherId, gradeGroupId, now(), cls.id, tenantId)
+    .bind(name, grade, teacherId, gradeGroupId, graduationYear, now(), cls.id, tenantId)
     .run();
 
-  await audit(db, tenantId, user.id, '更新班级', 'class', cls.id, { name, teacherId, gradeGroupId });
-  return c.json({ success: true, data: { id: cls.id, name, grade, teacher_id: teacherId, grade_group_id: gradeGroupId } });
+  await audit(db, tenantId, user.id, '更新班级', 'class', cls.id, { name, teacherId, gradeGroupId, graduationYear });
+  return c.json({
+    success: true,
+    data: { id: cls.id, name, grade, teacher_id: teacherId, grade_group_id: gradeGroupId, graduation_year: graduationYear },
+  });
 });
 
 /**

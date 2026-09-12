@@ -5,7 +5,9 @@
  *  - 班级卡片网格（班级名/年级/学年/学生数/班主任/年级组）
  *  - 「查看学生」→ 传递 class_id 给「学生管理」视图后跳转
  *  - 「编辑 / 删除」：编辑在 cls.canManage 时渲染；删除仅 cls.canDelete（owner/admin、本班年级组长）
- *  - 右上「新建班级」→ modal 表单（名称/年级；学年由服务端按当前学年自动填入），受配额限制
+ *  - 右上「新建班级」→ modal 表单（名称/年级/毕业年份；学年由服务端按当前学年自动填入），受配额限制
+ *  - 新建/编辑班级表单含可选「毕业年份」（毕业班级卡片显示徽标；学年初自动归档）
+ *  - owner/admin：列表下方「已毕业班级归档」板块（元数据列表 + envelope 下载）
  *  - 「年级组」管理区：owner/admin 见全部组（建组/删组/设组长/设备课组长）；
  *    年级组长见「我带领的年级组」（组内班级 + 每班「设置老师」入口 + 设备课组长）
  *  - owner/admin：卡片上「年级组」下拉（change 即保存）；canAssignTeachers（owner/admin、
@@ -55,6 +57,8 @@ function clsInjectStyles() {
     .cls-gclass { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
     .cls-gclass:last-child { border-bottom: none; }
     .cls-gclass-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .cls-grad-badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; font-weight: 400; color: var(--text-muted); vertical-align: middle; }
+    .cls-grad-table-wrap { overflow-x: auto; }
   `;
   document.head.appendChild(style);
 }
@@ -68,6 +72,9 @@ let clsMembers = [];
 let clsMyPerms = null; // 我的功能权限（取不到默认显示，由后端 403 兜底）
 let clsIsAdmin = false;
 let clsMyId = '';
+let clsGraduated = []; // 毕业归档元数据（owner/admin 首屏加载；纯读取板块，写操作后不重拉）
+let clsGradLoaded = false; // 毕业归档是否已成功加载
+let clsGradFailed = false; // 毕业归档加载失败（渲染失败占位提示，区别于加载中）
 
 /** 成员 id → 成员对象（班主任/任课老师/组长 patch 展示名用） */
 function clsMember(uid) {
@@ -108,6 +115,9 @@ App.registerView('classes', {
     const role = App.state.tenant?.role;
     clsIsAdmin = role === 'owner' || role === 'admin';
     clsMyId = App.state.user?.id;
+    clsGraduated = [];
+    clsGradLoaded = false;
+    clsGradFailed = false;
 
     // 首屏/失败重试才走网络；写操作成功后一律就地 patch + rerender()（见文件头状态说明）
     try {
@@ -124,6 +134,27 @@ App.registerView('classes', {
       el.innerHTML = '<div class="card"><div class="card-title">我的班级</div><div class="muted">加载失败，请稍后重试</div></div>';
       App.toast((err && err.message) || '加载失败');
       return;
+    }
+
+    // 毕业归档元数据（owner/admin；加载失败不阻塞本视图，渲染占位提示）
+    if (clsIsAdmin) {
+      api.graduated
+        .list()
+        .then((data) => {
+          clsGraduated = (data && data.list) || [];
+          clsGradLoaded = true;
+          if (clsView) clsView.rerender();
+        })
+        .catch((err) => {
+          if (err && err.code === 'GRAD_NOT_CONFIGURED') {
+            App.toast('毕业数据库未配置，请联系平台管理员');
+          } else {
+            App.toast((err && err.message) || '毕业归档加载失败');
+          }
+          clsGradLoaded = false;
+          clsGradFailed = true;
+          if (clsView) clsView.rerender();
+        });
     }
 
     // 我带领的组（年级组长，即使不是 owner/admin 也有管理入口）
@@ -317,7 +348,9 @@ App.registerView('classes', {
               : '';
             return `
         <div class="card cls-card" data-cls-id="${App.esc(c.id)}">
-          <div class="cls-card-name">${App.esc(c.name)}</div>
+          <div class="cls-card-name">${App.esc(c.name)}${
+            c.graduation_year ? `<span class="cls-grad-badge">毕业 ${App.esc(c.graduation_year)}</span>` : ''
+          }</div>
           <div class="cls-card-meta">${App.esc([c.grade, c.academic_year].filter(Boolean).join(' · ') || '未设置年级/学年')}</div>
           <div class="cls-card-meta">班主任：${App.esc(c.teacher_name || '未分配')} ｜ 年级组：${App.esc(c.grade_group_name || '未分组')}</div>
           ${subLine}
@@ -347,7 +380,42 @@ App.registerView('classes', {
         : classGridHtml(classes)
       : `<div class="card"><div class="cls-empty">还没有班级，点击右上角「新建班级」开始创建<br><span class="muted" style="font-size:13px">也可以通过「设置 → 数据导入」批量导入班级与学生</span></div></div>`;
 
-    el.innerHTML = groupsHtml + headHtml + bodyHtml;
+    // —— 已毕业班级归档（owner/admin；纯读取板块，数据随 render 首屏加载，写操作后不重拉）——
+    const fmtTime = (t) => {
+      const d = new Date(t);
+      return isNaN(d.getTime()) ? App.esc(String(t || '')) : App.esc(d.toLocaleString('zh-CN', { hour12: false }));
+    };
+    const gradRowHtml = (g) => `
+          <tr>
+            <td>${App.esc(g.class_name)}</td>
+            <td>${App.esc(g.graduation_year ?? '—')}</td>
+            <td>${App.esc(g.academic_year)}</td>
+            <td>${Number(g.student_count) || 0}</td>
+            <td>${fmtTime(g.archived_at)}</td>
+            <td><button class="btn btn-sm" type="button" data-grad-dl="${App.esc(g.id)}" data-grad-name="${App.esc(
+              g.class_name
+            )}" data-grad-year="${App.esc(g.academic_year)}">下载</button></td>
+          </tr>`;
+    const gradHtml = clsIsAdmin
+      ? `
+      <div class="card cls-sec">
+        <div class="cls-sec-head"><span class="cls-sec-title">已毕业班级归档（${clsGraduated.length}）</span></div>
+        ${
+          clsGradFailed
+            ? '<div class="muted" style="font-size:13px">毕业归档加载失败，请稍后重试</div>'
+            : !clsGradLoaded
+              ? '<div class="muted" style="font-size:13px">加载中…</div>'
+              : clsGraduated.length
+              ? `<div class="cls-grad-table-wrap"><table class="table">
+          <thead><tr><th>班级名</th><th>毕业年份</th><th>原学年</th><th>学生数</th><th>归档时间</th><th>操作</th></tr></thead>
+          <tbody>${clsGraduated.map(gradRowHtml).join('')}</tbody>
+        </table></div>`
+              : '<div class="muted" style="font-size:13px">暂无毕业归档</div>'
+        }
+      </div>`
+      : '';
+
+    el.innerHTML = groupsHtml + headHtml + bodyHtml + gradHtml;
 
     // —— 事件绑定 ——
     const clsNewBtn = document.getElementById('cls-new');
@@ -514,6 +582,35 @@ App.registerView('classes', {
         }
       });
     });
+
+    // 已毕业班级归档「下载」→ envelope JSON 文件（gzip+base64 容器，与学年归档同格式）
+    el.querySelectorAll('[data-grad-dl]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        const label = btn.textContent;
+        btn.textContent = '下载中…';
+        try {
+          const data = await api.graduated.download(btn.dataset.gradDl);
+          const blob = new Blob([JSON.stringify(data)], { type: 'application/json;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `毕业归档-${btn.dataset.gradName || '班级'}-${btn.dataset.gradYear || ''}.json`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 5000);
+          App.toast('毕业归档已开始下载');
+        } catch (err) {
+          if (err && err.code === 'GRAD_NOT_CONFIGURED') {
+            App.toast('毕业数据库未配置，请联系平台管理员');
+          } else {
+            App.toast((err && err.message) || '下载失败');
+          }
+        } finally {
+          btn.disabled = false;
+          btn.textContent = label;
+        }
+      });
+    });
   },
 
   /** 新建/编辑班级 modal（cls 为 null 表示新建） */
@@ -526,6 +623,11 @@ App.registerView('classes', {
       <input class="form-input" id="cls-f-name" type="text" placeholder="如：高三 6 班" value="${App.esc(cls?.name || '')}">
       <label class="form-label" for="cls-f-grade">年级</label>
       <input class="form-input" id="cls-f-grade" type="text" placeholder="如：高三" value="${App.esc(cls?.grade || '')}">
+      <label class="form-label" for="cls-f-grad-year">毕业年份（选填）</label>
+      <input class="form-input" id="cls-f-grad-year" type="number" min="2000" max="2100" placeholder="如：2027，留空 = 未设置" value="${
+        cls?.graduation_year != null ? App.esc(cls.graduation_year) : ''
+      }">
+      <div class="muted" style="font-size:12px;margin-top:4px">设置毕业年份后，该班级将在对应学年开学时自动归档，平台内不再保留其数据。</div>
       <div class="modal-actions">
         <button class="btn" type="button" id="cls-f-cancel">取消</button>
         <button class="btn btn-primary" type="button" id="cls-f-save">${isEdit ? '保存' : '创建'}</button>
@@ -538,9 +640,20 @@ App.registerView('classes', {
             App.toast('班级名称不能为空');
             return;
           }
+          const gradRaw = document.getElementById('cls-f-grad-year').value.trim();
+          let graduation_year = null;
+          if (gradRaw !== '') {
+            const gy = Number(gradRaw);
+            if (!Number.isInteger(gy) || gy < 2000 || gy > 2100) {
+              App.toast('毕业年份须为 2000–2100 的整数，或留空');
+              return;
+            }
+            graduation_year = gy;
+          }
           const body = {
             name,
             grade: document.getElementById('cls-f-grade').value.trim() || null,
+            graduation_year,
           };
           const saveBtn = document.getElementById('cls-f-save');
           saveBtn.disabled = true;

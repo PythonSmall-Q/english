@@ -8,9 +8,11 @@
  */
 
 import { Hono } from 'hono';
-import { ApiError, now } from '../db.js';
+import { ApiError, newId, now } from '../db.js';
 import { requireAuth, audit } from '../middleware.js';
-import { getQuotaUsage } from '../quota.js';
+import { getQuotaUsage, PERSONAL_DEFAULTS } from '../quota.js';
+import { previousAcademicYear, archiveTenantYear, archiveAllTenants } from '../archive.js';
+import { rolloverTenants } from '../rollover.js';
 
 const app = new Hono();
 
@@ -292,6 +294,276 @@ app.put('/settings', requireAuth, async (c) => {
   }
   await audit(db, 'platform', user.id, '更新平台设置', 'platform_settings', null, updates);
   return c.json({ success: true, data: { autoPersonalWorkspace: updates.auto_personal_workspace === 'true' } });
+});
+
+/**
+ * POST /api/v1/admin/archive-year — 手动触发学年数据归档（平台管理员，便于测试/运维）
+ * body: { tenant_id?, academic_year? }
+ * tenant_id 缺省 = 所有在该学年有数据的租户；academic_year 缺省 = 上一学年，可显式传如 '2025-2026'
+ */
+app.post('/archive-year', requireAuth, async (c) => {
+  const user = requirePlatformAdmin(c);
+  const db = c.env.DB;
+  const body = await c.req.json().catch(() => ({}));
+
+  let academicYear = previousAcademicYear();
+  const yearParam = body.academic_year !== undefined && body.academic_year !== null
+    ? String(body.academic_year).trim()
+    : '';
+  if (yearParam) {
+    const m = /^(\d{4})-(\d{4})$/.exec(yearParam);
+    if (!m || Number(m[2]) !== Number(m[1]) + 1) {
+      throw new ApiError('VALIDATION_ERROR', 'academic_year 格式应为 YYYY-YYYY 且起止自洽（如 2025-2026）');
+    }
+    academicYear = yearParam;
+  }
+
+  const tenantId = body.tenant_id ? String(body.tenant_id) : null;
+  let summary;
+  if (tenantId) {
+    const results = await archiveTenantYear(db, tenantId, academicYear);
+    summary = {
+      academicYear,
+      total: 1,
+      archived: 1,
+      failed: 0,
+      tenants: [{ tenantId, ok: true, results }],
+    };
+    await audit(db, tenantId, user.id, '手动归档学年数据', 'year_archive', academicYear, {
+      academicYear,
+      results,
+    });
+  } else {
+    summary = await archiveAllTenants(c.env, academicYear);
+    for (const t of summary.tenants) {
+      await audit(db, t.tenantId, user.id, '手动归档学年数据', 'year_archive', academicYear, {
+        academicYear,
+        ok: t.ok,
+        results: t.results,
+        error: t.error,
+      });
+    }
+  }
+  return c.json({ success: true, data: summary });
+});
+
+/**
+ * POST /api/v1/admin/rollover — 手动触发学年初结转+毕业归档（平台管理员，便于测试/运维）
+ * body: { tenant_id?, academic_year? }
+ * tenant_id 缺省 = 所有有待结转班级的租户；academic_year 缺省 = 当前学年，可显式传如 '2026-2027'
+ * 对指定或全部租户执行：非毕业班级 academic_year 更新为新学年；
+ * graduation_year == 新学年首位年份的班级整体归档到 GRAD_DB 并从主库删除。
+ * 返回 { tenants: [{ tenant_id, rolled: [班级名...], graduated: [班级名...] }] }
+ */
+app.post('/rollover', requireAuth, async (c) => {
+  const user = requirePlatformAdmin(c);
+  const db = c.env.DB;
+  const body = await c.req.json().catch(() => ({}));
+
+  let academicYear = '';
+  const yearParam =
+    body.academic_year !== undefined && body.academic_year !== null ? String(body.academic_year).trim() : '';
+  if (yearParam) {
+    const m = /^(\d{4})-(\d{4})$/.exec(yearParam);
+    if (!m || Number(m[2]) !== Number(m[1]) + 1) {
+      throw new ApiError('VALIDATION_ERROR', 'academic_year 格式应为 YYYY-YYYY 且起止自洽（如 2026-2027）');
+    }
+    academicYear = yearParam;
+  }
+
+  const tenantId = body.tenant_id ? String(body.tenant_id) : null;
+  let summary;
+  try {
+    summary = await rolloverTenants(c.env, { tenantId, academicYear });
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError('INTERNAL_ERROR', String(err?.message || err));
+  }
+  for (const t of summary.tenants) {
+    await audit(db, t.tenant_id, user.id, '手动学年初结转', 'rollover', academicYear || 'current', {
+      academicYear: summary.academicYear,
+      rolled: t.rolled,
+      graduated: t.graduated,
+      failed: t.failed,
+      error: t.error,
+    });
+  }
+  const data = {
+    tenants: summary.tenants.map((t) => ({
+      tenant_id: t.tenant_id,
+      rolled: t.rolled,
+      graduated: t.graduated,
+    })),
+  };
+  return c.json({ success: true, data });
+});
+
+/**
+ * POST /api/v1/admin/migrate — 跨租户数据迁入（平台管理员，数据迁移指南）
+ * body: { target_tenant_id?, new_tenant_name?, backup }
+ * target_tenant_id 与 new_tenant_name 二选一：
+ * - 传入 new_tenant_name：新建组织租户（slug 自动生成 'mig-xxxxxxxx' 并查重，
+ *   type='organization'，当前平台管理员为 owner，默认配额同 tenants.js 创建逻辑），再迁入；
+ * - 传入 target_tenant_id：迁入已有租户，覆盖式（先删后插）。
+ *
+ * backup 为「导出全部数据」version 3 备份 JSON；backup.tenant 块仅参考，不校验不沿用。
+ * 覆盖式：清空目标租户 11 张业务表后按备份行原样插入（tenant_id 强制改写为目标租户）。
+ * 先删后插、CHUNK=1000 分块的写入逻辑与 import/restore（§51）一致；
+ * 删除语句只删 11 张业务表，绝不动 tenants/memberships/tenant_quotas/invitations/files 等。
+ * 成功：{ tenant_id, tenant_name, restored, counts }；audit 写在目标租户（action '平台迁入'）。
+ */
+app.post('/migrate', requireAuth, async (c) => {
+  const user = requirePlatformAdmin(c);
+  const db = c.env.DB;
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') {
+    throw new ApiError('VALIDATION_ERROR', '请求体必须是 JSON 对象');
+  }
+  const backup = body.backup;
+  if (!backup || typeof backup !== 'object') {
+    throw new ApiError('VALIDATION_ERROR', 'backup 必须是备份 JSON 对象');
+  }
+  if (backup.version !== 3) {
+    throw new ApiError('VALIDATION_ERROR', `不支持的备份版本：${backup.version}（当前仅支持 version=3）`);
+  }
+
+  // 目标二选一
+  const hasTargetId =
+    body.target_tenant_id !== undefined && body.target_tenant_id !== null && String(body.target_tenant_id).trim() !== '';
+  const hasNewName = body.new_tenant_name !== undefined && body.new_tenant_name !== null;
+  if (hasTargetId === hasNewName) {
+    throw new ApiError('VALIDATION_ERROR', 'target_tenant_id 与 new_tenant_name 必须二选一');
+  }
+
+  const ts = now();
+  let tenantId;
+  let tenantName;
+  let createdTenant = false;
+  if (hasNewName) {
+    tenantName = String(body.new_tenant_name).trim();
+    if (!tenantName) {
+      throw new ApiError('VALIDATION_ERROR', 'new_tenant_name 不能为空');
+    }
+    tenantId = newId();
+    createdTenant = true;
+
+    // slug 自动生成：'mig-' + 8 位随机字符，查重直到唯一
+    const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let slug;
+    for (;;) {
+      const bytes = crypto.getRandomValues(new Uint8Array(8));
+      slug = 'mig-' + Array.from(bytes, (b) => ALPHABET[b % ALPHABET.length]).join('');
+      const taken = await db.prepare('SELECT id FROM tenants WHERE slug = ?').bind(slug).first();
+      if (!taken) break;
+    }
+
+    // 建租户逻辑镜像 tenants.js POST /（§5/§73）：默认配额 PERSONAL_DEFAULTS，expires_at 空
+    const q = PERSONAL_DEFAULTS;
+    await db.batch([
+      db
+        .prepare(
+          `INSERT INTO tenants (id, name, slug, type, status, created_by, expires_at, created_at, updated_at)
+           VALUES (?, ?, ?, 'organization', 'active', ?, NULL, ?, ?)`
+        )
+        .bind(tenantId, tenantName, slug, user.id, ts, ts),
+      db
+        .prepare(
+          `INSERT INTO tenant_quotas (tenant_id, max_classes, max_students, max_lessons, max_assignments,
+             max_dictations, max_exams, max_storage_bytes, max_ai_requests_month, max_members, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          tenantId,
+          q.max_classes ?? null,
+          q.max_students ?? null,
+          q.max_lessons ?? null,
+          q.max_assignments ?? null,
+          q.max_dictations ?? null,
+          q.max_exams ?? null,
+          q.max_storage_bytes ?? null,
+          q.max_ai_requests_month ?? null,
+          q.max_members ?? null,
+          ts,
+          ts
+        ),
+      db
+        .prepare(
+          `INSERT INTO memberships (id, tenant_id, user_id, role, status, created_at)
+           VALUES (?, ?, ?, 'owner', 'active', ?)`
+        )
+        .bind(newId(), tenantId, user.id, ts),
+    ]);
+  } else {
+    tenantId = String(body.target_tenant_id).trim();
+    const tenant = await db.prepare('SELECT id, name FROM tenants WHERE id = ?').bind(tenantId).first();
+    if (!tenant) throw new ApiError('NOT_FOUND', '目标租户不存在');
+    tenantName = tenant.name;
+  }
+
+  // 表顺序：与导出一致（§51，与 import/restore 的 TABLES 相同）；删除时逆序执行（子表 → 父表）
+  const TABLES = [
+    ['classes', 'classes'],
+    ['students', 'students'],
+    ['lessons', 'lessons'],
+    ['schedules', 'schedules'],
+    ['assignments', 'assignments'],
+    ['assignment_submissions', 'submissions'],
+    ['dictations', 'dictations'],
+    ['dictation_results', 'dictationResults'],
+    ['exams', 'exams'],
+    ['exam_scores', 'scores'],
+    ['exam_subscores', 'subscores'],
+  ];
+
+  // 第 1 步：删除目标 tenant 全部业务数据（不动成员/配额/邀请/文件等）
+  const deletes = [...TABLES].reverse().map(([table]) =>
+    db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).bind(tenantId)
+  );
+
+  // 第 2 步：按备份行构造 INSERT（列名取自行键；tenant_id 强制改写为目标租户，其余列原样含 id）
+  const inserts = [];
+  const counts = {};
+  for (const [table, key] of TABLES) {
+    const rows = Array.isArray(backup[key]) ? backup[key] : [];
+    counts[key] = rows.length;
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') {
+        throw new ApiError('VALIDATION_ERROR', `备份数据损坏：${key} 存在非法行`);
+      }
+      const cols = Object.keys(row);
+      const tenantIdx = cols.indexOf('tenant_id');
+      if (tenantIdx >= 0) cols.splice(tenantIdx, 1);
+      const values = cols.map((col) => row[col]);
+      const allCols = ['tenant_id', ...cols];
+      const placeholders = allCols.map(() => '?').join(',');
+      inserts.push(
+        db
+          .prepare(`INSERT INTO ${table} (${allCols.join(',')}) VALUES (${placeholders})`)
+          .bind(tenantId, ...values)
+      );
+    }
+  }
+
+  // 删除 + 插入一次性 batch（D1 batch 具有事务性，单批上限 1000 条语句；
+  // 超过上限时分块提交，此时不再保证整体原子性，README 已注明该限制）
+  const CHUNK = 1000;
+  const all = [...deletes, ...inserts];
+  if (all.length <= CHUNK) {
+    await db.batch(all);
+  } else {
+    for (let i = 0; i < all.length; i += CHUNK) {
+      await db.batch(all.slice(i, i + CHUNK));
+    }
+  }
+
+  const restored = Object.values(counts).reduce((a, b) => a + b, 0);
+  await audit(db, tenantId, user.id, '平台迁入', 'tenant', tenantId, {
+    counts,
+    restored,
+    createdTenant,
+    operatorEmail: user.email,
+  });
+  return c.json({ success: true, data: { tenant_id: tenantId, tenant_name: tenantName, restored, counts } });
 });
 
 export default app;

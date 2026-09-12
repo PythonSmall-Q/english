@@ -33,13 +33,14 @@
 
   /**
    * 统一请求。query 为对象时拼到 URL 上。
-   * 学年归档（§63）：GET 7 个列表端点未显式传 academic_year 时自动带当前选中学年；
+   * 学年归档（§63）：GET 6 个列表端点未显式传 academic_year 时自动带当前选中学年；
    * 历史学年模式下拦截这些命名空间的写请求（前端先行拒绝，后端 403 兜底）。
+   * 教案（/lessons）已解除学年绑定：全学年可见可写，不带学年参数、不拦截写请求。
    * @throws {{code:string,message:string}} 业务错误或网络错误
    */
   // 纳入学年归档过滤/写保护的命名空间（列表 GET 自动带参；非 GET 历史模式拦截）
-  const ACADEMIC_LIST_PREFIXES = ['/classes', '/students', '/lessons', '/schedules', '/assignments', '/dictations', '/exams'];
-  const ACADEMIC_WRITE_PREFIXES = ['/classes', '/students', '/lessons', '/schedules', '/assignments', '/dictations', '/exams', '/import'];
+  const ACADEMIC_LIST_PREFIXES = ['/classes', '/students', '/schedules', '/assignments', '/dictations', '/exams'];
+  const ACADEMIC_WRITE_PREFIXES = ['/classes', '/students', '/schedules', '/assignments', '/dictations', '/exams', '/import'];
 
   async function request(path, { method = 'GET', body, query } = {}) {
     const isAcademicListGet =
@@ -306,6 +307,23 @@
       request('/export/class-stats', { query: { class_id: classId, academic_year: academicYear } }),
   };
 
+  // —— 学年归档（§63：上一学年 默写/作业/考试 压缩归档；9/15 起提醒导出备份）——
+  const archive = {
+    /** 归档状态：{ previousYear, compressAt, hasArchivable, remindWindow } */
+    status: () => request('/archive/status'),
+    /** 下载压缩归档容器（owner/admin）；module ∈ dictations|assignments|exams，academic_year 为目标学年 */
+    download: (module, academicYear) =>
+      request('/archive/download', { query: { module, academic_year: academicYear } }),
+  };
+
+  // —— 毕业归档（毕业班级整体打包入 GRAD_DB；owner/admin 仅可查看元数据列表与下载）——
+  const graduated = {
+    /** 元数据列表：{ list: [{id, class_name, graduation_year, academic_year, student_count, archived_at}] } */
+    list: () => request('/graduated'),
+    /** 下载某条毕业归档 envelope（gzip+base64 容器，与学年归档同格式） */
+    download: (id) => request(`/graduated/${id}/download`),
+  };
+
   // —— 平台管理（§72/§73，仅 platform_admin）——
   const admin = {
     tenants: () => request('/admin/tenants'),
@@ -319,7 +337,9 @@
     /** 平台设置（如新建账户是否自动创建个人空间） */
     getSettings: () => request('/admin/settings'),
     updateSettings: (body) => request('/admin/settings', { method: 'PUT', body }),
+    /** 跨租户数据迁入（§迁移指南）：body { target_tenant_id? | new_tenant_name?, backup } */
+    migrate: (body) => request('/admin/migrate', { method: 'POST', body }),
   };
 
-  window.api = { auth, tenants, gradeGroups, classes, students, lessons, schedules, assignments, dictations, exams, dashboard, ai, files, import: imp, export: exp, admin };
+  window.api = { auth, tenants, gradeGroups, classes, students, lessons, schedules, assignments, dictations, exams, dashboard, ai, files, import: imp, export: exp, archive, graduated, admin };
 })();

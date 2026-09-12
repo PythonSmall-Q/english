@@ -6,6 +6,8 @@
  *       删除、导出统计（.xlsx，每班一个工作表）
  * 数据：api.classes / api.assignments / api.students
  * 说明：提交率等统计数字来自后端实时聚合（§31）；写操作成功后前端就地 patch 本地列表并局部重渲染，不再整表重新请求。
+ * 归档（§63）：已归档学年的列表行（archived:true）只读展示提交统计，隐藏登记/删除/详情，
+ *       行首显示「已归档」徽标；明细接口已 404；历史学年 + owner/admin 在工具条提供「下载归档」
  */
 
 (function () {
@@ -46,6 +48,8 @@
   let containerEl = null;
   let canManageMap = new Map(); // class_id → canManage（班级级权限感知）
   let anyManageable = false; // 是否存在可管理班级
+  let isTenantAdmin = false; // owner/admin（「下载归档」仅管理员可见）
+  let listArchived = false; // 本次列表响应表明当前学年已归档（data.archived 或行内 archived）
 
   /** 统一错误提示：额度超限给固定文案（§21） */
   function errMsg(err, fallback) {
@@ -86,7 +90,10 @@
       // 班级级权限感知：登记上交/删除按该班 canManage 控制（服务端另有 403 兜底）
       canManageMap = new Map(classes.map((c) => [c.id, !!c.canManage]));
       anyManageable = classes.some((c) => !!c.canManage);
+      const role = App.state.tenant?.role;
+      isTenantAdmin = role === 'owner' || role === 'admin';
       assignments = asgData.list || [];
+      listArchived = asgData.archived === true || assignments.some((a) => a.archived);
       renderContent();
     } catch (err) {
       content.innerHTML = `
@@ -107,8 +114,10 @@
       a.status === 'active'
         ? '<span class="badge badge-success">进行中</span>'
         : `<span class="badge badge-leave">${App.esc(a.status || '未知')}</span>`;
-    // 登记上交/删除仅该班可管理时显示；详情始终可见
-    const canManage = canManageMap.get(a.classId);
+    // 已归档（§63）：明细已删，隐藏写操作与详情入口（详情 404），仅展示提交统计与「已归档」徽标
+    const archived = !!a.archived;
+    // 登记上交/删除仅该班可管理时显示；详情始终可见（已归档除外）
+    const canManage = !archived && canManageMap.get(a.classId);
     const writeBtns = canManage
       ? `<button class="btn btn-sm btn-primary" data-act="register" type="button">登记上交</button>
          <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>`
@@ -117,6 +126,7 @@
       <div class="asg-item" data-id="${App.esc(a.id)}">
         <div class="asg-item-head">
           <span class="asg-item-title" title="${App.esc(a.title)}">${App.esc(a.title)}</span>
+          ${archived ? '<span class="badge badge-archived">已归档</span>' : ''}
           ${statusBadge}
         </div>
         <div class="asg-item-meta">截止：${App.esc(fmtDeadline(a.deadline))}</div>
@@ -127,16 +137,23 @@
         </div>
         <div class="asg-item-ops">
           ${writeBtns}
-          <button class="btn btn-sm" data-act="detail" type="button">详情</button>
+          ${archived ? '' : '<button class="btn btn-sm" data-act="detail" type="button">详情</button>'}
         </div>
       </div>`;
   }
 
   function renderContent() {
     const content = containerEl.querySelector('#asg-content');
-    // 「新建作业」仅存在可管理班级时显示
+    // 「下载归档」（§63 新版：仅历史学年 + 本学年已归档 + owner/admin 可见）
+    const dlBtn = containerEl.querySelector('#asg-btn-download-archive');
+    if (dlBtn) {
+      const isHistory = App.state.academicYear && App.state.academicYear !== App.state.currentAcademicYear;
+      dlBtn.style.display = isHistory && listArchived && isTenantAdmin ? '' : 'none';
+    }
+    // 「新建作业」仅存在可管理班级时显示；已归档学年（明细已删）隐藏创建入口
+    const archivedView = assignments.some((a) => a.archived);
     const createBtn = containerEl.querySelector('#asg-btn-create');
-    if (createBtn) createBtn.style.display = anyManageable ? '' : 'none';
+    if (createBtn) createBtn.style.display = anyManageable && !archivedView ? '' : 'none';
     if (!classes.length) {
       content.innerHTML = '<div class="card"><div class="muted">当前空间还没有班级，请先在「我的班级」中创建。</div></div>';
       return;
@@ -403,6 +420,29 @@
     }
   }
 
+  /** 下载当前学年压缩归档（owner/admin，历史学年已归档时可用）→ JSON 文件 */
+  async function downloadArchive(btn) {
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = '下载中…';
+    try {
+      const data = await api.archive.download('assignments', App.state.academicYear);
+      const blob = new Blob([JSON.stringify(data)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `归档-作业-${App.state.academicYear}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      App.toast('归档文件已开始下载');
+    } catch (err) {
+      App.toast(errMsg(err, '下载归档失败'));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
   // ===== 视图注册 =====
 
   App.registerView('assignments', {
@@ -414,12 +454,15 @@
       assignments = [];
       canManageMap = new Map();
       anyManageable = false;
+      isTenantAdmin = false;
+      listArchived = false;
       containerEl = el;
 
       el.innerHTML = `
         <div class="toolbar">
           <span class="muted">按班级统计作业提交情况，统计数字由后端实时计算</span>
           <span class="spacer"></span>
+          <button id="asg-btn-download-archive" class="btn" type="button" style="display:none">下载归档</button>
           <button id="asg-btn-export" class="btn" type="button">导出统计</button>
           <button id="asg-btn-create" class="btn btn-primary" type="button">新建作业</button>
         </div>
@@ -433,6 +476,7 @@
         openCreate();
       });
       el.querySelector('#asg-btn-export').addEventListener('click', exportStats);
+      el.querySelector('#asg-btn-download-archive').addEventListener('click', (e) => downloadArchive(e.currentTarget));
 
       el.querySelector('#asg-content').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-act]');

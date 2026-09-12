@@ -4,18 +4,40 @@
  * 约定：
  * - 未认证时由 App._routeGuest() 调用 App.showLanding() 渲染到 #auth-screen
  * - 「登录」「注册」按钮走 App.showAuthScreen(mode)
- * - 功能卡片点击：把目标路由记入 sessionStorage 'wb.redirect' 后进入登录页，
- *   登录成功后由 App.enterApp() 读取并跳回对应视图
+ * - 「功能」「定价」导航与定价 CTA 均锚点平滑滚动到本页对应区块 / 顶部 hero 的登录注册区
  */
 
-/** 首页功能卡片（纯展示，route 对应登录后的视图路由） */
+/** 功能介绍板块（纯展示） */
 const LANDING_FEATURES = [
-  { icon: '🏫', title: '班级管理', desc: '班主任 / 任课 / 年级组三级协作', route: '#/classes' },
-  { icon: '✏️', title: '默写管理', desc: '班级与全年段默写、自动下派登记', route: '#/dictations' },
-  { icon: '📊', title: '考试成绩', desc: '班级 / 年段考试、成绩分析、小分追踪', route: '#/exams' },
-  { icon: '📅', title: '教学课表', desc: '班级与全年段课表，今日课程一目了然', route: '#/schedule' },
-  { icon: '📝', title: '作业统计', desc: '作业布置与提交统计，缺交清晰可查', route: '#/assignments' },
-  { icon: '🤖', title: 'AI 教学助手', desc: '出题、翻译、润色，教学灵感随手可得', route: '#/ai' },
+  { icon: '📚', title: '备课中心', desc: 'Markdown / LaTeX 所见即所得编辑器，AI 一键起草教案' },
+  { icon: '🗓', title: '教学课表', desc: '班级/全年段课表，早晚自习与十节课节次' },
+  { icon: '🏫', title: '班级与学生', desc: '班级名单、学号管理、预警自动标记' },
+  { icon: '📝', title: '作业管理', desc: '布置、登记上交、缺交追踪、统计导出' },
+  { icon: '✍️', title: '默写重默', desc: '全年段下派、重默登记、名单图片导出' },
+  { icon: '📊', title: '考试分析', desc: '班级/年段考试、成绩小分、班内年段排名' },
+  { icon: '🤖', title: 'AI 教学助手', desc: '写教案、出练习、批改作文、学情解读' },
+  { icon: '🔐', title: '数据归档', desc: '学年自动压缩归档、毕业班级打包、分级权限' },
+];
+
+/** 定价（占位，可按运营调整） */
+const LANDING_PRICING = {
+  free: { price: 0, priceLabel: '¥0', period: '永久' },
+  pro: { monthly: 29, yearly: 299, savePct: 14 },
+  school: { monthly: 199, yearly: 1999, savePct: 16 },
+};
+
+/** 定价功能对比表（'—' 表示不支持） */
+const LANDING_COMPARE = [
+  { name: '班级数量', free: '1', pro: '10', school: '不限' },
+  { name: '学生数量', free: '30', pro: '300', school: '不限' },
+  { name: '教案/作业/默写/考试', free: '基础额度', pro: '不限', school: '不限' },
+  { name: 'AI 助手（次/月）', free: '20', pro: '500', school: '5000' },
+  { name: '文件存储', free: '—', pro: '5GB', school: '50GB' },
+  { name: '学年压缩归档', free: '—', pro: '✓', school: '✓' },
+  { name: '毕业班级归档下载', free: '—', pro: '—', school: '✓' },
+  { name: '年级组/备课组权限', free: '—', pro: '—', school: '✓' },
+  { name: '批量数据迁入', free: '—', pro: '—', school: '✓' },
+  { name: '技术支持', free: '社区', pro: '邮件', school: '专属' },
 ];
 
 /** 渲染未登录首页到 #auth-screen */
@@ -29,30 +51,115 @@ App.showLanding = function () {
       <section class="landing-hero">
         <h1 class="landing-title">英语教师教学工作台</h1>
         <p class="landing-tagline">面向英语教师的全流程教学工作台</p>
+        <nav class="landing-nav">
+          <a href="#features" class="landing-nav-link" data-anchor="features">功能</a>
+          <a href="#pricing" class="landing-nav-link" data-anchor="pricing">定价</a>
+        </nav>
         <div class="landing-actions">
           <button class="btn btn-primary" id="landing-login" type="button">登录</button>
           <button class="btn" id="landing-register" type="button">注册</button>
         </div>
       </section>
-      <section class="landing-cards">
-        ${LANDING_FEATURES.map(
-          (f) => `
-          <button type="button" class="landing-card" data-route="${App.esc(f.route)}">
-            <span class="landing-card-icon">${f.icon}</span>
-            <span class="landing-card-title">${App.esc(f.title)}</span>
-            <span class="landing-card-desc muted">${App.esc(f.desc)}</span>
-          </button>`
-        ).join('')}
+
+      <section class="landing-section" id="features">
+        <h2 class="landing-section-title">一站式教学工作台</h2>
+        <p class="landing-section-sub muted">从备课、课表到作业、考试，覆盖英语教学全流程</p>
+        <div class="landing-features-grid">
+          ${LANDING_FEATURES.map(
+            (f) => `
+            <div class="landing-feature-card">
+              <span class="landing-card-icon">${f.icon}</span>
+              <span class="landing-card-title">${App.esc(f.title)}</span>
+              <span class="landing-card-desc muted">${App.esc(f.desc)}</span>
+            </div>`
+          ).join('')}
+        </div>
       </section>
+
+      <section class="landing-section" id="pricing">
+        <h2 class="landing-section-title">选择适合你的版本</h2>
+        <p class="landing-section-sub muted">随教学规模自由升级，随时联系管理员调整</p>
+        <div class="landing-pricing-grid">
+          <div class="landing-price-card">
+            <div class="landing-price-name">免费版</div>
+            <div class="landing-price-amount">¥${LANDING_PRICING.free.price}<span class="landing-price-period"> / ${LANDING_PRICING.free.period}</span></div>
+            <ul class="landing-price-list">
+              <li>1 个班级</li>
+              <li>30 名学生</li>
+              <li>每月 20 次 AI</li>
+              <li>基础功能</li>
+            </ul>
+            <button class="btn landing-price-cta" type="button" data-scroll-top>立即开始</button>
+          </div>
+          <div class="landing-price-card landing-price-card-featured">
+            <span class="landing-price-badge">最受欢迎</span>
+            <div class="landing-price-name">专业版</div>
+            <div class="landing-price-amount">¥${LANDING_PRICING.pro.monthly}<span class="landing-price-period"> / 月</span></div>
+            <div class="landing-price-yearly muted">¥${LANDING_PRICING.pro.yearly} / 年，省 ${LANDING_PRICING.pro.savePct}%</div>
+            <ul class="landing-price-list">
+              <li>10 个班级</li>
+              <li>300 名学生</li>
+              <li>每月 500 次 AI</li>
+              <li>5GB 文件存储</li>
+              <li>学年归档</li>
+            </ul>
+            <button class="btn btn-primary landing-price-cta" type="button" data-scroll-top>立即开始</button>
+          </div>
+          <div class="landing-price-card">
+            <div class="landing-price-name">学校版</div>
+            <div class="landing-price-amount">¥${LANDING_PRICING.school.monthly}<span class="landing-price-period"> / 月</span></div>
+            <div class="landing-price-yearly muted">¥${LANDING_PRICING.school.yearly} / 年，省 ${LANDING_PRICING.school.savePct}%</div>
+            <ul class="landing-price-list">
+              <li>不限班级与学生</li>
+              <li>每月 5000 次 AI</li>
+              <li>50GB 存储</li>
+              <li>毕业归档下载</li>
+              <li>年级组/备课组权限</li>
+              <li>数据迁入 · 专属支持</li>
+            </ul>
+            <button class="btn landing-price-cta" type="button" data-scroll-top>联系我们</button>
+          </div>
+        </div>
+        <div class="landing-compare-wrap">
+          <table class="landing-compare">
+            <thead>
+              <tr>
+                <th>功能</th>
+                <th>免费版</th>
+                <th class="col-featured">专业版</th>
+                <th>学校版</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${LANDING_COMPARE.map(
+                (row) => `
+                <tr>
+                  <td>${App.esc(row.name)}</td>
+                  <td>${App.esc(row.free)}</td>
+                  <td class="col-featured">${App.esc(row.pro)}</td>
+                  <td>${App.esc(row.school)}</td>
+                </tr>`
+              ).join('')}
+            </tbody>
+          </table>
+        </div>
+        <p class="landing-compare-note muted">实际配额以平台管理员配置为准 · 联系管理员开通付费版本</p>
+      </section>
+
       <footer class="landing-footer muted">英语教师教学工作台 · 让教学事务井井有条</footer>
     </div>`;
 
+  const scrollTo = (el) => el && el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
   document.getElementById('landing-login').addEventListener('click', () => App.showAuthScreen('login'));
   document.getElementById('landing-register').addEventListener('click', () => App.showAuthScreen('register'));
-  screen.querySelectorAll('.landing-card').forEach((card) => {
-    card.addEventListener('click', () => {
-      sessionStorage.setItem('wb.redirect', card.dataset.route);
-      App.showAuthScreen('login');
+  screen.querySelectorAll('[data-anchor]').forEach((link) => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      scrollTo(document.getElementById(link.dataset.anchor));
     });
+  });
+  screen.querySelectorAll('[data-scroll-top]').forEach((btn) => {
+    btn.addEventListener('click', () => scrollTo(screen.querySelector('.landing-hero')));
   });
 };

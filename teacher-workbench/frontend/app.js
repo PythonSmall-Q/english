@@ -457,6 +457,41 @@ window.App = {
     });
   },
 
+  /**
+   * 学年归档提醒（§63）：处于 9/15–9/30 提醒窗口且上一学年有可归档数据时，
+   * 每个自然日（东八区）只弹一次；请求失败静默忽略。
+   */
+  async checkArchiveReminder() {
+    let data;
+    try {
+      data = await api.archive.status();
+    } catch (e) {
+      /* 状态接口不可用/无权限：静默降级，不打扰用户 */
+      return;
+    }
+    if (!data || !data.remindWindow) return;
+    // 东八区今日（UTC+8），与 localStorage 记录比对实现每日一次
+    const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    if (localStorage.getItem('wb_archive_remind') === today) return;
+    // 弹窗打开即写入今日日期：无论用户点哪个按钮/关闭，今日都不再弹
+    localStorage.setItem('wb_archive_remind', today);
+    App.modal(
+      '学年数据归档提醒',
+      `<div style="line-height:1.8">上一学年（${App.esc(data.previousYear || '')}）的作业、默写、考试数据将于 ${App.esc(data.compressAt || '10-01')} 压缩归档，归档后历史学年仅保留汇总，明细将无法在线查看，请及时导出备份。</div>
+       <div class="modal-actions">
+         <button class="btn" id="ar-remind-later" type="button">今日不再提示</button>
+         <button class="btn btn-primary" id="ar-remind-export" type="button">去导出数据</button>
+       </div>`,
+      () => {
+        document.getElementById('ar-remind-later').onclick = () => App.closeModal();
+        document.getElementById('ar-remind-export').onclick = () => {
+          App.closeModal();
+          App.showView('settings');
+        };
+      }
+    );
+  },
+
   /** 进入应用主框架（认证成功后调用） */
   enterApp() {
     document.getElementById('auth-screen').classList.add('hidden');
@@ -549,6 +584,8 @@ window.App = {
       App.state.quota = App.state.tenant?.quota || null;
       await App.loadAcademicYears();
       App.enterApp();
+      // 学年归档提醒（§63）：进入工作台后异步检查，9/15–9/30 每日一次
+      App.checkArchiveReminder();
     } catch (err) {
       if (err && err.code !== 'UNAUTHORIZED') {
         App.toast((err && err.message) || '加载失败');

@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>教学工作台 · 归档解压工具</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: #f0f3f9; color: #24314d; min-height: 100vh; padding: 32px 16px;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  .card {
+    background: #fff; border-radius: 14px; box-shadow: 0 4px 20px rgba(36, 49, 77, .08);
+    padding: 28px 32px; margin-bottom: 20px;
+  }
+  h1 { font-size: 22px; margin-bottom: 6px; }
+  h2 { font-size: 16px; margin: 22px 0 10px; }
+  .muted { color: #8a94a6; font-size: 13px; line-height: 1.7; }
+  .drop {
+    border: 2px dashed #b9c4dd; border-radius: 12px; padding: 38px 20px;
+    text-align: center; color: #6b7a99; cursor: pointer; transition: all .15s;
+  }
+  .drop:hover, .drop.over { border-color: #4f6bed; background: #f5f7ff; color: #4f6bed; }
+  .drop strong { display: block; font-size: 16px; margin-bottom: 6px; }
+  input[type=file] { display: none; }
+  .meta { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+  .meta .chip {
+    background: #f0f3fb; border-radius: 8px; padding: 8px 14px; font-size: 13px;
+  }
+  .meta .chip b { color: #4f6bed; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 8px; }
+  th, td { border: 1px solid #e5eaf6; padding: 6px 10px; text-align: left; white-space: nowrap; }
+  th { background: #f7f9fe; font-weight: 600; }
+  .tbl-wrap { overflow-x: auto; max-height: 380px; overflow-y: auto; border-radius: 8px; }
+  .btn {
+    display: inline-block; border: none; border-radius: 8px; padding: 9px 18px;
+    background: #4f6bed; color: #fff; font-size: 14px; cursor: pointer; margin: 4px 6px 0 0;
+  }
+  .btn.ghost { background: #eef2ff; color: #4f6bed; }
+  .btn:hover { filter: brightness(1.06); }
+  .err {
+    background: #fdecec; color: #c0392b; border-radius: 8px; padding: 12px 16px;
+    font-size: 13px; margin-top: 12px; white-space: pre-wrap; word-break: break-all;
+  }
+  .tag {
+    display: inline-block; background: #eef2ff; color: #4f6bed; border-radius: 999px;
+    padding: 2px 10px; font-size: 12px; margin-left: 8px;
+  }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>📦 教学工作台 · 归档解压工具</h1>
+    <p class="muted">
+      用于解压「平台管理 → 下载归档」得到的归档文件（gzip+base64 容器）。<br>
+      本工具完全离线运行：文件在本地浏览器内解码，不会上传到任何服务器。建议用 Chrome / Edge 打开。
+    </p>
+  </div>
+
+  <div class="card">
+    <label class="drop" id="drop">
+      <strong>点击选择归档文件，或把 .json 文件拖到这里</strong>
+      <span>文件名形如：归档-默写-2025-2026.json</span>
+      <input type="file" id="file" accept=".json,application/json">
+    </label>
+    <div class="err hidden" id="err"></div>
+  </div>
+
+  <div class="card hidden" id="result">
+    <h2>归档信息</h2>
+    <div class="meta" id="meta"></div>
+    <div id="tables"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const drop = $('drop'), fileInput = $('file'), errBox = $('err');
+  let decoded = null; // { envelope, inner, tables: [{name,label,rows}] }
+
+  function showErr(msg) {
+    errBox.textContent = msg;
+    errBox.classList.remove('hidden');
+  }
+  function clearErr() { errBox.classList.add('hidden'); }
+
+  /** base64 → Uint8Array（分块防栈溢出） */
+  function b64ToBytes(b64) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
+  /** gunzip（浏览器原生 DecompressionStream） */
+  async function gunzip(bytes) {
+    if (typeof DecompressionStream === 'undefined') {
+      throw new Error('当前浏览器不支持 DecompressionStream，请使用较新的 Chrome / Edge / Firefox 打开本工具');
+    }
+    const ds = new DecompressionStream('gzip');
+    const stream = new Blob([bytes]).stream().pipeThrough(ds);
+    return new TextDecoder().decode(await new Response(stream).arrayBuffer());
+  }
+
+  const MODULE_NAMES = { dictations: '默写', assignments: '作业', exams: '考试', graduated: '毕业归档' };
+  const TABLE_NAMES = {
+    items: '条目列表',
+    dictation_results: '默写结果明细',
+    assignment_submissions: '作业提交明细',
+    exam_scores: '考试成绩明细',
+    exam_subscores: '考试小分明细',
+    class: '班级信息',
+    students: '学生名单',
+    assignments: '作业条目',
+    dictations: '默写条目',
+    exams: '考试条目',
+  };
+
+  /** 从解压后的内层 JSON 收集所有数据表（学年归档与毕业归档两种形状） */
+  function collectTables(inner) {
+    const tables = [];
+    if (Array.isArray(inner.items)) tables.push({ name: 'items', label: TABLE_NAMES.items, rows: inner.items });
+    if (inner.class && typeof inner.class === 'object') tables.push({ name: 'class', label: TABLE_NAMES.class, rows: [inner.class] });
+    if (Array.isArray(inner.students)) tables.push({ name: 'students', label: TABLE_NAMES.students, rows: inner.students });
+    const pushGroup = (group) => {
+      if (!group || typeof group !== 'object') return;
+      Object.keys(group).forEach((k) => {
+        if (Array.isArray(group[k])) tables.push({ name: k, label: TABLE_NAMES[k] || k, rows: group[k] });
+      });
+    };
+    pushGroup(inner.items && !Array.isArray(inner.items) ? inner.items : null);
+    pushGroup(inner.children);
+    return tables;
+  }
+
+  function csvEscape(v) {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function toCsv(rows) {
+    if (!rows.length) return '';
+    const keys = [];
+    const seen = new Set();
+    rows.forEach((r) => Object.keys(r || {}).forEach((k) => { if (!seen.has(k)) { seen.add(k); keys.push(k); } }));
+    const lines = [keys.join(',')];
+    rows.forEach((r) => lines.push(keys.map((k) => csvEscape(r ? r[k] : '')).join(',')));
+    return '﻿' + lines.join('\r\n');
+  }
+  function downloadBlob(content, filename, type) {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  /** 懒加载同目录 SheetJS（xlsx 多表导出用） */
+  function loadXLSX() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    if (loadXLSX._p) return loadXLSX._p;
+    loadXLSX._p = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'xlsx.full.min.js';
+      s.onload = () => resolve(window.XLSX);
+      s.onerror = () => { loadXLSX._p = null; reject(new Error('Excel 组件加载失败（缺少同目录 xlsx.full.min.js）')); };
+      document.head.appendChild(s);
+    });
+    return loadXLSX._p;
+  }
+
+  async function handleFile(file) {
+    clearErr();
+    $('result').classList.add('hidden');
+    decoded = null;
+    try {
+      const text = await file.text();
+      const envelope = JSON.parse(text);
+      if (!envelope || envelope.format !== 'teacher-workbench-archive') {
+        throw new Error('不是有效的归档文件（缺少 format: "teacher-workbench-archive" 标记）');
+      }
+      if (envelope.encoding !== 'gzip+base64' || typeof envelope.data !== 'string') {
+        throw new Error('未知的归档编码：' + envelope.encoding);
+      }
+      const jsonText = await gunzip(b64ToBytes(envelope.data));
+      const inner = JSON.parse(jsonText);
+
+      const tables = collectTables(inner);
+      if (!tables.length) throw new Error('归档内容为空（没有可展示的数据表）');
+
+      decoded = { envelope, inner, tables };
+      render();
+    } catch (e) {
+      showErr('解压失败：' + (e && e.message ? e.message : e));
+    }
+  }
+
+  function render() {
+    const { envelope, tables } = decoded;
+    $('meta').innerHTML = [
+      ['模块', (MODULE_NAMES[envelope.module] || envelope.module || '—')],
+      ['学年', envelope.academicYear || '—'],
+      ['归档时间', envelope.archivedAt || '—'],
+      ['条目数', String(envelope.itemCount != null ? envelope.itemCount : '—')],
+      ['数据表', tables.map((t) => `${t.label} ${t.rows.length} 行`).join('，')],
+    ].map(([k, v]) => `<span class="chip">${k}：<b>${escapeHtml(v)}</b></span>`).join('');
+
+    const box = $('tables');
+    box.innerHTML = '';
+    tables.forEach((t) => {
+      const sec = document.createElement('div');
+      const preview = t.rows.slice(0, 50);
+      const cols = [];
+      const seen = new Set();
+      t.rows.forEach((r) => Object.keys(r || {}).forEach((k) => { if (!seen.has(k)) { seen.add(k); cols.push(k); } }));
+      sec.innerHTML =
+        `<h2>${escapeHtml(t.label)}<span class="tag">${t.rows.length} 行${t.rows.length > 50 ? '（预览前 50 行）' : ''}</span></h2>` +
+        `<div class="tbl-wrap"><table><thead><tr>${cols.map((c) => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>` +
+        `<tbody>${preview.map((r) => `<tr>${cols.map((c) => `<td>${escapeHtml(r ? r[c] : '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` +
+        `<button class="btn ghost" data-csv="${t.name}">导出 ${escapeHtml(t.label)}.csv</button>` +
+        `<button class="btn ghost" data-json="${t.name}">导出 ${escapeHtml(t.label)}.json</button>`;
+      box.appendChild(sec);
+    });
+    const all = document.createElement('div');
+    all.innerHTML = '<h2>整体导出</h2>' +
+      '<button class="btn" id="btn-all-json">导出完整解压 JSON</button>' +
+      '<button class="btn" id="btn-all-xlsx">导出 Excel（每张表一个工作表）</button>';
+    box.appendChild(all);
+    $('result').classList.remove('hidden');
+
+    box.querySelectorAll('[data-csv]').forEach((b) => (b.onclick = () => {
+      const t = tables.find((x) => x.name === b.dataset.csv);
+      downloadBlob(toCsv(t.rows), `${t.label}.csv`, 'text/csv;charset=utf-8');
+    }));
+    box.querySelectorAll('[data-json]').forEach((b) => (b.onclick = () => {
+      const t = tables.find((x) => x.name === b.dataset.json);
+      downloadBlob(JSON.stringify(t.rows, null, 2), `${t.label}.json`, 'application/json;charset=utf-8');
+    }));
+    $('btn-all-json').onclick = () => {
+      downloadBlob(JSON.stringify(decoded.inner, null, 2),
+        `归档-${MODULE_NAMES[envelope.module] || envelope.module}-${envelope.academicYear || ''}-解压.json`,
+        'application/json;charset=utf-8');
+    };
+    $('btn-all-xlsx').onclick = async () => {
+      const btn = $('btn-all-xlsx');
+      btn.disabled = true;
+      const oldText = btn.textContent;
+      btn.textContent = '生成中…';
+      try {
+        const XLSX = await loadXLSX();
+        const wb = XLSX.utils.book_new();
+        tables.forEach((t) => {
+          if (!t.rows.length) return;
+          const ws = XLSX.utils.json_to_sheet(t.rows);
+          XLSX.utils.book_append_sheet(wb, ws, t.label.slice(0, 31));
+        });
+        if (!wb.SheetNames.length) throw new Error('没有可导出的数据表');
+        XLSX.writeFile(wb, `归档-${MODULE_NAMES[envelope.module] || envelope.module}-${envelope.academicYear || ''}-解压.xlsx`);
+      } catch (e) {
+        showErr('Excel 导出失败：' + (e && e.message ? e.message : e));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = oldText;
+      }
+    };
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  drop.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+  ['dragover', 'dragenter'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', (e) => {
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  });
+})();
+</script>
+</body>
+</html>

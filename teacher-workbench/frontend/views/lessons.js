@@ -14,6 +14,7 @@
  *  - 详情 modal 含附件区：下载（api.files.get 取 url 后 window.open）、移除（confirmDialog）、
  *    「添加附件」上传（api.files.upload 带进度 → addFile 关联）；另含「导出 Markdown」（纯前端 Blob 下载）
  *  - 「编辑」复用表单 modal，预填全部字段，保存走 api.lessons.update，成功后本地更新卡片不重拉
+ *  - 学年解绑（§63）：列表不按学年过滤，全学年教案一并展示；非当前学年创建的卡片带「{学年} 创建」灰徽标
  * 数据全部来自 api.lessons.*；班级下拉来自 api.classes.list。
  */
 
@@ -114,6 +115,10 @@ function lsnInjectStyles() {
     .lsn-att-size { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
     .lsn-att-badge { font-size: 12px; color: var(--text-muted); margin-left: 6px; }
     .lsn-creator { color: var(--text-muted); font-size: 12px; margin-left: 6px; }
+    .lsn-year-badge {
+      display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px;
+      background: #f3f4f6; color: var(--text-muted); margin-left: 6px; vertical-align: 1px;
+    }
     .lsn-filter-q { width: 160px; }
     .lsn-vditor-loading {
       padding: 24px 12px; text-align: center; color: var(--text-muted); font-size: 13px;
@@ -295,6 +300,11 @@ App.registerView('lessons', {
           ? `<span class="lsn-type-tag" style="background:${type.color}">${type.label}</span>`
           : '';
         const doneBadge = done ? '<span class="badge badge-success">已完成</span>' : '<span class="badge badge-warning">待完成</span>';
+        // 非当前学年创建的教案标注创建学年（教案跨学年保留，不按学年过滤）
+        const yearBadge =
+          App.state.currentAcademicYear && l.academic_year && l.academic_year !== App.state.currentAcademicYear
+            ? `<span class="lsn-year-badge" title="创建于 ${App.esc(l.academic_year)} 学年">${App.esc(l.academic_year)} 创建</span>`
+            : '';
         // 他人教案显示创建人；附件数 > 0 显示徽标
         const creatorTag = l.teacher_id !== this._me() && l.creator_name ? `<span class="lsn-creator">by ${App.esc(l.creator_name)}</span>` : '';
         const attBadge = (l.attachment_count || 0) > 0 ? `<span class="lsn-att-badge" id="lsn-att-${App.esc(l.id)}">📎 ${l.attachment_count}</span>` : '';
@@ -302,7 +312,7 @@ App.registerView('lessons', {
         <div class="lsn-card" style="--lsn-color:${type ? type.color : '#e5e7eb'}" data-lsn-id="${App.esc(l.id)}">
           ${editable ? `<button class="lsn-tick${done ? ' done' : ''}" type="button" title="${done ? '取消完成' : '标记完成'}" data-lsn-tick="${App.esc(l.id)}">✓</button>` : ''}
           <div class="lsn-card-body" data-lsn-view="${App.esc(l.id)}">
-            <div class="lsn-card-title${done ? ' done' : ''}">${typeTag}${App.esc(l.title || '未命名教案')} ${doneBadge}${attBadge}</div>
+            <div class="lsn-card-title${done ? ' done' : ''}">${typeTag}${App.esc(l.title || '未命名教案')} ${doneBadge}${yearBadge}${attBadge}</div>
             <div class="lsn-card-meta">${App.esc(l.class_name || '未指定班级')}${creatorTag}</div>
             ${l.objective ? `<div class="lsn-card-obj" title="${App.esc(l.objective)}">目标：${App.esc(l.objective)}</div>` : ''}
           </div>

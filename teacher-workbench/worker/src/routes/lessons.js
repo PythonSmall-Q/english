@@ -5,13 +5,15 @@
  * - 成功响应 { success: true, data }；错误 { success: false, error: { code, message } }
  * - 写操作 teacher 起；POST 前 checkQuota lessons
  * - GET 支持 ?status=pending|completed 过滤
+ * - 教案不按学年过滤：全学年返回（academic_year 仅作创建学年标注），
+ *   写操作不限学年——教案自动带到新学年，不参与学年归档
  * - lesson_type 取值：reading/listening/writing/grammar/exercise/vocabulary
  * - status：pending 待完成 / completed 已完成（可取消完成）
  */
 
 import { Hono } from 'hono';
-import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
-import { requireAuth, requireTenant, requireRole, audit, assertCurrentYear } from '../middleware.js';
+import { ApiError, newId, now, currentAcademicYear } from '../db.js';
+import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
 import { checkQuota } from '../quota.js';
 
 const app = new Hono();
@@ -42,8 +44,9 @@ async function validateClassId(db, tenantId, classId) {
 
 /**
  * GET /api/v1/lessons — 教案列表
- * 支持 ?status=pending|completed、?class_id=、?lesson_type= 过滤，?academic_year= 学年过滤（缺省/非法回退当前学年）
- * ?q= 标题模糊搜索、?mine=1 只看自己创建的；按创建时间倒序
+ * 教案不按学年过滤：返回全部学年（academic_year 即创建学年标注），按创建时间倒序
+ * 支持 ?status=pending|completed、?class_id=、?lesson_type= 过滤
+ * ?q= 标题模糊搜索、?mine=1 只看自己创建的
  * 列表显式排除 content 字段（正文体积大，走 GET /:id 获取），附带 creator_name 与 attachment_count
  */
 app.get('/', requireAuth, requireTenant, async (c) => {
@@ -53,7 +56,6 @@ app.get('/', requireAuth, requireTenant, async (c) => {
   const status = c.req.query('status');
   const classId = c.req.query('class_id');
   const lessonType = c.req.query('lesson_type');
-  const academicYear = resolveAcademicYear(c.req.query('academic_year'));
   const q = c.req.query('q');
   const mine = c.req.query('mine');
 
@@ -65,8 +67,8 @@ app.get('/', requireAuth, requireTenant, async (c) => {
             (SELECT COUNT(*) FROM lesson_files lf WHERE lf.lesson_id = l.id) AS attachment_count
        FROM lessons l LEFT JOIN classes c ON c.id = l.class_id AND c.tenant_id = l.tenant_id
        LEFT JOIN users u ON u.id = l.teacher_id
-      WHERE l.tenant_id = ? AND l.academic_year = ?`;
-  const params = [tenantId, academicYear];
+      WHERE l.tenant_id = ?`;
+  const params = [tenantId];
   if (status) {
     if (!LESSON_STATUSES.includes(status)) {
       throw new ApiError('VALIDATION_ERROR', `status 必须是 ${LESSON_STATUSES.join('|')}`);
@@ -198,14 +200,11 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
   const lesson = await getLessonOr404(db, tenantId, c.req.param('id'));
   const body = await c.req.json().catch(() => ({}));
 
-  // 权限收敛：仅创建者或 owner/admin 可修改（在学年归档保护之前判断）
+  // 权限收敛：仅创建者或 owner/admin 可修改
   const membership = c.get('membership');
   if (lesson.teacher_id !== user.id && !['owner', 'admin'].includes(membership?.role)) {
     throw new ApiError('FORBIDDEN', '仅创建者或管理员可修改教案');
   }
-
-  // 学年归档保护：非当前学年 → 403
-  await assertCurrentYear(db, tenantId, 'lessons', lesson.id);
 
   const title = body.title != null ? String(body.title).trim() : lesson.title;
   if (!title) throw new ApiError('VALIDATION_ERROR', '教案标题不能为空');
@@ -251,14 +250,11 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
   const tenantId = c.get('tenantId');
   const lesson = await getLessonOr404(db, tenantId, c.req.param('id'));
 
-  // 权限收敛：仅创建者或 owner/admin 可删除（在学年归档保护之前判断）
+  // 权限收敛：仅创建者或 owner/admin 可删除
   const membership = c.get('membership');
   if (lesson.teacher_id !== user.id && !['owner', 'admin'].includes(membership?.role)) {
     throw new ApiError('FORBIDDEN', '仅创建者或管理员可删除教案');
   }
-
-  // 学年归档保护：非当前学年 → 403
-  await assertCurrentYear(db, tenantId, 'lessons', lesson.id);
 
   await db.prepare('DELETE FROM lessons WHERE id = ? AND tenant_id = ?').bind(lesson.id, tenantId).run();
   await audit(db, tenantId, user.id, '删除教案', 'lesson', lesson.id, { title: lesson.title });

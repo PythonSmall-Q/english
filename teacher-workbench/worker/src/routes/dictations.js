@@ -142,9 +142,10 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   const classId = c.req.query('class_id');
   const academicYear = resolveAcademicYear(c.req.query('academic_year'));
 
+  // 历史学年：主表行保留（明细已删），统计直接读行上 archived_stats（见下方 DTO 映射）
   const rows = await db
     .prepare(
-      `SELECT d.*,
+      `SELECT d.*, d.archived_stats,
          (SELECT COUNT(*) FROM dictation_results r
            WHERE r.dictation_id = d.id AND r.passed = 1) AS passed_count,
          (SELECT COUNT(*) FROM dictation_results r
@@ -160,31 +161,50 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
     .bind(...(classId ? [tenantId, academicYear, classId] : [tenantId, academicYear]))
     .all();
 
-  const list = rows.results.map((r) => ({
-    id: r.id,
-    classId: r.class_id,
-    title: r.title,
-    scope: r.scope,
-    materialUrl: r.material_url,
-    dictationDate: r.dictation_date,
-    academicYear: r.academic_year,
-    createdAt: r.created_at,
-    stats: {
-      passed: r.passed_count || 0,
-      failed: r.failed_count || 0,
-      retestRequired: r.retest_required_count || 0,
-      retestCompleted: r.retest_completed_count || 0,
-    },
-  }));
+  // 已归档行（archived_stats 非空）：统计用留存汇总，标 archived:true，全年段进度不可算置 null
+  const list = rows.results.map((r) => {
+    const item = {
+      id: r.id,
+      classId: r.class_id,
+      title: r.title,
+      scope: r.scope,
+      materialUrl: r.material_url,
+      dictationDate: r.dictation_date,
+      academicYear: r.academic_year,
+      createdAt: r.created_at,
+      stats: r.archived_stats
+        ? (() => {
+            const s = JSON.parse(r.archived_stats);
+            return {
+              passed: s.passed || 0,
+              failed: s.failed || 0,
+              retestRequired: s.retestRequired || 0,
+              retestCompleted: s.retestCompleted || 0,
+            };
+          })()
+        : {
+            passed: r.passed_count || 0,
+            failed: r.failed_count || 0,
+            retestRequired: r.retest_required_count || 0,
+            retestCompleted: r.retest_completed_count || 0,
+          },
+    };
+    if (r.archived_stats) {
+      item.archived = true;
+      if (item.scope === 'grade') item.classProgress = null;
+    }
+    return item;
+  });
 
-  // 全年段默写附下派进度（逐条查询，N 条 grade 循环 N 次）
+  // 全年段默写附下派进度（逐条查询，N 条 grade 循环 N 次；已归档行跳过，进度已置 null）
   for (const item of list) {
-    if (item.scope === 'grade') {
+    if (item.scope === 'grade' && !item.archived) {
       item.classProgress = await classProgressOf(db, tenantId, item.id, item.academicYear);
     }
   }
 
-  return c.json({ success: true, data: { list } });
+  const archived = list.some((item) => item.archived);
+  return c.json({ success: true, data: { list, ...(archived ? { archived: true } : {}) } });
 });
 
 /**

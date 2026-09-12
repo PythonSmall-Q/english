@@ -7,6 +7,8 @@
  *       登记（名单勾选 Pass）、详情（未通过名单 + 重默状态）、删除、
  *       「重默」（卡片级，勾选本次重默通过）、「重默·班级」（勾选标记已重默）、
  *       导出统计（.xlsx，每班一个工作表）
+ * 归档（§63）：已归档学年的列表行（archived:true）只读展示汇总，隐藏登记/重默/材料/删除/详情，
+ *       行首显示「已归档」徽标；明细接口已 404；历史学年 + owner/admin 在工具条提供「下载归档」
  * 数据：api.classes / api.dictations / api.students
  */
 
@@ -53,6 +55,7 @@
   let isTenantAdmin = false; // owner/admin（全年段默写写操作仅管理员）
   let ledGroups = []; // 我带领的年级组（grade_groups 里 leader_user_id === 我）
   let isPrepLeader = false; // 我是任意组的备课组长（与年级组长同权发布全年段默写）
+  let listArchived = false; // 本次列表响应表明当前学年已归档（data.archived 或行内 archived）
 
   /** 全年段默写发布/管理权：owner/admin、年级组长或备课组长 */
   function canPublishGrade() {
@@ -292,6 +295,7 @@
       // 我是任意组的备课组长（grade-groups 列表 prepLeaders 判定）
       isPrepLeader = (grpData.groups || []).some((g) => (g.prepLeaders || []).some((p) => p.userId === myId));
       dictations = dctData.list || [];
+      listArchived = dctData.archived === true || dictations.some((d) => d.archived);
       renderContent();
     } catch (err) {
       content.innerHTML = `
@@ -308,10 +312,12 @@
   function dictationCard(d, ctxClassId) {
     const st = d.stats || { passed: 0, failed: 0, retestRequired: 0, retestCompleted: 0 };
     const isGrade = d.scope === 'grade';
+    // 已归档（§63）：明细已删，隐藏一切写操作与详情入口（详情 404），仅展示汇总与「已归档」徽标
+    const archived = !!d.archived;
     // 登记：全年段 = 管理员或有可管理班级的老师（后端按学生所在班再校验）；班级默写 = 该班 canManage
-    const canRegister = isGrade ? isTenantAdmin || anyManageable : !!canManageMap.get(d.classId);
+    const canRegister = !archived && (isGrade ? isTenantAdmin || anyManageable : !!canManageMap.get(d.classId));
     // 上传/重传材料、删除：全年段 = 发布者（owner/admin、年级组长、备课组长）；班级默写 = 该班 canManage
-    const canManageItem = isGrade ? canPublishGrade() : !!canManageMap.get(d.classId);
+    const canManageItem = !archived && (isGrade ? canPublishGrade() : !!canManageMap.get(d.classId));
     const writeBtns = [
       canRegister ? '<button class="btn btn-sm btn-primary" data-act="register" type="button">登记</button>' : '',
       // 重默：与「登记」同权限，仅存在待重默学生时显示，文案带数量
@@ -339,6 +345,7 @@
       <div class="dct-item" data-id="${App.esc(d.id)}">
         <div class="dct-item-head">
           <span class="dct-item-title" title="${App.esc(d.title)}">${App.esc(d.title)}</span>
+          ${archived ? '<span class="badge badge-archived">已归档</span>' : ''}
           <span class="badge ${isGrade ? 'badge-info' : 'badge-leave'}">${isGrade ? '全年段' : '班级'}</span>
         </div>
         <div class="dct-item-meta">日期：${App.esc(d.dictationDate || '未设置')}</div>
@@ -351,16 +358,23 @@
         </div>
         <div class="dct-item-ops">
           ${writeBtns}
-          <button class="btn btn-sm" data-act="detail" type="button">详情</button>
+          ${archived ? '' : '<button class="btn btn-sm" data-act="detail" type="button">详情</button>'}
         </div>
       </div>`;
   }
 
   function renderContent() {
     const content = containerEl.querySelector('#dct-content');
-    // 「新建默写」仅存在可管理班级时显示
+    // 「下载归档」（§63 新版：仅历史学年 + 本学年已归档 + owner/admin 可见）
+    const dlBtn = containerEl.querySelector('#dct-btn-download-archive');
+    if (dlBtn) {
+      const isHistory = App.state.academicYear && App.state.academicYear !== App.state.currentAcademicYear;
+      dlBtn.style.display = isHistory && listArchived && isTenantAdmin ? '' : 'none';
+    }
+    // 「新建默写」仅存在可管理班级时显示；已归档学年（明细已删）同时隐藏创建与班级级写操作
+    const archivedView = dictations.some((d) => d.archived);
     const createBtn = containerEl.querySelector('#dct-btn-create');
-    if (createBtn) createBtn.style.display = anyManageable ? '' : 'none';
+    if (createBtn) createBtn.style.display = anyManageable && !archivedView ? '' : 'none';
     if (!classes.length) {
       content.innerHTML = '<div class="card"><div class="muted">当前空间还没有班级，请先在「我的班级」中创建。</div></div>';
       return;
@@ -378,7 +392,7 @@
           <div class="dct-class-head">
             <span class="card-title" style="margin:0">${App.esc(c.name)}</span>
             <span class="dct-class-count">${list.length} 次</span>
-            <button class="btn btn-sm" data-retest-class="${App.esc(c.id)}" type="button">重默·班级</button>
+            ${archivedView ? '' : `<button class="btn btn-sm" data-retest-class="${App.esc(c.id)}" type="button">重默·班级</button>`}
           </div>
           ${list.length ? list.map((d) => dictationCard(d, c.id)).join('') : '<div class="muted">暂无班级默写</div>'}
         </div>`);
@@ -909,6 +923,29 @@
     }
   }
 
+  /** 下载当前学年压缩归档（owner/admin，历史学年已归档时可用）→ JSON 文件 */
+  async function downloadArchive(btn) {
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = '下载中…';
+    try {
+      const data = await api.archive.download('dictations', App.state.academicYear);
+      const blob = new Blob([JSON.stringify(data)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `归档-默写-${App.state.academicYear}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      App.toast('归档文件已开始下载');
+    } catch (err) {
+      App.toast(errMsg(err, '下载归档失败'));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
   // ===== 视图注册 =====
 
   App.registerView('dictations', {
@@ -923,12 +960,14 @@
       isTenantAdmin = false;
       ledGroups = [];
       isPrepLeader = false;
+      listArchived = false;
       containerEl = el;
 
       el.innerHTML = `
         <div class="toolbar">
           <span class="muted">支持班级默写与全年段默写，未过学生可标记重默</span>
           <span class="spacer"></span>
+          <button id="dct-btn-download-archive" class="btn" type="button" style="display:none">下载归档</button>
           <button id="dct-btn-export" class="btn" type="button">导出统计</button>
           <button id="dct-btn-create" class="btn btn-primary" type="button">新建默写</button>
         </div>
@@ -942,6 +981,7 @@
         openCreate();
       });
       el.querySelector('#dct-btn-export').addEventListener('click', exportStats);
+      el.querySelector('#dct-btn-download-archive').addEventListener('click', (e) => downloadArchive(e.currentTarget));
 
       el.querySelector('#dct-content').addEventListener('click', (e) => {
         const retestBtn = e.target.closest('[data-retest-class]');
