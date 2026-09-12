@@ -119,9 +119,11 @@ window.App = {
     });
     const container = document.getElementById('view-container');
     container.innerHTML = '';
-    // 同步 hash（#/name），使浏览器前进/后退与直达链接可用
+    // 推进 hash（#/name）：产生历史条目，使浏览器前进/后退可切换视图。
+    // 注：history.pushState 本身不会触发 hashchange，无需抑制标记；
+    // 由底部 hashchange/popstate 监听 + state.view 守卫处理后退与直达。
     if (location.hash !== '#/' + name) {
-      try { history.replaceState(null, '', '#/' + name); } catch (e) { /* 忽略 */ }
+      try { history.pushState(null, '', '#/' + name); } catch (e) { /* 忽略 */ }
     }
     await def.render(container);
     def.init?.();
@@ -442,7 +444,42 @@ window.App = {
     const isAdmin = App.state.user?.platformRole === 'platform_admin';
     document.getElementById('nav-admin')?.classList.toggle('hidden', !isAdmin);
     App.updateTenantSwitcher();
-    App.showView('dashboard');
+    // 初始视图：登录前暂存的目标路由（wb.redirect）> hash 中的有效视图 > dashboard
+    let initial = null;
+    const redirect = sessionStorage.getItem('wb.redirect');
+    if (redirect) {
+      sessionStorage.removeItem('wb.redirect');
+      const r = redirect.replace(/^#\/?/, '');
+      if (App._views[r]) initial = r;
+    }
+    if (!initial) initial = App._hashView();
+    App.showView(initial || 'dashboard');
+  },
+
+  /** 解析 location.hash 为视图名：仅当对应视图已注册时返回，否则 null */
+  _hashView() {
+    const name = location.hash.replace(/^#\/?/, '');
+    return App._views[name] ? name : null;
+  },
+
+  /**
+   * 未登录路由规则：
+   * - '' / '#/' / '#/home' → 首页（landing.js）
+   * - '#/login' / '#/register' → 对应表单
+   * - 其他 '#/x' → 登录表单，并把 '#/x' 记入 sessionStorage 'wb.redirect'，登录成功后跳回
+   */
+  _routeGuest() {
+    const name = (location.hash || '').replace(/^#\/?/, '');
+    if (!name || name === 'home') {
+      App.showLanding();
+    } else if (name === 'login') {
+      App.showAuthScreen('login');
+    } else if (name === 'register') {
+      App.showAuthScreen('register');
+    } else {
+      sessionStorage.setItem('wb.redirect', '#/' + name);
+      App.showAuthScreen('login');
+    }
   },
 
   /** 应用启动：auth.me 成功→进主框架；失败→登录/注册视图 */
@@ -487,16 +524,24 @@ window.App = {
       if (err && err.code !== 'UNAUTHORIZED') {
         App.toast((err && err.message) || '加载失败');
       }
-      // 未登录/会话过期 → 显示登录/注册视图
-      App.showAuthScreen('login');
+      // 未登录/会话过期 → 按 hash 路由：首页 / 登录 / 注册 / 记 redirect 后回登录
+      App._routeGuest();
     }
   },
 };
 
 document.addEventListener('DOMContentLoaded', () => App.boot());
 
-// hash 路由（#/name）：前进/后退与页面内 #/ 链接直达视图
-window.addEventListener('hashchange', () => {
-  const name = location.hash.replace(/^#\/?/, '');
-  if (name && App._views[name] && App.state.view !== name) App.showView(name);
-});
+// hash 路由（#/name）：前进/后退（遍历历史时 popstate 与 hashchange 都会触发）
+// 与页面内 #/ 链接直达视图。showView 的 pushState 不产生事件，故无需抑制标记；
+// App.state.view !== name 守卫保证一次导航只渲染一次（两个事件都触发时第二次为空操作）。
+function routeFromLocation() {
+  if (App.state.user) {
+    const name = App._hashView();
+    if (name && App.state.view !== name) App.showView(name);
+  } else {
+    App._routeGuest();
+  }
+}
+window.addEventListener('hashchange', routeFromLocation);
+window.addEventListener('popstate', routeFromLocation);

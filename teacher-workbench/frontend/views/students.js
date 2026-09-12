@@ -102,10 +102,10 @@
     return h;
   }
 
-  /** 是否命中预警（作业未交>3 或 默写未过>5 且未重默） */
+  /** 是否命中预警：本周有作业未交、默写需重默，或达到严重阈值（作业未交>3 / 默写未过>5 且未重默） */
   function isAlerted(s) {
     const a = s.alert;
-    return !!(a && (a.homework_alert || a.dictation_alert));
+    return !!(a && (a.needs_retest || a.missing_homework_this_week > 0 || a.homework_alert || a.dictation_alert));
   }
 
   // ===== 数据加载 =====

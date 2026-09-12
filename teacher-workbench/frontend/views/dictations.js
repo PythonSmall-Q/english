@@ -270,16 +270,19 @@
       App.toast(errMsg(err, '加载失败'));
       return;
     }
-    if (!roster.length) {
-      const hint =
-        d.scope === 'grade' && !isTenantAdmin && !anyManageable
+    // 只显示未登记学生：已有结果记录（含未过/需重默/已重默）的不出现在名单里
+    const registeredIds = new Set(existed.map((r) => r.studentId));
+    const pending = roster.filter((s) => !registeredIds.has(s.id));
+    if (!pending.length) {
+      const hint = roster.length
+        ? '该范围学生已全部登记完成。'
+        : d.scope === 'grade' && !isTenantAdmin && !anyManageable
           ? '仅该班老师可登记本次全年段默写'
           : '暂无学生名单，请先在学生管理中添加学生。';
       App.modal('登记默写结果', `<div class="muted">${App.esc(hint)}</div>`);
       return;
     }
-    const passedMap = new Map(existed.map((r) => [r.studentId, r.passed]));
-    const rows = roster
+    const rows = pending
       .slice()
       .sort((x, y) => {
         const nx = x.student_no || '￿';
@@ -289,7 +292,7 @@
       .map(
         (s) => `
         <label class="dct-check-row">
-          <input type="checkbox" data-sid="${App.esc(s.id)}"${passedMap.get(s.id) ? ' checked' : ''}>
+          <input type="checkbox" data-sid="${App.esc(s.id)}">
           <span class="dct-check-no">${App.esc(s.student_no || '—')}</span>
           <span>${App.esc(s.name)}</span>
         </label>`
