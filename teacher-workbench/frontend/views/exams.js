@@ -541,11 +541,18 @@
             }
           }
           try {
-            if (isEdit) await api.exams.update(exam.id, body);
-            else await api.exams.create(body);
+            if (isEdit) {
+              await api.exams.update(exam.id, body);
+              const target = examsCache.find((e) => e.id === exam.id);
+              if (target) Object.assign(target, body);
+            } else {
+              const created = await api.exams.create(body);
+              // 新建考试无成绩：人数 0 / 均分 —；列表按日期倒序，新建的排在最前
+              examsCache.unshift({ ...created, student_count: 0, avg_score: null });
+            }
             App.closeModal();
             App.toast(isEdit ? '已保存' : '考试已创建');
-            loadExams();
+            refreshLocal();
           } catch (err) {
             reportErr(err);
           }

@@ -5,7 +5,7 @@
  *       新建作业、登记上交（名单勾选 + 全部已交/全部未交）、详情（未交名单）、
  *       删除、导出统计（.xlsx，每班一个工作表）
  * 数据：api.classes / api.assignments / api.students
- * 说明：提交率等统计数字全部来自后端实时聚合（§31），前端不自行保存统计。
+ * 说明：提交率等统计数字来自后端实时聚合（§31）；写操作成功后前端就地 patch 本地列表并局部重渲染，不再整表重新请求。
  */
 
 (function () {
@@ -123,7 +123,7 @@
         <div class="asg-progress"><div class="asg-progress-fill${pct < 60 ? ' low' : ''}" style="width:${pct}%"></div></div>
         <div class="asg-item-stats">
           <span>提交率 ${pct}%</span>
-          <span>已交 ${st.submitted} / 总 ${st.total}</span>
+          <span>已交 ${st.submitted} / 总 ${st.total ?? '—'}</span>
         </div>
         <div class="asg-item-ops">
           ${writeBtns}
@@ -190,10 +190,22 @@
             return;
           }
           try {
-            await api.assignments.create(body);
+            const res = await api.assignments.create(body);
             App.closeModal();
             App.toast('已创建作业');
-            await loadData();
+            // 就地更新：接口仅返回 { id }，用表单值构造新卡片
+            // stats.total 为本班学生数（后端聚合），本地未知先置 null，卡片显示「—」，下次整页加载时纠正
+            assignments.unshift({
+              id: res && res.id,
+              classId: body.class_id,
+              title: body.title,
+              content: body.content,
+              deadline: body.deadline,
+              status: 'active',
+              academicYear: App.state?.academicYear || null,
+              stats: { total: null, submitted: 0, missing: 0, submitRate: 0 },
+            });
+            renderContent();
           } catch (err) {
             App.toast(errMsg(err));
           }
@@ -265,7 +277,17 @@
             await api.assignments.bulkSubmissions(id, { submitted, missing });
             App.closeModal();
             App.toast(`已登记：已交 ${submitted.length} 人，未交 ${missing.length} 人`);
-            await loadData();
+            // 就地更新：名单含全班学生，统计可由勾选结果直接算出
+            const a = assignments.find((x) => x.id === id);
+            if (a) {
+              const total = list.length;
+              const st = (a.stats = a.stats || {});
+              st.total = total;
+              st.submitted = submitted.length;
+              st.missing = missing.length;
+              st.submitRate = total > 0 ? Math.round((submitted.length / total) * 100) / 100 : 0;
+            }
+            renderContent();
           } catch (err) {
             App.toast(errMsg(err));
           }
@@ -324,7 +346,9 @@
     try {
       await api.assignments.remove(id);
       App.toast('已删除');
-      await loadData();
+      const idx = assignments.findIndex((x) => x.id === id);
+      if (idx >= 0) assignments.splice(idx, 1);
+      renderContent();
     } catch (err) {
       App.toast(errMsg(err));
     }

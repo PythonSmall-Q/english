@@ -59,22 +59,57 @@ function clsInjectStyles() {
   document.head.appendChild(style);
 }
 
+// ===== 视图级状态（render 首屏加载后缓存；写操作就地 patch 本地状态 + rerender()，不再整视图 refetch）=====
+let clsView = null; // 视图对象（render 内 this），供模块级/事件回调调用 openForm 等
+let clsEl = null;
+let clsClasses = [];
+let clsGroups = [];
+let clsMembers = [];
+let clsMyPerms = null; // 我的功能权限（取不到默认显示，由后端 403 兜底）
+let clsIsAdmin = false;
+let clsMyId = '';
+
+/** 成员 id → 成员对象（班主任/任课老师/组长 patch 展示名用） */
+function clsMember(uid) {
+  return clsMembers.find((m) => m.user_id === uid) || null;
+}
+
+function clsMemberName(uid) {
+  const m = clsMember(uid);
+  return m ? m.display_name || m.email || null : null;
+}
+
+/** 就地调整班级所属年级组：同步班卡片（grade_group_id/name）与组卡片（classes 清单/classCount） */
+function clsSetClassGroup(cls, groupId) {
+  const oldG = clsGroups.find((g) => g.id === cls.grade_group_id);
+  if (oldG) {
+    oldG.classes = (oldG.classes || []).filter((x) => x.id !== cls.id);
+    oldG.classCount = Math.max(0, Number(oldG.classCount || 0) - 1);
+  }
+  const newG = groupId ? clsGroups.find((g) => g.id === groupId) || null : null;
+  if (newG) {
+    newG.classes = [...(newG.classes || []), { id: cls.id, name: cls.name }];
+    newG.classCount = Number(newG.classCount || 0) + 1;
+  }
+  cls.grade_group_id = newG ? newG.id : null;
+  cls.grade_group_name = newG ? newG.name : null;
+}
+
 App.registerView('classes', {
   title: '我的班级',
   icon: '🏫',
 
   async render(el) {
     clsInjectStyles();
+    clsView = this;
+    clsEl = el;
     el.innerHTML = '<div class="card"><div class="card-title">我的班级</div><div class="muted">加载中…</div></div>';
 
     const role = App.state.tenant?.role;
-    const isAdmin = role === 'owner' || role === 'admin';
-    const myId = App.state.user?.id;
+    clsIsAdmin = role === 'owner' || role === 'admin';
+    clsMyId = App.state.user?.id;
 
-    let classes;
-    let groups = [];
-    let members = [];
-    let myPerms = null; // 我的功能权限（取不到默认显示，由后端 403 兜底）
+    // 首屏/失败重试才走网络；写操作成功后一律就地 patch + rerender()（见文件头状态说明）
     try {
       // 班级 + 年级组并行加载（grade-groups 列表对空间成员开放，个人空间报错则容错为空）
       const [clsData, grpData, quotaData] = await Promise.all([
@@ -82,9 +117,9 @@ App.registerView('classes', {
         api.gradeGroups.list().catch(() => ({ groups: [] })),
         api.tenants.myQuota(App.state.tenant.id).catch(() => null),
       ]);
-      classes = clsData.classes || [];
-      groups = grpData.groups || [];
-      myPerms = quotaData?.permissions || null;
+      clsClasses = clsData.classes || [];
+      clsGroups = grpData.groups || [];
+      clsMyPerms = quotaData?.permissions || null;
     } catch (err) {
       el.innerHTML = '<div class="card"><div class="card-title">我的班级</div><div class="muted">加载失败，请稍后重试</div></div>';
       App.toast((err && err.message) || '加载失败');
@@ -92,16 +127,34 @@ App.registerView('classes', {
     }
 
     // 我带领的组（年级组长，即使不是 owner/admin 也有管理入口）
-    const ledGroups = groups.filter((g) => g.leader_user_id && g.leader_user_id === myId);
+    const ledGroups = clsGroups.filter((g) => g.leader_user_id && g.leader_user_id === clsMyId);
     // 成员列表：owner/admin（选组长/班主任）、任一班 canAssignTeachers（班主任/组长设老师）需要；个人空间 members 为空/报错则容错
-    if (isAdmin || ledGroups.length || classes.some((c) => c.canAssignTeachers)) {
+    if (clsIsAdmin || ledGroups.length || clsClasses.some((c) => c.canAssignTeachers)) {
       try {
         const t = await api.tenants.get(App.state.tenant.id);
-        members = (t.members || []).filter((m) => !m.status || m.status === 'active');
+        clsMembers = (t.members || []).filter((m) => !m.status || m.status === 'active');
       } catch (e) {
-        members = [];
+        clsMembers = [];
       }
     }
+
+    this.rerender();
+  },
+
+  /**
+   * 用内存中的 classes/groups/members/myPerms 局部重建 DOM 并重绑事件（无网络请求）。
+   * render 首屏加载完成后调用；各写操作就地 patch 本地状态后调用。
+   */
+  rerender() {
+    const el = clsEl;
+    const isAdmin = clsIsAdmin;
+    const myId = clsMyId;
+    const classes = clsClasses;
+    const groups = clsGroups;
+    const members = clsMembers;
+    const myPerms = clsMyPerms;
+    // 我带领的组（年级组长，即使不是 owner/admin 也有管理入口）
+    const ledGroups = groups.filter((g) => g.leader_user_id && g.leader_user_id === myId);
 
     // 任课老师摘要（组长面板用）：「英语·张三、数学·李四」，无则「无」
     const subsSummary = (c) => {
@@ -279,15 +332,15 @@ App.registerView('classes', {
 
     // —— 事件绑定 ——
     const clsNewBtn = document.getElementById('cls-new');
-    if (clsNewBtn) clsNewBtn.addEventListener('click', () => this.openForm(null));
+    if (clsNewBtn) clsNewBtn.addEventListener('click', () => clsView.openForm(null));
 
     const ggSel = document.getElementById('cls-new-group');
-    if (ggSel) ggSel.addEventListener('click', () => this.openGroupForm(members));
+    if (ggSel) ggSel.addEventListener('click', () => clsView.openGroupForm(members));
 
     el.querySelectorAll('[data-grp-leader]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const g = groups.find((x) => x.id === btn.dataset.grpLeader);
-        if (g) this.openSetLeader(g, members);
+        if (g) clsView.openSetLeader(g, members);
       });
     });
 
@@ -301,8 +354,16 @@ App.registerView('classes', {
         if (!ok) return;
         try {
           await api.gradeGroups.remove(g.id);
+          // 组内班级本地移出该组（服务端 grade_group_id 置空，班级不删）
+          clsClasses.forEach((c) => {
+            if (c.grade_group_id === g.id) {
+              c.grade_group_id = null;
+              c.grade_group_name = null;
+            }
+          });
+          clsGroups = clsGroups.filter((x) => x.id !== g.id);
           App.toast('已删除年级组');
-          App.showView('classes'); // 重新渲染
+          clsView.rerender();
         } catch (err) {
           App.toast((err && err.message) || '操作失败');
         }
@@ -315,12 +376,14 @@ App.registerView('classes', {
         const cls = classes.find((c) => c.id === sel.dataset.clsGg);
         if (!cls) return;
         try {
-          await api.classes.update(cls.id, { grade_group_id: sel.value || null });
+          const gid = sel.value || null;
+          await api.classes.update(cls.id, { grade_group_id: gid });
+          clsSetClassGroup(cls, gid);
           App.toast(`「${cls.name}」年级组已更新`);
-          App.showView('classes'); // 重新渲染
+          clsView.rerender();
         } catch (err) {
           App.toast((err && err.message) || '操作失败');
-          App.showView('classes');
+          clsView.rerender(); // 还原下拉选择
         }
       });
     });
@@ -331,12 +394,15 @@ App.registerView('classes', {
         const cls = classes.find((c) => c.id === sel.dataset.clsT);
         if (!cls) return;
         try {
-          await api.classes.update(cls.id, { teacher_id: sel.value || null });
+          const tid = sel.value || null;
+          await api.classes.update(cls.id, { teacher_id: tid });
+          cls.teacher_id = tid;
+          cls.teacher_name = clsMemberName(tid);
           App.toast(`「${cls.name}」班主任已更新`);
-          App.showView('classes'); // 重新渲染
+          clsView.rerender();
         } catch (err) {
           App.toast((err && err.message) || '操作失败');
-          App.showView('classes');
+          clsView.rerender(); // 还原下拉选择
         }
       });
     });
@@ -345,7 +411,7 @@ App.registerView('classes', {
     el.querySelectorAll('[data-cls-addt]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const cls = classes.find((c) => c.id === btn.dataset.clsAddt);
-        if (cls) this.openAddTeacher(cls, members);
+        if (cls) clsView.openAddTeacher(cls, members);
       });
     });
 
@@ -356,8 +422,9 @@ App.registerView('classes', {
         if (!cls) return;
         try {
           await api.classes.removeTeacher(cls.id, btn.dataset.uid);
+          cls.subjectTeachers = (cls.subjectTeachers || []).filter((t) => t.userId !== btn.dataset.uid);
           App.toast('已移除任课老师');
-          App.showView('classes'); // 重新渲染
+          clsView.rerender();
         } catch (err) {
           App.toast((err && err.message) || '操作失败');
         }
@@ -368,7 +435,7 @@ App.registerView('classes', {
     el.querySelectorAll('[data-cls-setup]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const cls = classes.find((c) => c.id === btn.dataset.clsSetup);
-        if (cls) this.openClassTeachers(cls, members);
+        if (cls) clsView.openClassTeachers(cls, members);
       });
     });
 
@@ -384,7 +451,7 @@ App.registerView('classes', {
     el.querySelectorAll('[data-cls-edit]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const cls = classes.find((c) => c.id === btn.dataset.clsEdit);
-        if (cls) this.openForm(cls);
+        if (cls) clsView.openForm(cls);
       });
     });
 
@@ -396,8 +463,9 @@ App.registerView('classes', {
         if (!ok) return;
         try {
           await api.classes.remove(cls.id);
+          clsClasses = clsClasses.filter((x) => x.id !== cls.id);
           App.toast('已删除');
-          App.showView('classes'); // 重新渲染
+          clsView.rerender();
         } catch (err) {
           App.toast((err && err.message) || '操作失败');
         }
@@ -436,13 +504,24 @@ App.registerView('classes', {
           try {
             if (isEdit) {
               await api.classes.update(cls.id, body);
+              Object.assign(cls, body);
               App.toast('已保存');
             } else {
-              await api.classes.create(body);
+              const res = await api.classes.create(body);
+              // 创建者即班主任（teacher_id 服务端填入当前用户），本地补展示字段
+              clsClasses.unshift({
+                student_count: 0,
+                canManage: true,
+                teacher_id: clsMyId,
+                teacher_name: clsMemberName(clsMyId),
+                academic_year: App.state.academicYear || App.state.currentAcademicYear || null,
+                ...body,
+                ...(res && res.id ? { id: res.id } : {}),
+              });
               App.toast('班级创建成功');
             }
             App.closeModal();
-            App.showView('classes'); // 重新渲染
+            clsView.rerender();
           } catch (err) {
             saveBtn.disabled = false;
             if (err && err.code === 'QUOTA_EXCEEDED') {
@@ -498,10 +577,20 @@ App.registerView('classes', {
           const saveBtn = document.getElementById('cls-g-save');
           saveBtn.disabled = true;
           try {
-            await api.gradeGroups.create({ name, leaderUserId });
+            const res = await api.gradeGroups.create({ name, leaderUserId });
+            const m = clsMember(leaderUserId);
+            clsGroups.push({
+              classes: [],
+              classCount: 0,
+              leader_name: m ? m.display_name || null : null,
+              leader_email: m ? m.email || null : null,
+              id: res && res.id ? res.id : undefined,
+              name,
+              leader_user_id: leaderUserId,
+            });
             App.closeModal();
             App.toast('年级组创建成功');
-            App.showView('classes'); // 重新渲染
+            clsView.rerender();
           } catch (err) {
             saveBtn.disabled = false;
             App.toast((err && err.message) || '操作失败');
@@ -531,9 +620,13 @@ App.registerView('classes', {
           saveBtn.disabled = true;
           try {
             await api.gradeGroups.update(group.id, { leaderUserId });
+            const m = clsMember(leaderUserId);
+            group.leader_user_id = leaderUserId;
+            group.leader_name = m ? m.display_name || null : null;
+            group.leader_email = m ? m.email || null : null;
             App.closeModal();
             App.toast(leaderUserId ? '组长已设置' : '已撤销组长');
-            App.showView('classes'); // 重新渲染
+            clsView.rerender();
           } catch (err) {
             saveBtn.disabled = false;
             App.toast((err && err.message) || '操作失败');
@@ -579,9 +672,14 @@ App.registerView('classes', {
           saveBtn.disabled = true;
           try {
             await api.classes.addTeacher(cls.id, { userId, subject });
+            const m = clsMember(userId);
+            cls.subjectTeachers = [
+              ...(cls.subjectTeachers || []),
+              { userId, name: m ? m.display_name || m.email || '' : '', subject },
+            ];
             App.closeModal();
             App.toast('已添加任课老师');
-            App.showView('classes'); // 重新渲染
+            clsView.rerender();
           } catch (err) {
             saveBtn.disabled = false;
             App.toast((err && err.message) || '操作失败');
@@ -594,17 +692,7 @@ App.registerView('classes', {
   /** 班级老师设置 modal（组长面板「设置老师」入口：班主任下拉 + 任课老师增删，全部 change/点击即保存） */
   openClassTeachers(cls, members) {
     const view = this;
-    // 弹窗内操作成功后重新拉取本班数据并重画弹窗；弹窗关闭（任意方式）后刷新背景视图
-    async function refresh() {
-      try {
-        const data = await api.classes.list();
-        const fresh = (data.classes || []).find((x) => x.id === cls.id);
-        if (fresh) cls = fresh;
-      } catch (e) {
-        /* 拉取失败仍用本地数据重画 */
-      }
-      draw();
-    }
+    // cls 即 classes 数组中的对象引用：弹窗内操作成功后就地 patch 再重画弹窗，不发列表请求
     function draw() {
       const excluded = new Set([cls.teacher_id, ...(cls.subjectTeachers || []).map((t) => t.userId)].filter(Boolean));
       const candidates = members.filter((m) => !excluded.has(m.user_id));
@@ -646,9 +734,12 @@ App.registerView('classes', {
         (modal) => {
           modal.querySelector('#cls-ct-t').onchange = async (e) => {
             try {
-              await api.classes.update(cls.id, { teacher_id: e.target.value || null });
+              const tid = e.target.value || null;
+              await api.classes.update(cls.id, { teacher_id: tid });
+              cls.teacher_id = tid;
+              cls.teacher_name = clsMemberName(tid);
               App.toast('班主任已更新');
-              await refresh();
+              draw();
             } catch (err) {
               App.toast((err && err.message) || '操作失败');
               draw();
@@ -658,8 +749,9 @@ App.registerView('classes', {
             btn.onclick = async () => {
               try {
                 await api.classes.removeTeacher(cls.id, btn.dataset.rmt);
+                cls.subjectTeachers = (cls.subjectTeachers || []).filter((t) => t.userId !== btn.dataset.rmt);
                 App.toast('已移除任课老师');
-                await refresh();
+                draw();
               } catch (err) {
                 App.toast((err && err.message) || '操作失败');
               }
@@ -676,8 +768,13 @@ App.registerView('classes', {
             addBtn.disabled = true;
             try {
               await api.classes.addTeacher(cls.id, { userId, subject });
+              const m = clsMember(userId);
+              cls.subjectTeachers = [
+                ...(cls.subjectTeachers || []),
+                { userId, name: m ? m.display_name || m.email || '' : '', subject },
+              ];
               App.toast('已添加任课老师');
-              await refresh();
+              draw();
             } catch (err) {
               addBtn.disabled = false;
               App.toast((err && err.message) || '操作失败');
@@ -685,17 +782,17 @@ App.registerView('classes', {
           };
           modal.querySelector('#cls-ct-done').onclick = () => {
             App.closeModal();
-            App.showView('classes'); // 重新渲染
+            view.rerender();
           };
         }
       );
     }
-    // 弹窗被任意方式关闭（×/遮罩/完成）后刷新背景视图
+    // 弹窗被任意方式关闭（×/遮罩/完成）后刷新背景视图（局部，无网络请求）
     const root = document.getElementById('modal-root');
     const mo = new MutationObserver(() => {
       if (!root.querySelector('.modal-mask')) {
         mo.disconnect();
-        App.showView('classes'); // 重新渲染
+        view.rerender();
       }
     });
     mo.observe(root, { childList: true });

@@ -42,6 +42,7 @@
   let filterQ = '';
   let alertOnly = false;
   let containerEl = null;
+  let syncClassOptions = () => {}; // render 内赋值：同步工具栏班级下拉（refreshLocal 复用）
   let canManageMap = new Map(); // class_id → canManage（班级级权限感知）
   let myId = ''; // 当前用户 id：用于「我的班级」置顶排序
 
@@ -125,12 +126,10 @@
       // 班级级权限感知：编辑/删除学生、添加学生按 canManage 控制（服务端另有 403 兜底）
       canManageMap = new Map(classes.map((c) => [c.id, !!c.canManage]));
       anyManageable = classes.some((c) => !!c.canManage);
-      // 传入的班级可能已被删除，兜底重置为「全部班级」
-      if (filterClassId && !classes.some((c) => c.id === filterClassId)) filterClassId = '';
       const list = stuData.students || [];
       // 预警统计已由列表接口批量返回（§55），无需逐生调详情
       students = list;
-      renderContent();
+      refreshLocal();
     } catch (err) {
       content.innerHTML = `
         <div class="card">
@@ -139,6 +138,17 @@
         </div>`;
       content.querySelector('#stu-retry').onclick = loadData;
     }
+  }
+
+  /**
+   * 无网络局部重渲染（写操作成功后调用）：班级筛选兜底重置、同步工具栏班级下拉、重画列表。
+   * 工具条/筛选/滚动位置由 renderContent 就地更新 DOM 天然保留。
+   */
+  function refreshLocal() {
+    // 筛选的班级可能已被删除，兜底重置为「全部班级」
+    if (filterClassId && !classes.some((c) => c.id === filterClassId)) filterClassId = '';
+    syncClassOptions();
+    renderContent();
   }
 
   // ===== 渲染 =====
@@ -250,11 +260,26 @@
             return;
           }
           try {
-            if (isEdit) await api.students.update(student.id, body);
-            else await api.students.create(body);
+            if (isEdit) {
+              await api.students.update(student.id, body);
+              Object.assign(student, body); // 就地 patch，alert 统计保持原值
+            } else {
+              const res = await api.students.create(body);
+              students.push({
+                alert: {
+                  missing_homework_this_week: 0,
+                  failed_dictations_not_retested: 0,
+                  needs_retest: false,
+                  homework_alert: false,
+                  dictation_alert: false,
+                },
+                ...body,
+                ...(res && typeof res === 'object' ? res : {}),
+              });
+            }
             App.closeModal();
             App.toast(isEdit ? '已保存' : '已添加');
-            await loadData();
+            refreshLocal();
           } catch (err) {
             App.toast(errMsg(err));
           }
@@ -329,8 +354,10 @@
     if (!ok) return;
     try {
       await api.students.remove(id);
+      const idx = students.findIndex((x) => x.id === id);
+      if (idx >= 0) students.splice(idx, 1);
       App.toast('已删除');
-      await loadData();
+      refreshLocal();
     } catch (err) {
       App.toast(errMsg(err));
     }
@@ -524,7 +551,7 @@
         <div id="stu-content"></div>`;
 
       const classSelect = el.querySelector('#stu-filter-class');
-      const syncClassOptions = () => {
+      syncClassOptions = () => {
         classSelect.innerHTML =
           `<option value="">全部班级</option>` +
           sortedClasses().map((c) => `<option value="${App.esc(c.id)}">${App.esc(c.name)}</option>`).join('');
@@ -572,8 +599,6 @@
       });
 
       await loadData();
-      // 班级下拉随最新数据同步（loadData 内可能已刷新 classes）
-      syncClassOptions();
     },
   });
 })();

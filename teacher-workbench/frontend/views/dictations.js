@@ -1,10 +1,12 @@
 /**
  * views/dictations.js — 默写管理（§32/§33/§34/§58）
  *
- * 功能：班级默写按班分栏 + 全年段默写（scope=grade）单独一栏；
+ * 功能：班级默写按班分栏 + 全年段默写（scope=grade）单独一栏（仅 owner/admin 或
+ *       我带领的年级组非空时显示；普通老师改为在可管理班级栏内看到下派任务）；
  *       每次默写卡片（标题/日期/通过/未过/需重默）、新建默写、
  *       登记（名单勾选 Pass）、详情（未通过名单 + 重默状态）、删除、
- *       「重默·班级」（勾选标记已重默）、导出统计（.xlsx，每班一个工作表）
+ *       「重默」（卡片级，勾选本次重默通过）、「重默·班级」（勾选标记已重默）、
+ *       导出统计（.xlsx，每班一个工作表）
  * 数据：api.classes / api.dictations / api.students
  */
 
@@ -49,6 +51,7 @@
   let canManageMap = new Map(); // class_id → canManage（班级级权限感知）
   let anyManageable = false; // 是否存在可管理班级
   let isTenantAdmin = false; // owner/admin（全年段默写写操作仅管理员）
+  let ledGroups = []; // 我带领的年级组（grade_groups 里 leader_user_id === 我）
 
   /** 统一错误提示：额度超限给固定文案（§21） */
   function errMsg(err, fallback) {
@@ -91,13 +94,20 @@
     const content = containerEl.querySelector('#dct-content');
     content.innerHTML = '<div class="card"><div class="muted">加载中…</div></div>';
     try {
-      const [clsData, dctData] = await Promise.all([api.classes.list(), api.dictations.list()]);
+      const [clsData, dctData, grpData] = await Promise.all([
+        api.classes.list(),
+        api.dictations.list(),
+        api.gradeGroups.list().catch(() => ({ groups: [] })),
+      ]);
       classes = clsData.classes || [];
       // 班级级权限感知：登记/重传材料/删除按该班 canManage 控制；全年段默写登记对有可管理班级的老师开放，材料/删除仅 owner/admin（服务端另有 403 兜底）
       canManageMap = new Map(classes.map((c) => [c.id, !!c.canManage]));
       anyManageable = classes.some((c) => !!c.canManage);
       const role = App.state.tenant?.role;
       isTenantAdmin = role === 'owner' || role === 'admin';
+      // 我带领的年级组（与班级视图同口径）：全年段默写独立栏对 owner/admin 或年级组长可见
+      const myId = App.state.user?.id;
+      ledGroups = (grpData.groups || []).filter((g) => g.leader_user_id && g.leader_user_id === myId);
       dictations = dctData.list || [];
       renderContent();
     } catch (err) {
@@ -121,6 +131,10 @@
     const canManageItem = isGrade ? isTenantAdmin : !!canManageMap.get(d.classId);
     const writeBtns = [
       canRegister ? '<button class="btn btn-sm btn-primary" data-act="register" type="button">登记</button>' : '',
+      // 重默：与「登记」同权限，仅存在待重默学生时显示，文案带数量
+      canRegister && st.retestRequired > 0
+        ? `<button class="btn btn-sm" data-act="retest" type="button">重默 ${st.retestRequired}</button>`
+        : '',
       canManageItem
         ? `<button class="btn btn-sm" data-act="material" type="button">${d.materialUrl ? '重传材料' : '上传材料'}</button>
            <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>`
@@ -169,19 +183,26 @@
       return;
     }
     const parts = [];
-    // 全年段默写单独一栏（§32）
+    // 全年段默写单独一栏（§32）：仅 owner/admin 或我带领的年级组非空时渲染；
+    // 否则全年段默写作为下派任务并入我可管理班级的班级栏（不可管理班级不追加，避免重复渲染）
+    const showGradeCol = isTenantAdmin || ledGroups.length > 0;
     const gradeList = dictations.filter((d) => d.scope === 'grade');
-    parts.push(`
-      <div class="card">
-        <div class="dct-class-head">
-          <span class="card-title" style="margin:0">全年段默写</span>
-          <span class="dct-class-count">${gradeList.length} 次</span>
-        </div>
-        ${gradeList.length ? gradeList.map(dictationCard).join('') : '<div class="muted">暂无全年段默写</div>'}
-      </div>`);
+    if (showGradeCol) {
+      parts.push(`
+        <div class="card">
+          <div class="dct-class-head">
+            <span class="card-title" style="margin:0">全年段默写</span>
+            <span class="dct-class-count">${gradeList.length} 次</span>
+          </div>
+          ${gradeList.length ? gradeList.map(dictationCard).join('') : '<div class="muted">暂无全年段默写</div>'}
+        </div>`);
+    }
     // 各班级默写分栏
     classes.forEach((c) => {
-      const list = dictations.filter((d) => d.scope !== 'grade' && d.classId === c.id);
+      const manageable = !!canManageMap.get(c.id);
+      const list = dictations.filter(
+        (d) => (d.scope !== 'grade' && d.classId === c.id) || (!showGradeCol && manageable && d.scope === 'grade')
+      );
       parts.push(`
         <div class="card">
           <div class="dct-class-head">
@@ -242,10 +263,21 @@
             return;
           }
           try {
-            await api.dictations.create(body);
+            const res = await api.dictations.create(body);
             App.closeModal();
             App.toast('已创建默写');
-            await loadData();
+            // 就地更新：接口仅返回 { id }，用表单值构造新卡片（stats 全 0）
+            dictations.unshift({
+              id: res && res.id,
+              classId: body.scope === 'class' ? body.class_id : null,
+              title: body.title,
+              scope: body.scope,
+              materialUrl: null,
+              dictationDate: body.dictation_date,
+              academicYear: App.state?.academicYear || null,
+              stats: { passed: 0, failed: 0, retestRequired: 0, retestCompleted: 0 },
+            });
+            renderContent();
           } catch (err) {
             App.toast(errMsg(err));
           }
@@ -327,7 +359,25 @@
             await api.dictations.bulkResults(id, { passed, failed });
             App.closeModal();
             App.toast(`已登记：通过 ${passed.length} 人，未过 ${failed.length} 人`);
-            await loadData();
+            // 就地更新：名单里全是此前未登记的学生，stats 直接累加
+            const d = dictations.find((x) => x.id === id);
+            if (d) {
+              const st = (d.stats = d.stats || { passed: 0, failed: 0, retestRequired: 0, retestCompleted: 0 });
+              st.passed += passed.length;
+              st.retestRequired += failed.length; // 后端 failed 记录带 retest_required=1，计入「需重默」
+              // 全年段下派进度：按涉及学生的班级累加 registered（名单含 class_id）
+              if (Array.isArray(d.classProgress) && d.classProgress.length && Array.isArray(roster)) {
+                const involved = new Set([...passed, ...failed]);
+                const perClass = new Map();
+                roster.forEach((s) => {
+                  if (involved.has(s.id)) perClass.set(s.class_id, (perClass.get(s.class_id) || 0) + 1);
+                });
+                d.classProgress.forEach((p) => {
+                  if (perClass.has(p.classId)) p.registered += perClass.get(p.classId);
+                });
+              }
+            }
+            renderContent();
           } catch (err) {
             App.toast(errMsg(err));
           }
@@ -455,16 +505,114 @@
           }
           try {
             let total = 0;
+            const updatedMap = new Map();
             await Promise.all(
               [...groups.entries()].map(([did, sids]) =>
                 api.dictations.retest(did, { studentIds: sids, completed: true }).then((r) => {
-                  total += (r && r.updated) || 0;
+                  const n = (r && r.updated) || 0;
+                  total += n;
+                  updatedMap.set(did, n);
                 })
               )
             );
             App.closeModal();
             App.toast(`已标记 ${total} 人重默完成`);
-            await loadData();
+            // 就地更新：重默完成后这些学生从「需重默」转入「未过且已重默」
+            updatedMap.forEach((n, did) => {
+              if (!n) return;
+              const d = dictations.find((x) => x.id === did);
+              if (!d) return;
+              const st = (d.stats = d.stats || { passed: 0, failed: 0, retestRequired: 0, retestCompleted: 0 });
+              st.retestCompleted += n;
+              st.retestRequired = Math.max(0, st.retestRequired - n);
+              st.failed += n;
+            });
+            renderContent();
+          } catch (err) {
+            App.toast(errMsg(err));
+          }
+        };
+      }
+    );
+  }
+
+  // ===== 弹窗：重默（卡片级，勾选为本次重默通过） =====
+
+  async function openRetestItem(id) {
+    const d = dictations.find((x) => x.id === id);
+    App.modal(`重默 — ${d ? d.title : ''}`, '<div class="muted">加载中…</div>');
+    let det;
+    try {
+      det = await api.dictations.get(id);
+    } catch (err) {
+      App.closeModal();
+      App.toast(errMsg(err, '加载失败'));
+      return;
+    }
+    // 待重默：未通过且标记需重默、尚未完成重默
+    const pending = (det.list || []).filter((r) => !r.passed && r.retestRequired && !r.retestCompleted);
+    if (!pending.length) {
+      App.closeModal();
+      App.toast('暂无待重默学生');
+      return;
+    }
+    const rows = pending
+      .slice()
+      .sort((x, y) => {
+        const nx = x.studentNo || '￿';
+        const ny = y.studentNo || '￿';
+        return nx < ny ? -1 : nx > ny ? 1 : 0;
+      })
+      .map(
+        (r) => `
+        <label class="dct-check-row">
+          <input type="checkbox" data-sid="${App.esc(r.studentId)}">
+          <span class="dct-check-no">${App.esc(r.studentNo || '—')}</span>
+          <span>${App.esc(r.name)}</span>
+          <span class="dct-check-sub">${App.esc(r.className || '—')}</span>
+        </label>`
+      )
+      .join('');
+    App.modal(
+      `重默 — ${det.title || (d && d.title) || ''}`,
+      `
+        <div class="muted" style="margin-bottom:8px">勾选为本次重默通过。</div>
+        <div class="dct-quick">
+          <button class="btn btn-sm" id="dct-o-all" type="button">全选</button>
+          <button class="btn btn-sm" id="dct-o-none" type="button">清空</button>
+        </div>
+        <div class="dct-check-list" id="dct-o-list">${rows}</div>
+        <div class="modal-actions">
+          <button class="btn" id="dct-o-cancel" type="button">取消</button>
+          <button class="btn btn-primary" id="dct-o-save" type="button">提交重默</button>
+        </div>`,
+      (modal) => {
+        const setAll = (v) =>
+          modal.querySelectorAll('#dct-o-list input[type=checkbox]').forEach((cb) => (cb.checked = v));
+        modal.querySelector('#dct-o-all').onclick = () => setAll(true);
+        modal.querySelector('#dct-o-none').onclick = () => setAll(false);
+        modal.querySelector('#dct-o-cancel').onclick = App.closeModal;
+        modal.querySelector('#dct-o-save').onclick = async () => {
+          const studentIds = [];
+          modal.querySelectorAll('#dct-o-list input[type=checkbox]:checked').forEach((cb) => studentIds.push(cb.dataset.sid));
+          if (!studentIds.length) {
+            App.toast('请勾选至少一名学生');
+            return;
+          }
+          try {
+            const res = await api.dictations.retest(id, { studentIds, completed: true });
+            const updated = (res && res.updated) || 0;
+            App.closeModal();
+            App.toast(`已记录 ${updated} 人重默通过`);
+            // 就地更新：后端完成后记录变为 passed=0, retest_required=0，从「需重默」转入「未过且已重默」
+            const dd = dictations.find((x) => x.id === id);
+            if (dd && updated) {
+              const st = (dd.stats = dd.stats || { passed: 0, failed: 0, retestRequired: 0, retestCompleted: 0 });
+              st.retestCompleted += updated;
+              st.retestRequired = Math.max(0, st.retestRequired - updated);
+              st.failed += updated;
+            }
+            renderContent();
           } catch (err) {
             App.toast(errMsg(err));
           }
@@ -482,7 +630,9 @@
     try {
       await api.dictations.remove(id);
       App.toast('已删除');
-      await loadData();
+      const idx = dictations.findIndex((x) => x.id === id);
+      if (idx >= 0) dictations.splice(idx, 1);
+      renderContent();
     } catch (err) {
       App.toast(errMsg(err));
     }
@@ -563,6 +713,7 @@
       canManageMap = new Map();
       anyManageable = false;
       isTenantAdmin = false;
+      ledGroups = [];
       containerEl = el;
 
       el.innerHTML = `
@@ -595,6 +746,7 @@
         if (!id) return;
         const act = btn.dataset.act;
         if (act === 'register') openRegister(id);
+        else if (act === 'retest') openRetestItem(id);
         else if (act === 'material') uploadMaterial(id);
         else if (act === 'detail') openDetail(id);
         else if (act === 'del') removeDictation(id);
@@ -627,8 +779,9 @@
           dictation_date: d?.dictationDate ?? null,
           material_url: uploaded.url,
         });
+        if (d) d.materialUrl = uploaded.url;
         App.toast('材料已上传');
-        await loadData();
+        renderContent();
       } catch (err) {
         if (err && err.code === 'R2_DEVELOPING') App.toast('文件存储功能开发中');
         else App.toast(errMsg(err));
