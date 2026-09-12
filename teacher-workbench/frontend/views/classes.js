@@ -6,8 +6,8 @@
  *  - 「查看学生」→ 传递 class_id 给「学生管理」视图后跳转
  *  - 「编辑 / 删除」：编辑在 cls.canManage 时渲染；删除仅 cls.canDelete（owner/admin、本班年级组长）
  *  - 右上「新建班级」→ modal 表单（名称/年级；学年由服务端按当前学年自动填入），受配额限制
- *  - 「年级组」管理区：owner/admin 见全部组（建组/删组/设组长）；
- *    年级组长见「我带领的年级组」（组内班级 + 每班「设置老师」入口）
+ *  - 「年级组」管理区：owner/admin 见全部组（建组/删组/设组长/设备课组长）；
+ *    年级组长见「我带领的年级组」（组内班级 + 每班「设置老师」入口 + 设备课组长）
  *  - owner/admin：卡片上「年级组」下拉（change 即保存）；canAssignTeachers（owner/admin、
  *    本班年级组长、本班班主任）：「＋任课老师」（chips 可移除）；canDelete（owner/admin、
  *    本班年级组长）：卡片上「班主任」下拉 + 「删除」按钮
@@ -165,6 +165,23 @@ App.registerView('classes', {
     };
 
     // 组卡片：owner/admin 全量管理版；组长仅看自己带领的组（班级清单 + 设置老师入口）
+    // 备课组长行：chips 展示；有管理权者（owner/admin、本组组长）chips 带 × 移除 + 「＋备课组长」入口
+    const prepLeadersHtml = (g) => {
+      const canManage = isAdmin || (g.leader_user_id && g.leader_user_id === myId);
+      const chips = (g.prepLeaders || [])
+        .map(
+          (p) =>
+            `<span class="cls-chip">${App.esc(p.name || p.userId)}${
+              canManage
+                ? `<button class="cls-chip-x" type="button" data-grp-rmpl="${App.esc(g.id)}" data-uid="${App.esc(p.userId)}" title="移除备课组长">×</button>`
+                : ''
+            }</span>`
+        )
+        .join('');
+      return `<div class="cls-card-meta cls-chips-row"><span style="white-space:nowrap">备课组长：</span>${
+        chips || '<span class="muted">—</span>'
+      }${canManage ? `<button class="btn btn-sm" type="button" data-grp-addpl="${App.esc(g.id)}">＋备课组长</button>` : ''}</div>`;
+    };
     const groupCardHtml = (g) => {
       if (isAdmin) {
         return `
@@ -175,6 +192,7 @@ App.registerView('classes', {
                     ? `${App.esc(g.leader_name)}（${App.esc(g.leader_email || '')}）`
                     : '未设置'
                 }</div>
+                ${prepLeadersHtml(g)}
                 <div class="cls-group-classes">组内 ${Number(g.classCount) || 0} 个班：${
                     g.classes && g.classes.length ? g.classes.map((c) => App.esc(c.name)).join('、') : '（暂无班级）'
                   }</div>
@@ -188,6 +206,7 @@ App.registerView('classes', {
       return `
               <div class="cls-group" data-grp-id="${App.esc(g.id)}">
                 <div class="cls-group-name">${App.esc(g.name)}</div>
+                ${prepLeadersHtml(g)}
                 <div class="cls-group-classes">组内 ${clsList.length} 个班</div>
                 ${
                   clsList.length
@@ -341,6 +360,30 @@ App.registerView('classes', {
       btn.addEventListener('click', () => {
         const g = groups.find((x) => x.id === btn.dataset.grpLeader);
         if (g) clsView.openSetLeader(g, members);
+      });
+    });
+
+    // 「＋备课组长」→ 成员选择弹窗（owner/admin、本组组长渲染）
+    el.querySelectorAll('[data-grp-addpl]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const g = groups.find((x) => x.id === btn.dataset.grpAddpl);
+        if (g) clsView.openAddPrepLeader(g, members);
+      });
+    });
+
+    // 备课组长 chips 的 ×：直接移除（无需确认）
+    el.querySelectorAll('[data-grp-rmpl]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const g = groups.find((x) => x.id === btn.dataset.grpRmpl);
+        if (!g) return;
+        try {
+          await api.gradeGroups.removePrepLeader(g.id, btn.dataset.uid);
+          g.prepLeaders = (g.prepLeaders || []).filter((p) => p.userId !== btn.dataset.uid);
+          App.toast('已移除备课组长');
+          clsView.rerender();
+        } catch (err) {
+          App.toast((err && err.message) || '操作失败');
+        }
       });
     });
 
@@ -626,6 +669,56 @@ App.registerView('classes', {
             group.leader_email = m ? m.email || null : null;
             App.closeModal();
             App.toast(leaderUserId ? '组长已设置' : '已撤销组长');
+            clsView.rerender();
+          } catch (err) {
+            saveBtn.disabled = false;
+            App.toast((err && err.message) || '操作失败');
+          }
+        };
+      }
+    );
+  },
+
+  /** 添加备课组长 modal（owner/admin 或本组组长；成员下拉排除已有备课组长；每组不限人数） */
+  openAddPrepLeader(group, members) {
+    const excluded = new Set((group.prepLeaders || []).map((p) => p.userId).filter(Boolean));
+    const candidates = members.filter((m) => !excluded.has(m.user_id));
+    App.modal(
+      `添加备课组长 — ${group.name}`,
+      `
+      <label class="form-label" for="cls-pl-m">成员 *</label>
+      <select class="form-input" id="cls-pl-m">
+        <option value="">选择成员…</option>
+        ${candidates
+          .map(
+            (m) =>
+              `<option value="${App.esc(m.user_id)}">${App.esc(`${m.display_name || ''}（${m.email || m.user_id}）`)}</option>`
+          )
+          .join('')}
+      </select>
+      <div class="modal-actions">
+        <button class="btn" type="button" id="cls-pl-cancel">取消</button>
+        <button class="btn btn-primary" type="button" id="cls-pl-save" ${candidates.length ? '' : 'disabled'}>确定</button>
+      </div>`,
+      () => {
+        document.getElementById('cls-pl-cancel').onclick = () => App.closeModal();
+        document.getElementById('cls-pl-save').onclick = async () => {
+          const userId = document.getElementById('cls-pl-m').value;
+          if (!userId) {
+            App.toast('请选择成员');
+            return;
+          }
+          const saveBtn = document.getElementById('cls-pl-save');
+          saveBtn.disabled = true;
+          try {
+            await api.gradeGroups.addPrepLeader(group.id, userId);
+            const m = clsMember(userId);
+            group.prepLeaders = [
+              ...(group.prepLeaders || []),
+              { userId, name: m ? m.display_name || m.email || '' : '' },
+            ];
+            App.closeModal();
+            App.toast('已设置备课组长');
             clsView.rerender();
           } catch (err) {
             saveBtn.disabled = false;

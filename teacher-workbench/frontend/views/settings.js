@@ -291,10 +291,18 @@ function bindProfile() {
   });
 }
 
-/** 当前空间：配额用量条（§71）+ 成员列表 */
+/** 当前空间：配额用量条 + 成员列表（仅 owner/admin 可见，普通成员只看「我的配额」卡片） */
 async function renderSpace() {
   const tenant = App.state.tenant;
   if (!tenant) return;
+  const quotaEl = document.getElementById('quota-usage');
+  const memberEl = document.getElementById('member-list');
+  const isAdmin = ['owner', 'admin'].includes(tenant.role);
+  if (!isAdmin) {
+    quotaEl.innerHTML = '';
+    memberEl.innerHTML = '';
+    return;
+  }
   let usage = tenant.quota || App.state.quota || {};
   let members = [];
   try {
@@ -307,7 +315,6 @@ async function renderSpace() {
   }
 
   // 配额用量条
-  const quotaEl = document.getElementById('quota-usage');
   const entries = Object.entries(QUOTA_LABELS);
   quotaEl.innerHTML =
     `<div class="card-title" style="margin-bottom:8px">空间使用情况</div>` +
@@ -330,7 +337,6 @@ async function renderSpace() {
       .join('');
 
   // 成员列表（owner/admin 可添加账户）
-  const memberEl = document.getElementById('member-list');
   if (!members.length) {
     memberEl.innerHTML = '<div class="muted">成员列表仅组织空间可见。</div>';
     return;

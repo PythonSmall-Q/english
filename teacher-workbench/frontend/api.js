@@ -139,6 +139,10 @@
     create: (body) => request('/grade-groups', { method: 'POST', body }),
     update: (id, body) => request(`/grade-groups/${id}`, { method: 'PUT', body }),
     remove: (id) => request(`/grade-groups/${id}`, { method: 'DELETE' }),
+    /** 设置备课组长（owner/admin 或本组组长；重复设置幂等返回现有） */
+    addPrepLeader: (id, userId) => request(`/grade-groups/${id}/prep-leaders`, { method: 'POST', body: { userId } }),
+    /** 移除备课组长（owner/admin 或本组组长） */
+    removePrepLeader: (id, userId) => request(`/grade-groups/${id}/prep-leaders/${userId}`, { method: 'DELETE' }),
   };
 
   // —— Classes（§54）——
@@ -238,30 +242,39 @@
   // —— Files（§45/§46：二进制上传 → R2，元数据落 D1）——
   const files = {
     /** 上传文件（File/Blob），文件名取 file.name；返回 {id,name,url,size,mimeType} */
-    async upload(file) {
+    /**
+     * 上传文件到 R2。用 XMLHttpRequest 以获得上传进度。
+     * @param {File} file 文件
+     * @param {(percent: number) => void} [onProgress] 0-100 进度回调
+     */
+    upload(file, onProgress) {
       const headers = { 'X-File-Name': encodeURIComponent(file.name || 'file') };
       const tenantId = window.App?.state?.tenant?.id;
       if (tenantId) headers['X-Tenant-Id'] = tenantId;
-      let res;
-      try {
-        res = await fetch(BASE + '/files', {
-          method: 'POST',
-          credentials: 'include',
-          headers,
-          body: file,
-        });
-      } catch (e) {
-        throw { code: 'NETWORK_ERROR', message: '网络异常，请检查后端服务是否启动' };
-      }
-      let payload = null;
-      try {
-        payload = await res.json();
-      } catch (e) {
-        throw { code: 'INTERNAL_ERROR', message: `服务响应异常（HTTP ${res.status}）` };
-      }
-      if (payload && payload.success) return payload.data;
-      const err = payload?.error || {};
-      throw { code: err.code || 'INTERNAL_ERROR', message: err.message || '上传失败' };
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', BASE + '/files');
+        xhr.withCredentials = true;
+        for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+        if (typeof onProgress === 'function') {
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+          };
+        }
+        xhr.onload = () => {
+          let payload = null;
+          try {
+            payload = JSON.parse(xhr.responseText);
+          } catch (e) {
+            reject({ code: 'INTERNAL_ERROR', message: `服务响应异常（HTTP ${xhr.status}）` });
+            return;
+          }
+          if (payload && payload.success) resolve(payload.data);
+          else reject({ code: payload?.error?.code || 'INTERNAL_ERROR', message: payload?.error?.message || '上传失败' });
+        };
+        xhr.onerror = () => reject({ code: 'NETWORK_ERROR', message: '网络异常，请检查后端服务是否启动' });
+        xhr.send(file);
+      });
     },
     list: () => request('/files'),
     get: (id) => request(`/files/${id}`),

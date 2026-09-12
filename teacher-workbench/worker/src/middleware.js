@@ -117,6 +117,28 @@ export async function canManageClass(db, tenantId, userId, classId) {
 }
 
 /**
+ * 全年段发布者：本租户任意年级组的组长（grade_groups.leader_user_id）或
+ * 任意年级组的备课组长（grade_group_prep_leaders）。用于放开全年段默写/考试的
+ * 创建与管理（与年级组长同权）。
+ * @returns {Promise<boolean>}
+ */
+export async function isGradePublisher(db, tenantId, userId) {
+  const row = await db
+    .prepare(
+      `SELECT 1 FROM (
+         SELECT g.id FROM grade_groups g
+          WHERE g.tenant_id = ? AND g.leader_user_id = ?
+         UNION
+         SELECT p.id FROM grade_group_prep_leaders p
+          WHERE p.tenant_id = ? AND p.user_id = ?
+       ) LIMIT 1`
+    )
+    .bind(tenantId, userId, tenantId, userId)
+    .first();
+  return !!row;
+}
+
+/**
  * 导入权限（课表/成绩/小分）：owner/admin 不受限；班主任（classes.teacher_id）可导入
  * 本班；该班年级组长可导入；任课老师不算班主任，不可导入。cls 只需含
  * id / teacher_id / grade_group_id 三字段。

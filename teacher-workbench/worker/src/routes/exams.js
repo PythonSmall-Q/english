@@ -10,7 +10,7 @@
  */
 
 import { Hono } from 'hono';
-import { requireAuth, requireTenant, requireRole, audit, requireTeacherPerm, assertCurrentYear, canManageClass } from '../middleware.js';
+import { requireAuth, requireTenant, requireRole, audit, requireTeacherPerm, assertCurrentYear, canManageClass, isGradePublisher } from '../middleware.js';
 import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
 import { checkQuota } from '../quota.js';
 
@@ -38,7 +38,7 @@ async function getExam(db, tenantId, examId) {
  * 考试级管理权限：
  * - owner/admin 恒可管理
  * - scope='class' → 可管理该班（canManageClass，含任课老师/班主任/年级组长）
- * - scope='grade' → 本租户任意年级组组长（grade_groups.leader_user_id）
+ * - scope='grade' → 本租户任意年级组组长或备课组长（isGradePublisher）
  */
 async function canManageExam(db, tenantId, user, exam) {
   const membership = await db
@@ -50,11 +50,7 @@ async function canManageExam(db, tenantId, user, exam) {
     const check = await canManageClass(db, tenantId, user.id, exam.class_id);
     return check.ok;
   }
-  const group = await db
-    .prepare('SELECT id FROM grade_groups WHERE tenant_id = ? AND leader_user_id = ? LIMIT 1')
-    .bind(tenantId, user.id)
-    .first();
-  return !!group;
+  return isGradePublisher(db, tenantId, user.id);
 }
 
 /** 查询考试分数名单（join 学生/班级，按分数降序） */
@@ -101,7 +97,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
  * POST /api/v1/exams — 新建考试（§36，需 exams 配额）
  * body: { name(必填), subject?, exam_date?, scope?: 'class'|'grade', class_id? }
  * scope 缺省：有 class_id 视为 'class'，否则 'grade'。
- * 班级考试：创建者须可管理该班；全年段考试：owner/admin 或本租户任意年级组组长。
+ * 班级考试：创建者须可管理该班；全年段考试：owner/admin、本租户任意年级组组长或备课组长。
  */
 app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeacherPerm('create_exams'), async (c) => {
   const db = c.env.DB;
@@ -125,9 +121,9 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeach
     const check = await canManageClass(db, tenantId, user.id, classId);
     if (!check.ok) throw new ApiError(check.cls ? 'FORBIDDEN' : 'NOT_FOUND', check.reason);
   } else {
-    // 全年段考试：仅 owner/admin 或本租户任意年级组组长
+    // 全年段考试：仅 owner/admin、本租户任意年级组组长或备课组长
     if (!(await canManageExam(db, tenantId, user, { scope: 'grade' }))) {
-      throw new ApiError('FORBIDDEN', '仅管理员或年级组长可创建全年段考试');
+      throw new ApiError('FORBIDDEN', '仅租户管理员、年级组长或备课组长可创建全年段考试');
     }
     classId = null; // class_id 忽略
   }
@@ -168,7 +164,7 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
   const exam = await getExam(db, tenantId, c.req.param('id'));
   const body = await c.req.json().catch(() => ({}));
 
-  // 考试级权限：owner/admin、班级考试→该班管理者、全年段考试→年级组组长
+  // 考试级权限：owner/admin、班级考试→该班管理者、全年段考试→年级组组长/备课组长
   if (!(await canManageExam(db, tenantId, user, exam))) {
     throw new ApiError('FORBIDDEN', '你没有权限管理该考试');
   }
@@ -199,7 +195,7 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
 
-  // 考试级权限：owner/admin、班级考试→该班管理者、全年段考试→年级组组长
+  // 考试级权限：owner/admin、班级考试→该班管理者、全年段考试→年级组组长/备课组长
   if (!(await canManageExam(db, tenantId, user, exam))) {
     throw new ApiError('FORBIDDEN', '你没有权限管理该考试');
   }
@@ -511,7 +507,7 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
 /**
  * PUT /api/v1/exams/:id/students/:studentId — 单独登记/修改某学生总分（UPSERT）
  * body: { score: number }
- * 班级考试 → 可管理考试所在班；全年段考试 → 可管理该生所在班（未分班学生需为年级组组长/管理员）。
+ * 班级考试 → 可管理考试所在班；全年段考试 → 可管理该生所在班（未分班学生需为年级组组长/备课组长/管理员）。
  */
 app.put('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
   const db = c.env.DB;
@@ -541,7 +537,7 @@ app.put('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['te
     const check = await canManageClass(db, tenantId, user.id, student.class_id);
     if (!check.ok) throw new ApiError('FORBIDDEN', check.reason);
   } else if (!(await canManageExam(db, tenantId, user, exam))) {
-    // 未分班学生：回退到考试级权限（owner/admin/年级组组长）
+    // 未分班学生：回退到考试级权限（owner/admin/年级组组长/备课组长）
     throw new ApiError('FORBIDDEN', '你没有权限登记该学生成绩');
   }
 

@@ -10,7 +10,7 @@
  */
 
 import { Hono } from 'hono';
-import { requireAuth, requireTenant, requireRole, canManageClass, audit, assertCurrentYear } from '../middleware.js';
+import { requireAuth, requireTenant, requireRole, canManageClass, audit, assertCurrentYear, isGradePublisher } from '../middleware.js';
 import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
 import { checkQuota } from '../quota.js';
 
@@ -27,7 +27,7 @@ async function getDictationOr404(db, tenantId, id) {
 }
 
 /**
- * 默写写权限：全年段默写仅 owner/admin；班级默写 = 该班管理者
+ * 默写写权限：全年段默写仅 owner/admin、年级组长或备课组长；班级默写 = 该班管理者
  * （owner/admin、班主任、年级组长）
  */
 async function requireDictationManager(db, tenantId, user, dictation) {
@@ -36,8 +36,11 @@ async function requireDictationManager(db, tenantId, user, dictation) {
       .prepare("SELECT role FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
       .bind(tenantId, user.id)
       .first();
-    if (!membership || (membership.role !== 'owner' && membership.role !== 'admin')) {
-      throw new ApiError('FORBIDDEN', '全年段默写仅租户管理员可管理');
+    if (
+      (!membership || (membership.role !== 'owner' && membership.role !== 'admin')) &&
+      !(await isGradePublisher(db, tenantId, user.id))
+    ) {
+      throw new ApiError('FORBIDDEN', '全年段默写仅租户管理员、年级组长或备课组长可管理');
     }
     return;
   }
@@ -202,11 +205,15 @@ app.post('/', requireAuth, requireTenant, async (c) => {
   if (scope === 'class' && !classId) {
     throw new ApiError('VALIDATION_ERROR', "班级默写（scope='class'）必须提供 class_id");
   }
-  // 写权限：班级默写 = 该班管理者；全年段默写 = owner/admin
+  // 写权限：班级默写 = 该班管理者；全年段默写 = owner/admin、年级组长或备课组长
   if (scope === 'grade') {
     const membership = c.get('membership');
-    if (membership.role !== 'owner' && membership.role !== 'admin') {
-      throw new ApiError('FORBIDDEN', '全年段默写仅租户管理员可创建');
+    if (
+      membership.role !== 'owner' &&
+      membership.role !== 'admin' &&
+      !(await isGradePublisher(db, tenantId, user.id))
+    ) {
+      throw new ApiError('FORBIDDEN', '全年段默写仅租户管理员、年级组长或备课组长可创建');
     }
   } else {
     const check = await canManageClass(db, tenantId, user.id, classId);

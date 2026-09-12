@@ -180,6 +180,35 @@ window.App = {
     }, 2400);
   },
 
+  /**
+   * 顶部上传进度条：const p = App.showProgress('上传材料'); p.update(50); p.close();
+   * @returns {{update: (percent:number)=>void, close: ()=>void}}
+   */
+  showProgress(label = '上传中') {
+    document.getElementById('upload-progress')?.remove();
+    const wrap = document.createElement('div');
+    wrap.id = 'upload-progress';
+    wrap.className = 'upload-progress';
+    wrap.innerHTML = `<span class="up-label">${App.esc(label)}</span>
+      <span class="up-track"><span class="up-fill" style="width:0%"></span></span>
+      <span class="up-pct">0%</span>`;
+    document.body.appendChild(wrap);
+    requestAnimationFrame(() => wrap.classList.add('show'));
+    const fill = wrap.querySelector('.up-fill');
+    const pct = wrap.querySelector('.up-pct');
+    return {
+      update(percent) {
+        const p = Math.max(0, Math.min(100, Math.round(percent)));
+        fill.style.width = p + '%';
+        pct.textContent = p + '%';
+      },
+      close() {
+        wrap.classList.remove('show');
+        setTimeout(() => wrap.remove(), 300);
+      },
+    };
+  },
+
   /** 确认弹窗，返回 Promise<boolean> */
   confirmDialog(msg) {
     return new Promise((resolve) => {

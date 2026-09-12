@@ -1,8 +1,8 @@
 /**
  * views/dictations.js — 默写管理（§32/§33/§34/§58）
  *
- * 功能：班级默写按班分栏 + 全年段默写（scope=grade）单独一栏（仅 owner/admin 或
- *       我带领的年级组非空时显示；普通老师改为在可管理班级栏内看到下派任务）；
+ * 功能：班级默写按班分栏 + 全年段默写（scope=grade）单独一栏（仅 owner/admin、
+ *       年级组长或备课组长显示；普通老师改为在可管理班级栏内看到下派任务）；
  *       每次默写卡片（标题/日期/通过/未过/需重默）、新建默写、
  *       登记（名单勾选 Pass）、详情（未通过名单 + 重默状态）、删除、
  *       「重默」（卡片级，勾选本次重默通过）、「重默·班级」（勾选标记已重默）、
@@ -52,6 +52,12 @@
   let anyManageable = false; // 是否存在可管理班级
   let isTenantAdmin = false; // owner/admin（全年段默写写操作仅管理员）
   let ledGroups = []; // 我带领的年级组（grade_groups 里 leader_user_id === 我）
+  let isPrepLeader = false; // 我是任意组的备课组长（与年级组长同权发布全年段默写）
+
+  /** 全年段默写发布/管理权：owner/admin、年级组长或备课组长 */
+  function canPublishGrade() {
+    return isTenantAdmin || ledGroups.length > 0 || isPrepLeader;
+  }
 
   /** 统一错误提示：额度超限给固定文案（§21） */
   function errMsg(err, fallback) {
@@ -108,6 +114,8 @@
       // 我带领的年级组（与班级视图同口径）：全年段默写独立栏对 owner/admin 或年级组长可见
       const myId = App.state.user?.id;
       ledGroups = (grpData.groups || []).filter((g) => g.leader_user_id && g.leader_user_id === myId);
+      // 我是任意组的备课组长（grade-groups 列表 prepLeaders 判定）
+      isPrepLeader = (grpData.groups || []).some((g) => (g.prepLeaders || []).some((p) => p.userId === myId));
       dictations = dctData.list || [];
       renderContent();
     } catch (err) {
@@ -122,18 +130,18 @@
 
   // ===== 渲染 =====
 
-  function dictationCard(d) {
+  function dictationCard(d, ctxClassId) {
     const st = d.stats || { passed: 0, failed: 0, retestRequired: 0, retestCompleted: 0 };
     const isGrade = d.scope === 'grade';
     // 登记：全年段 = 管理员或有可管理班级的老师（后端按学生所在班再校验）；班级默写 = 该班 canManage
     const canRegister = isGrade ? isTenantAdmin || anyManageable : !!canManageMap.get(d.classId);
-    // 上传/重传材料、删除：全年段仅管理员；班级默写 = 该班 canManage
-    const canManageItem = isGrade ? isTenantAdmin : !!canManageMap.get(d.classId);
+    // 上传/重传材料、删除：全年段 = 发布者（owner/admin、年级组长、备课组长）；班级默写 = 该班 canManage
+    const canManageItem = isGrade ? canPublishGrade() : !!canManageMap.get(d.classId);
     const writeBtns = [
       canRegister ? '<button class="btn btn-sm btn-primary" data-act="register" type="button">登记</button>' : '',
       // 重默：与「登记」同权限，仅存在待重默学生时显示，文案带数量
       canRegister && st.retestRequired > 0
-        ? `<button class="btn btn-sm" data-act="retest" type="button">重默 ${st.retestRequired}</button>`
+        ? `<button class="btn btn-sm" data-act="retest" data-ctx="${App.esc(ctxClassId || '')}" type="button">重默 ${st.retestRequired}</button>`
         : '',
       canManageItem
         ? `<button class="btn btn-sm" data-act="material" type="button">${d.materialUrl ? '重传材料' : '上传材料'}</button>
@@ -183,25 +191,12 @@
       return;
     }
     const parts = [];
-    // 全年段默写单独一栏（§32）：仅 owner/admin 或我带领的年级组非空时渲染；
-    // 否则全年段默写作为下派任务并入我可管理班级的班级栏（不可管理班级不追加，避免重复渲染）
-    const showGradeCol = isTenantAdmin || ledGroups.length > 0;
-    const gradeList = dictations.filter((d) => d.scope === 'grade');
-    if (showGradeCol) {
-      parts.push(`
-        <div class="card">
-          <div class="dct-class-head">
-            <span class="card-title" style="margin:0">全年段默写</span>
-            <span class="dct-class-count">${gradeList.length} 次</span>
-          </div>
-          ${gradeList.length ? gradeList.map(dictationCard).join('') : '<div class="muted">暂无全年段默写</div>'}
-        </div>`);
-    }
+    // 全年段默写不再单独成栏：作为下派任务并入我可管理班级的班级栏（所有角色同口径，卡片带"全年段"徽标）
     // 各班级默写分栏
     classes.forEach((c) => {
       const manageable = !!canManageMap.get(c.id);
       const list = dictations.filter(
-        (d) => (d.scope !== 'grade' && d.classId === c.id) || (!showGradeCol && manageable && d.scope === 'grade')
+        (d) => (d.scope !== 'grade' && d.classId === c.id) || (manageable && d.scope === 'grade')
       );
       parts.push(`
         <div class="card">
@@ -210,7 +205,7 @@
             <span class="dct-class-count">${list.length} 次</span>
             <button class="btn btn-sm" data-retest-class="${App.esc(c.id)}" type="button">重默·班级</button>
           </div>
-          ${list.length ? list.map(dictationCard).join('') : '<div class="muted">暂无班级默写</div>'}
+          ${list.length ? list.map((d) => dictationCard(d, c.id)).join('') : '<div class="muted">暂无班级默写</div>'}
         </div>`);
     });
     content.innerHTML = `<div class="dct-cols">${parts.join('')}</div>`;
@@ -228,7 +223,7 @@
         <label class="form-label">范围 *</label>
         <div class="dct-scope-row">
           <label><input type="radio" name="dct-c-scope" value="class" checked> 班级默写</label>
-          ${isTenantAdmin ? '<label><input type="radio" name="dct-c-scope" value="grade"> 全年段默写</label>' : ''}
+          ${canPublishGrade() ? '<label><input type="radio" name="dct-c-scope" value="grade"> 全年段默写</label>' : ''}
         </div>
         <div id="dct-c-class-wrap">
           <label class="form-label">班级 *</label>
@@ -538,7 +533,7 @@
 
   // ===== 弹窗：重默（卡片级，勾选为本次重默通过） =====
 
-  async function openRetestItem(id) {
+  async function openRetestItem(id, ctxClassId) {
     const d = dictations.find((x) => x.id === id);
     App.modal(`重默 — ${d ? d.title : ''}`, '<div class="muted">加载中…</div>');
     let det;
@@ -549,11 +544,12 @@
       App.toast(errMsg(err, '加载失败'));
       return;
     }
-    // 待重默：未通过且标记需重默、尚未完成重默
-    const pending = (det.list || []).filter((r) => !r.passed && r.retestRequired && !r.retestCompleted);
+    // 待重默：未通过且标记需重默、尚未完成重默；从某班栏点入时只显示该班（所有角色同口径）
+    let pending = (det.list || []).filter((r) => !r.passed && r.retestRequired && !r.retestCompleted);
+    if (ctxClassId) pending = pending.filter((r) => r.classId === ctxClassId);
     if (!pending.length) {
       App.closeModal();
-      App.toast('暂无待重默学生');
+      App.toast(ctxClassId ? '本班暂无待重默学生' : '暂无待重默学生');
       return;
     }
     const rows = pending
@@ -714,6 +710,7 @@
       anyManageable = false;
       isTenantAdmin = false;
       ledGroups = [];
+      isPrepLeader = false;
       containerEl = el;
 
       el.innerHTML = `
@@ -746,7 +743,7 @@
         if (!id) return;
         const act = btn.dataset.act;
         if (act === 'register') openRegister(id);
-        else if (act === 'retest') openRetestItem(id);
+        else if (act === 'retest') openRetestItem(id, btn.dataset.ctx || null);
         else if (act === 'material') uploadMaterial(id);
         else if (act === 'detail') openDetail(id);
         else if (act === 'del') removeDictation(id);
@@ -768,9 +765,10 @@
         App.toast('文件超过 50MB 上限');
         return;
       }
-      App.toast('上传中…');
+      const prog = App.showProgress('上传材料');
       try {
-        const uploaded = await api.files.upload(file);
+        const uploaded = await api.files.upload(file, (p) => prog.update(p));
+        prog.close();
         const d = dictations.find((x) => x.id === id);
         await api.dictations.update(id, {
           title: d?.title,
@@ -783,6 +781,7 @@
         App.toast('材料已上传');
         renderContent();
       } catch (err) {
+        prog.close();
         if (err && err.code === 'R2_DEVELOPING') App.toast('文件存储功能开发中');
         else App.toast(errMsg(err));
       }

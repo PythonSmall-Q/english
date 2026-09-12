@@ -220,14 +220,16 @@
         App.toast('文件超过 50MB 上限');
         return;
       }
-      App.toast('上传中…');
+      const prog = App.showProgress('上传附件');
       try {
-        const uploaded = await api.files.upload(file);
+        const uploaded = await api.files.upload(file, (p) => prog.update(p));
+        prog.close();
         // 附件以文本形式附在输入框内容末尾（后端 prompt 为纯文本）
         dom.text.value = `${dom.text.value.trim()}${dom.text.value.trim() ? '\n' : ''}[附件] ${uploaded.name}：${uploaded.url}`;
         dom.text.focus();
         App.toast('附件已添加');
       } catch (err) {
+        prog.close();
         if (err && err.code === 'R2_DEVELOPING') App.toast('文件存储功能开发中');
         else reportErr(err);
       }

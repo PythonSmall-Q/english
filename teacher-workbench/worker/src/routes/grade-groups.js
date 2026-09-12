@@ -41,11 +41,26 @@ app.get('/', requireAuth, requireTenant, async (c) => {
     .prepare('SELECT id, name, grade_group_id FROM classes WHERE tenant_id = ?')
     .bind(tenantId)
     .all();
+  const prepLeaders = await db
+    .prepare(
+      `SELECT p.group_id, p.user_id, u.display_name
+         FROM grade_group_prep_leaders p
+         JOIN users u ON u.id = p.user_id
+        WHERE p.tenant_id = ?
+        ORDER BY u.display_name`
+    )
+    .bind(tenantId)
+    .all();
   const byGroup = new Map();
   for (const cls of classes.results) {
     if (!cls.grade_group_id) continue;
     if (!byGroup.has(cls.grade_group_id)) byGroup.set(cls.grade_group_id, []);
     byGroup.get(cls.grade_group_id).push({ id: cls.id, name: cls.name });
+  }
+  const prepByGroup = new Map();
+  for (const pl of prepLeaders.results) {
+    if (!prepByGroup.has(pl.group_id)) prepByGroup.set(pl.group_id, []);
+    prepByGroup.get(pl.group_id).push({ userId: pl.user_id, name: pl.display_name });
   }
   return c.json({
     success: true,
@@ -54,6 +69,7 @@ app.get('/', requireAuth, requireTenant, async (c) => {
         ...g,
         classes: byGroup.get(g.id) || [],
         classCount: (byGroup.get(g.id) || []).length,
+        prepLeaders: prepByGroup.get(g.id) || [],
       })),
     },
   });
@@ -136,6 +152,102 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['admin']), async (c)
     db.prepare('DELETE FROM grade_groups WHERE id = ? AND tenant_id = ?').bind(group.id, tenantId),
   ]);
   await audit(db, tenantId, user.id, '删除年级组', 'grade_group', group.id, { name: group.name });
+  return c.json({ success: true, data: { deleted: true } });
+});
+
+/**
+ * 备课组长设置权限：owner/admin 或该组年级组长（group.leader_user_id）
+ * @throws {ApiError} FORBIDDEN
+ */
+function assertCanManagePrepLeaders(user, membership, group) {
+  const isAdmin = membership.role === 'owner' || membership.role === 'admin';
+  if (!isAdmin && group.leader_user_id !== user.id) {
+    throw new ApiError('FORBIDDEN', '只有租户管理员或本组组长可以设置备课组长');
+  }
+}
+
+/** 校验 user 是本空间 active 成员（备课组长用），返回 user_id */
+async function requirePrepLeaderMember(db, tenantId, userId) {
+  const m = await db
+    .prepare("SELECT user_id FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
+    .bind(tenantId, userId)
+    .first();
+  if (!m) throw new ApiError('VALIDATION_ERROR', '备课组长必须是当前空间的成员');
+  return m.user_id;
+}
+
+/**
+ * POST /api/v1/grade-groups/:id/prep-leaders — 设置备课组长（owner/admin 或本组组长）
+ * body: { userId }；重复设置幂等返回现有记录；每组不限人数
+ */
+app.post('/:id/prep-leaders', requireAuth, requireTenant, async (c) => {
+  const db = c.env.DB;
+  const user = c.get('user');
+  const membership = c.get('membership');
+  const tenantId = c.get('tenantId');
+  const group = await db
+    .prepare('SELECT * FROM grade_groups WHERE id = ? AND tenant_id = ?')
+    .bind(c.req.param('id'), tenantId)
+    .first();
+  if (!group) throw new ApiError('NOT_FOUND', '年级组不存在');
+  assertCanManagePrepLeaders(user, membership, group);
+
+  const body = await c.req.json().catch(() => ({}));
+  const userId = await requirePrepLeaderMember(db, tenantId, String(body.userId || ''));
+
+  const existing = await db
+    .prepare('SELECT id FROM grade_group_prep_leaders WHERE group_id = ? AND user_id = ?')
+    .bind(group.id, userId)
+    .first();
+  if (existing) {
+    return c.json({ success: true, data: { id: existing.id, groupId: group.id, userId } });
+  }
+
+  const id = newId();
+  await db
+    .prepare(
+      `INSERT INTO grade_group_prep_leaders (id, tenant_id, group_id, user_id, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .bind(id, tenantId, group.id, userId, now())
+    .run();
+  await audit(db, tenantId, user.id, '设置备课组长', 'grade_group', group.id, {
+    groupName: group.name,
+    userId,
+  });
+  return c.json({ success: true, data: { id, groupId: group.id, userId } }, 201);
+});
+
+/**
+ * DELETE /api/v1/grade-groups/:id/prep-leaders/:userId — 移除备课组长（owner/admin 或本组组长）
+ */
+app.delete('/:id/prep-leaders/:userId', requireAuth, requireTenant, async (c) => {
+  const db = c.env.DB;
+  const user = c.get('user');
+  const membership = c.get('membership');
+  const tenantId = c.get('tenantId');
+  const group = await db
+    .prepare('SELECT * FROM grade_groups WHERE id = ? AND tenant_id = ?')
+    .bind(c.req.param('id'), tenantId)
+    .first();
+  if (!group) throw new ApiError('NOT_FOUND', '年级组不存在');
+  assertCanManagePrepLeaders(user, membership, group);
+
+  const userId = String(c.req.param('userId'));
+  const existing = await db
+    .prepare('SELECT id FROM grade_group_prep_leaders WHERE group_id = ? AND user_id = ?')
+    .bind(group.id, userId)
+    .first();
+  if (!existing) throw new ApiError('NOT_FOUND', '该成员不是本组备课组长');
+
+  await db
+    .prepare('DELETE FROM grade_group_prep_leaders WHERE group_id = ? AND user_id = ?')
+    .bind(group.id, userId)
+    .run();
+  await audit(db, tenantId, user.id, '移除备课组长', 'grade_group', group.id, {
+    groupName: group.name,
+    userId,
+  });
   return c.json({ success: true, data: { deleted: true } });
 });
 

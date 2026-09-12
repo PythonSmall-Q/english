@@ -360,6 +360,7 @@
             ${canCreateExams ? `<button class="btn btn-sm" data-act="import-scores" data-id="${esc(e.id)}" type="button">导入成绩</button>
             <button class="btn btn-sm" data-act="import-subscores" data-id="${esc(e.id)}" type="button">导入小分</button>` : ''}
             <button class="btn btn-sm" data-act="analysis" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">查看分析</button>
+            <button class="btn btn-sm" data-act="scores" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">学生成绩</button>
             <button class="btn btn-sm" data-act="report" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">个性化报告</button>
             <button class="btn btn-sm" data-act="paper" data-id="${esc(e.id)}" data-has-paper="${e.paper_url ? '1' : ''}" type="button">${e.paper_url ? '查看试卷' : '上传试卷'}</button>
             <button class="btn btn-sm" data-act="edit" data-id="${esc(e.id)}" type="button">编辑</button>
@@ -392,6 +393,9 @@
         break;
       case 'analysis':
         openAnalysis(d.id, d.name);
+        break;
+      case 'scores':
+        openExamScores(d.id, d.name);
         break;
       case 'report':
         openReport(d.id, d.name, null);
@@ -444,15 +448,17 @@
         App.toast('文件超过 50MB 上限');
         return;
       }
-      App.toast('上传中…');
+      const prog = App.showProgress('上传试卷');
       try {
-        const uploaded = await api.files.upload(file);
+        const uploaded = await api.files.upload(file, (p) => prog.update(p));
+        prog.close();
         await api.exams.update(examId, { paper_url: uploaded.url });
         App.toast('试卷已上传');
         const target = examsCache.find((e) => e.id === examId);
         if (target) target.paper_url = uploaded.url;
         refreshLocal();
       } catch (err) {
+        prog.close();
         if (err && err.code === 'R2_DEVELOPING') App.toast('文件存储功能开发中');
         else reportErr(err);
       }
@@ -463,7 +469,7 @@
   /** 新建 / 编辑考试 */
   async function openExamForm(exam) {
     const isEdit = !!exam;
-    // 班级考试：我可管理的班；全年段考试：owner/admin 或我带领的年级组
+    // 班级考试：我可管理的班；全年段考试：owner/admin、我带领的年级组或我是任意组备课组长
     let managedClasses = [];
     let canCreateGrade = false;
     try {
@@ -474,8 +480,13 @@
       ]);
       managedClasses = (classData.classes || []).filter((c) => c.canManage);
       const role = me?.tenants?.find((t) => t.id === App.state.tenant?.id)?.role;
+      const myUserId = me?.user?.id;
       canCreateGrade =
-        role === 'owner' || role === 'admin' || (groupData.groups || []).some((g) => g.leader_user_id === me?.user?.id);
+        role === 'owner' ||
+        role === 'admin' ||
+        (groupData.groups || []).some(
+          (g) => g.leader_user_id === myUserId || (g.prepLeaders || []).some((p) => p.userId === myUserId)
+        );
     } catch (e) {
       /* 权限信息加载失败不阻塞弹窗，后端 403 兜底 */
     }
@@ -493,7 +504,7 @@
             : `<div class="ex-scope-row" id="exf-scope-row">
             <label><input type="radio" name="exf-scope" value="class" checked> 班级考试</label>
             <label><input type="radio" name="exf-scope" value="grade" ${!canCreateGrade ? 'disabled' : ''}> 全年段考试${
-                canCreateGrade ? '' : '（仅年级组长/管理员）'
+                canCreateGrade ? '' : '（仅管理员/年级组长/备课组长）'
               }</label>
           </div>
           <div id="exf-class-wrap">
@@ -703,6 +714,130 @@
             importBtn.disabled = false;
           }
         };
+      }
+    );
+  }
+
+  // ============================== 学生成绩（本次考试全体学生，本班可改） ==============================
+
+  async function openExamScores(examId, examName) {
+    App.modal(`学生成绩 · ${examName}`, '<div id="exs-body"><div class="muted">加载中…</div></div>');
+    let det, stuData, clsData;
+    try {
+      [det, stuData, clsData] = await Promise.all([
+        api.exams.get(examId),
+        api.students.list(),
+        api.classes.list().catch(() => ({ classes: [] })),
+      ]);
+    } catch (err) {
+      App.closeModal();
+      reportErr(err);
+      return;
+    }
+    const role = App.state.tenant?.role;
+    const isAdmin = role === 'owner' || role === 'admin';
+    const manageMap = new Map((clsData.classes || []).map((c) => [c.id, !!c.canManage]));
+    const editable = (classId) => isAdmin || manageMap.get(classId);
+    // 全体学生（当前学年）按班分组；成绩来自本次考试记录，无记录显示 —
+    const scoreBySid = new Map((det.scores || []).map((s) => [s.student_id, s.score]));
+    const groups = new Map();
+    for (const st of stuData.students || []) {
+      const key = st.class_id || '';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(st);
+    }
+
+    App.modal(
+      `学生成绩 · ${examName}`,
+      '<div id="exs-body"></div>',
+      (modalEl) => {
+        modalEl.classList.add('ex-modal-wide');
+        const body = modalEl.querySelector('#exs-body');
+
+        function draw() {
+          if (!groups.size) {
+            body.innerHTML = '<div class="muted">当前学年暂无学生。</div>';
+            return;
+          }
+          const blocks = [...groups.entries()]
+            .map(([cid, list]) => {
+              const clsName = list[0]?.class_name || '未分班';
+              const canEdit = editable(cid || null);
+              const rows = list
+                .slice()
+                .sort((a, b) => (scoreBySid.get(b.id) ?? -1) - (scoreBySid.get(a.id) ?? -1))
+                .map((st) => {
+                  const sc = scoreBySid.get(st.id);
+                  const scoreCell =
+                    sc === null || sc === undefined ? '<span class="muted">—</span>' : fmtScore(sc);
+                  return `<tr>
+                    <td>${esc(st.student_no || '—')}</td>
+                    <td>${esc(st.name)}</td>
+                    <td class="exs-score">${scoreCell}</td>
+                    <td class="exs-ops">${
+                      canEdit
+                        ? `<button class="btn btn-sm" data-edit-sid="${esc(st.id)}" data-edit-name="${esc(st.name)}" type="button">修改</button>`
+                        : ''
+                    }</td>
+                  </tr>`;
+                })
+                .join('');
+              return `<div class="card ex-class-block" style="margin-bottom:10px">
+                <div class="card-title" style="margin:0 0 6px">${esc(clsName)}${
+                  canEdit ? '' : ' <span class="muted" style="font-size:12px;font-weight:400">（只读）</span>'
+                }</div>
+                <table class="table"><thead><tr><th>学号</th><th>姓名</th><th>成绩</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+              </div>`;
+            })
+            .join('');
+          body.innerHTML = `<div class="muted" style="margin-bottom:8px">可管理班级的成绩可直接修改，其他班级只读。</div>${blocks}`;
+          body.querySelectorAll('[data-edit-sid]').forEach((btn) => {
+            btn.addEventListener('click', () => startEdit(btn.dataset.editSid, btn.dataset.editName, btn.closest('tr')));
+          });
+        }
+
+        /** 行内改分：不嵌套弹窗，保存后就地更新 */
+        function startEdit(sid, name, tr) {
+          const old = scoreBySid.get(sid);
+          const scoreTd = tr.children[2];
+          const opsTd = tr.children[3];
+          scoreTd.innerHTML = `<input type="number" step="0.5" min="0" class="form-input" id="exs-in" style="width:96px;padding:4px 8px" value="${old ?? ''}">`;
+          opsTd.innerHTML = `<button class="btn btn-sm btn-primary" id="exs-save" type="button">保存</button> <button class="btn btn-sm" id="exs-cancel" type="button">取消</button>`;
+          const input = scoreTd.querySelector('#exs-in');
+          input.focus();
+          input.select();
+          opsTd.querySelector('#exs-cancel').addEventListener('click', draw);
+          opsTd.querySelector('#exs-save').addEventListener('click', async () => {
+            const v = input.value.trim();
+            if (v === '') {
+              App.toast('请输入分数');
+              return;
+            }
+            const num = Number(v);
+            if (!Number.isFinite(num)) {
+              App.toast('请输入有效分数');
+              return;
+            }
+            try {
+              await api.exams.setScore(examId, sid, num);
+              scoreBySid.set(sid, num);
+              App.toast(`已保存 ${name} 的成绩`);
+              // 同步考试列表行的参考人数/均分（本地推算，不 refetch）
+              const item = examsCache.find((x) => x.id === examId);
+              if (item) {
+                const vals = [...scoreBySid.values()].filter((x) => x !== null && x !== undefined);
+                item.student_count = vals.length;
+                item.avg_score = vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100 : null;
+                refreshLocal();
+              }
+              draw();
+            } catch (err) {
+              reportErr(err);
+            }
+          });
+        }
+
+        draw();
       }
     );
   }
