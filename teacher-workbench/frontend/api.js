@@ -280,6 +280,9 @@
   const exp = {
     backup: () => request('/export/backup'),
     students: () => request('/export/students'),
+    /** 班级统计（viewer 起）：作业上交 / 默写（含全年段）/ 考试成绩平铺数据，供生成 .xlsx */
+    classStats: (classId, academicYear) =>
+      request('/export/class-stats', { query: { class_id: classId, academic_year: academicYear } }),
   };
 
   // —— 平台管理（§72/§73，仅 platform_admin）——

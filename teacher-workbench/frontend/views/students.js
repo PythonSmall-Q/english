@@ -2,8 +2,8 @@
  * views/students.js — 学生管理（§28/§55）
  *
  * 功能：班级分栏学生列表、搜索、只看预警、添加/编辑/删除、详情（含预警明细）、
- *       个性化成绩分析入口、导出名单（.xlsx）
- * 数据：api.classes / api.students / api.export.students
+ *       个性化成绩分析入口、导出名单（.xlsx）、导出班级统计（三 sheet .xlsx）
+ * 数据：api.classes / api.students / api.export.students / api.export.classStats
  * 说明：预警统计由学生列表接口批量返回（alert 字段），无需逐生调详情。
  */
 
@@ -357,6 +357,132 @@
     }
   }
 
+  // ===== 导出班级统计（.xlsx，三 sheet：作业上交 / 默写情况 / 考试成绩）=====
+
+  /** 考试列名：重名时加日期后缀区分 */
+  function examColumnNames(exams) {
+    const counts = {};
+    (exams || []).forEach((e) => {
+      const n = e.name || '考试';
+      counts[n] = (counts[n] || 0) + 1;
+    });
+    return (exams || []).map((e) => {
+      const n = e.name || '考试';
+      return counts[n] > 1 ? `${n}(${e.examDate || '未设日期'})` : n;
+    });
+  }
+
+  function openExportStatsModal() {
+    if (!classes.length) {
+      App.toast('当前空间还没有班级，请先在「我的班级」中创建');
+      return;
+    }
+    // 默认选中当前筛选班级；「全部班级」时默认第一个班
+    const defaultId = filterClassId || sortedClasses()[0].id;
+    const options = sortedClasses()
+      .map((c) => `<option value="${App.esc(c.id)}"${c.id === defaultId ? ' selected' : ''}>${App.esc(c.name)}</option>`)
+      .join('');
+    App.modal(
+      '导出班级统计',
+      `
+        <label class="form-label">班级 *</label>
+        <select id="stu-x-class" class="form-input">${options}</select>
+        <div class="muted" style="margin-top:10px;line-height:1.7">
+          导出该班当前学年的三类统计，生成 .xlsx 文件（平铺表格，便于公式计算）：<br>
+          · 作业上交情况（上交 / 总次数 / 缺交）<br>
+          · 默写情况（Pass / 总次数 / 需重默，含全年段默写）<br>
+          · 考试成绩（班级考试 + 全年段考试，每门一列）
+        </div>
+        <div class="modal-actions">
+          <button class="btn" id="stu-x-cancel" type="button">取消</button>
+          <button class="btn btn-primary" id="stu-x-go" type="button">导出</button>
+        </div>`,
+      (modal) => {
+        modal.querySelector('#stu-x-cancel').onclick = App.closeModal;
+        modal.querySelector('#stu-x-go').onclick = async () => {
+          const classId = modal.querySelector('#stu-x-class').value;
+          if (!classId) {
+            App.toast('请选择班级');
+            return;
+          }
+          const goBtn = modal.querySelector('#stu-x-go');
+          goBtn.disabled = true;
+          goBtn.textContent = '导出中…';
+          try {
+            const year = App.state.academicYear || App.state.currentAcademicYear;
+            const data = await api.export.classStats(classId, year);
+            if (!data.students || !data.students.length) {
+              App.closeModal();
+              App.toast('该班当前学年暂无学生，无法导出统计');
+              return;
+            }
+            await buildClassStatsWorkbook(data);
+            App.closeModal();
+            App.toast('已导出班级统计');
+          } catch (err) {
+            App.toast(errMsg(err, '导出失败'));
+            goBtn.disabled = false;
+            goBtn.textContent = '导出';
+          }
+        };
+      }
+    );
+  }
+
+  /** 按接口数据构建三 sheet 工作簿并下载（文件名：班级统计-<班名>-<学年>.xlsx） */
+  async function buildClassStatsWorkbook(data) {
+    const XLSX = await loadXLSX();
+    const wb = XLSX.utils.book_new();
+    const list = data.students || [];
+    const baseCells = (s) => [s.studentNo || '', s.name || ''];
+
+    // Sheet 1：作业上交（值全为数字）
+    const hwRows = [['学号', '姓名', '上交次数', '总次数', '缺交次数']];
+    list.forEach((s) => {
+      const h = (data.homework && data.homework.byStudent && data.homework.byStudent[s.id]) || {
+        submitted: 0,
+        missing: (data.homework && data.homework.total) || 0,
+      };
+      hwRows.push([...baseCells(s), h.submitted, (data.homework && data.homework.total) || 0, h.missing]);
+    });
+    const wsHw = XLSX.utils.aoa_to_sheet(hwRows);
+    wsHw['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }];
+    XLSX.utils.book_append_sheet(wb, wsHw, '作业上交');
+
+    // Sheet 2：默写情况
+    const dtRows = [['学号', '姓名', 'Pass次数', '总次数', '需重默次数']];
+    list.forEach((s) => {
+      const d = (data.dictations && data.dictations.byStudent && data.dictations.byStudent[s.id]) || {
+        passed: 0,
+        total: 0,
+        retestRequired: 0,
+      };
+      dtRows.push([...baseCells(s), d.passed, d.total, d.retestRequired]);
+    });
+    const wsDt = XLSX.utils.aoa_to_sheet(dtRows);
+    wsDt['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 12 }];
+    XLSX.utils.book_append_sheet(wb, wsDt, '默写情况');
+
+    // Sheet 3：考试成绩（每门一列，无成绩留空）
+    const exams = data.exams || [];
+    const colNames = examColumnNames(exams);
+    const exRows = [['学号', '姓名', ...colNames]];
+    list.forEach((s) => {
+      exRows.push([
+        ...baseCells(s),
+        ...exams.map((e) => {
+          const v = e.scores ? e.scores[s.id] : null;
+          return v === null || v === undefined ? '' : v;
+        }),
+      ]);
+    });
+    const wsEx = XLSX.utils.aoa_to_sheet(exRows);
+    wsEx['!cols'] = [{ wch: 12 }, { wch: 12 }, ...colNames.map(() => ({ wch: 18 }))];
+    XLSX.utils.book_append_sheet(wb, wsEx, '考试成绩');
+
+    XLSX.writeFile(wb, `班级统计-${data.className || '班级'}-${data.academicYear || ''}.xlsx`);
+  }
+
   // ===== 视图注册 =====
 
   App.registerView('students', {
@@ -391,6 +517,7 @@
             <input type="checkbox" id="stu-filter-alert"> 只看预警
           </label>
           <span class="spacer"></span>
+          <button id="stu-btn-export-stats" class="btn" type="button">导出班级统计</button>
           <button id="stu-btn-export" class="btn" type="button">导出名单</button>
           <button id="stu-btn-add" class="btn btn-primary" type="button">添加学生</button>
         </div>
@@ -419,6 +546,7 @@
         renderContent();
       });
       el.querySelector('#stu-btn-export').addEventListener('click', exportStudents);
+      el.querySelector('#stu-btn-export-stats').addEventListener('click', openExportStatsModal);
       el.querySelector('#stu-btn-add').addEventListener('click', () => {
         if (!classes.length) {
           App.toast('当前空间还没有班级，请先在「我的班级」中创建');

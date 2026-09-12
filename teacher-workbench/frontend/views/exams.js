@@ -286,6 +286,8 @@
 
   /** 当前视图根节点（刷新列表用） */
   let rootEl = null;
+  /** 当前已加载的考试列表（写操作后据此就地更新并重渲染，不再整表 refetch） */
+  let examsCache = [];
   /** create_exams 功能权限（my-quota，取不到默认 true，后端 403 兜底） */
   let canCreateExams = true;
 
@@ -310,8 +312,16 @@
       return [];
     }
     rootEl.innerHTML = '';
-    rootEl.appendChild(renderList(exams || []));
-    return exams || [];
+    examsCache = exams || [];
+    rootEl.appendChild(renderList(examsCache));
+    return examsCache;
+  }
+
+  /** 无网络局部重渲染：用 examsCache 重建列表 DOM（loadExams 仅用于首屏/重试/导入后刷新） */
+  function refreshLocal() {
+    if (!rootEl) return;
+    rootEl.innerHTML = '';
+    rootEl.appendChild(renderList(examsCache));
   }
 
   /** 范围徽标：班级考试 → 班级名；全年段考试 → 全年段 */
@@ -404,7 +414,8 @@
         try {
           await api.exams.remove(d.id);
           App.toast('已删除');
-          loadExams();
+          examsCache = examsCache.filter((e) => e.id !== d.id);
+          refreshLocal();
         } catch (err) {
           reportErr(err);
         }
@@ -438,7 +449,9 @@
         const uploaded = await api.files.upload(file);
         await api.exams.update(examId, { paper_url: uploaded.url });
         App.toast('试卷已上传');
-        loadExams();
+        const target = examsCache.find((e) => e.id === examId);
+        if (target) target.paper_url = uploaded.url;
+        refreshLocal();
       } catch (err) {
         if (err && err.code === 'R2_DEVELOPING') App.toast('文件存储功能开发中');
         else reportErr(err);
