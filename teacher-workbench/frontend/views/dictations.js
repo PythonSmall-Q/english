@@ -81,6 +81,181 @@
     return loadXLSX._p;
   }
 
+  /**
+   * 生成「未重默名单」PNG 并下载（canvas 2x 高清渲染，无需后端）
+   * opts: { meta: 头部说明行, sections: [{ heading?: 默写项目名, items: [{no, name}] }], filename }
+   */
+  function exportRetestImage(opts) {
+    const SCALE = 2;
+    const W = 840;
+    const PAD = 44;
+    const COLS = 2;
+    const CHIP_H = 44;
+    const CHIP_GAP = 12;
+    const FONT = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+    const innerW = W - PAD * 2;
+    const chipW = (innerW - CHIP_GAP) / COLS;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.font = `16px ${FONT}`;
+
+    /** 超长文本省略 */
+    const ellipsize = (text, maxW) => {
+      text = String(text == null ? '' : text);
+      if (ctx.measureText(text).width <= maxW) return text;
+      let s = text;
+      while (s.length > 1 && ctx.measureText(s + '…').width > maxW) s = s.slice(0, -1);
+      return s + '…';
+    };
+
+    // —— 预排版：量出每个 chip 内的文本，计算总高 ——
+    const HEADER_H = 132;
+    const FOOTER_H = 64;
+    const SECTION_GAP = 26;
+    const sections = (opts.sections || []).map((sec) => {
+      const items = (sec.items || []).map((it, i) => {
+        const no = it.no ? String(it.no) : '';
+        const name = String(it.name || '');
+        const noW = no ? ctx.measureText(no + '  ').width : 0;
+        return { text: name, no, truncated: ellipsize(name, chipW - 28 - noW - 16), noW };
+      });
+      const rows = Math.max(1, Math.ceil(items.length / COLS));
+      return {
+        heading: sec.heading || '',
+        items,
+        h: (sec.heading ? 40 : 6) + rows * (CHIP_H + CHIP_GAP) - CHIP_GAP,
+      };
+    });
+    const totalH =
+      PAD + HEADER_H + 26 + sections.reduce((s, x) => s + x.h, 0) + SECTION_GAP * Math.max(0, sections.length - 1) + FOOTER_H + PAD;
+
+    canvas.width = W * SCALE;
+    canvas.height = totalH * SCALE;
+    ctx.scale(SCALE, SCALE);
+
+    // —— 背景 ——
+    const bgGrad = ctx.createLinearGradient(0, 0, 0, totalH);
+    bgGrad.addColorStop(0, '#f7f9fe');
+    bgGrad.addColorStop(1, '#eef2fa');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, W, totalH);
+
+    // —— 头部渐变卡片 ——
+    const headGrad = ctx.createLinearGradient(PAD, 0, W - PAD, 0);
+    headGrad.addColorStop(0, '#4f6bed');
+    headGrad.addColorStop(1, '#7a5ff0');
+    ctx.fillStyle = headGrad;
+    ctx.beginPath();
+    ctx.moveTo(PAD, PAD + 20);
+    ctx.arcTo(PAD, PAD, PAD + 20, PAD, 20);
+    ctx.arcTo(W - PAD, PAD, W - PAD, PAD + 20, 20);
+    ctx.lineTo(W - PAD, PAD + HEADER_H - 20);
+    ctx.arcTo(W - PAD, PAD + HEADER_H, W - PAD - 20, PAD + HEADER_H, 20);
+    ctx.arcTo(PAD, PAD + HEADER_H, PAD, PAD + HEADER_H - 20, 20);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.font = `600 30px ${FONT}`;
+    ctx.fillText('未重默名单', PAD + 32, PAD + 52);
+    ctx.fillStyle = 'rgba(255,255,255,0.82)';
+    ctx.font = `15px ${FONT}`;
+    ctx.fillText(ellipsize(opts.meta || '', innerW - 64), PAD + 32, PAD + 86);
+    // 头部右下角「待重默」印章感文字
+    ctx.fillStyle = 'rgba(255,255,255,0.30)';
+    ctx.font = `600 64px ${FONT}`;
+    ctx.textAlign = 'right';
+    ctx.fillText('重默', W - PAD - 28, PAD + 92);
+    ctx.textAlign = 'left';
+
+    // —— 名单分区 ——
+    let y = PAD + HEADER_H + 26;
+    let total = 0;
+    sections.forEach((sec, si) => {
+      if (sec.heading) {
+        ctx.fillStyle = '#4f6bed';
+        ctx.fillRect(PAD, y + 4, 5, 20);
+        ctx.fillStyle = '#24314d';
+        ctx.font = `600 18px ${FONT}`;
+        ctx.fillText(ellipsize(sec.heading, innerW - 80), PAD + 16, y + 20);
+        ctx.fillStyle = '#98a2ba';
+        ctx.font = `13px ${FONT}`;
+        ctx.textAlign = 'right';
+        ctx.fillText(`${sec.items.length} 人`, W - PAD, y + 20);
+        ctx.textAlign = 'left';
+        y += 40;
+      }
+      sec.items.forEach((it, i) => {
+        const col = i % COLS;
+        const row = Math.floor(i / COLS);
+        const x = PAD + col * (chipW + CHIP_GAP);
+        const cy = y + row * (CHIP_H + CHIP_GAP);
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = '#e5eaf6';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        const r = 12;
+        ctx.moveTo(x + r, cy);
+        ctx.arcTo(x + chipW, cy, x + chipW, cy + CHIP_H, r);
+        ctx.arcTo(x + chipW, cy + CHIP_H, x, cy + CHIP_H, r);
+        ctx.arcTo(x, cy + CHIP_H, x, cy, r);
+        ctx.arcTo(x, cy, x + chipW, cy, r);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        // 序号圆点
+        ctx.fillStyle = '#eef2ff';
+        ctx.beginPath();
+        ctx.arc(x + 22, cy + CHIP_H / 2, 12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#4f6bed';
+        ctx.font = `600 12px ${FONT}`;
+        ctx.textAlign = 'center';
+        ctx.fillText(String(i + 1), x + 22, cy + CHIP_H / 2 + 4);
+        ctx.textAlign = 'left';
+        // 学号 + 姓名
+        let tx = x + 44;
+        if (it.no) {
+          ctx.fillStyle = '#98a2ba';
+          ctx.font = `13px ${FONT}`;
+          ctx.fillText(ellipsize(it.no, 70), tx, cy + CHIP_H / 2 + 5);
+          tx += ctx.measureText(ellipsize(it.no, 70)).width + 10;
+        }
+        ctx.fillStyle = '#24314d';
+        ctx.font = `500 16px ${FONT}`;
+        ctx.fillText(it.truncated, tx, cy + CHIP_H / 2 + 5);
+        total++;
+      });
+      y += sec.h + SECTION_GAP;
+    });
+
+    // —— 底部 ——
+    ctx.fillStyle = '#98a2ba';
+    ctx.font = `13px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(`共 ${total} 人待重默 · 生成于 ${new Date().toLocaleString('zh-CN', { hour12: false })}`, W / 2, totalH - PAD + 4);
+    ctx.textAlign = 'left';
+
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        App.toast('图片生成失败');
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = opts.filename || '未重默名单.png';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }, 'image/png');
+  }
+
+  /** 文件名安全化 */
+  function safeFilename(name) {
+    return String(name || '').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 80) || '未重默名单';
+  }
+
   /** 该默写适用的学生名单：班级默写取本班；全年段只取当前用户可管理班级的学生 */
   async function rosterOf(d) {
     if (d.scope === 'class') {
@@ -482,11 +657,37 @@
         <div class="muted" style="margin-bottom:8px">共 ${rows.length} 名学生待重默，勾选已完成重默的学生后提交。</div>
         <div class="dct-check-list" id="dct-t-list">${checkRows}</div>
         <div class="modal-actions">
+          <button class="btn" id="dct-t-export" type="button">导出名单</button>
           <button class="btn" id="dct-t-cancel" type="button">取消</button>
           <button class="btn btn-primary" id="dct-t-save" type="button">标记已重默</button>
         </div>`,
       (modal) => {
         modal.querySelector('#dct-t-cancel').onclick = App.closeModal;
+        modal.querySelector('#dct-t-export').onclick = () => {
+          // 按默写项目分组（保持出现顺序），组内按学号排序
+          const order = [];
+          const groups = new Map();
+          rows.forEach((r) => {
+            const t = r.dictationTitle || '默写';
+            if (!groups.has(t)) {
+              groups.set(t, []);
+              order.push(t);
+            }
+            groups.get(t).push(r);
+          });
+          order.forEach((t) =>
+            groups.get(t).sort((a, b) => String(a.studentNo || '￿').localeCompare(String(b.studentNo || '￿'), 'zh-CN'))
+          );
+          exportRetestImage({
+            meta: `班级：${clsName}`,
+            sections: order.map((t) => ({
+              heading: `默写项目：${t}`,
+              items: groups.get(t).map((r) => ({ no: r.studentNo, name: r.name })),
+            })),
+            filename: `${safeFilename('未重默名单-' + clsName)}.png`,
+          });
+          App.toast('名单图片已生成，开始下载');
+        };
         modal.querySelector('#dct-t-save').onclick = async () => {
           // 按默写分组，逐次调 retest 接口（§58：{ studentIds, completed: true }）
           const groups = new Map();
@@ -579,6 +780,7 @@
         </div>
         <div class="dct-check-list" id="dct-o-list">${rows}</div>
         <div class="modal-actions">
+          <button class="btn" id="dct-o-export" type="button">导出名单</button>
           <button class="btn" id="dct-o-cancel" type="button">取消</button>
           <button class="btn btn-primary" id="dct-o-save" type="button">提交重默</button>
         </div>`,
@@ -588,6 +790,16 @@
         modal.querySelector('#dct-o-all').onclick = () => setAll(true);
         modal.querySelector('#dct-o-none').onclick = () => setAll(false);
         modal.querySelector('#dct-o-cancel').onclick = App.closeModal;
+        modal.querySelector('#dct-o-export').onclick = () => {
+          const items = pending.map((r) => ({ no: r.studentNo, name: r.name }));
+          const clsPart = ctxClassId ? ` · 班级：${(classes.find((c) => c.id === ctxClassId) || {}).name || ''}` : '';
+          exportRetestImage({
+            meta: `默写项目：${det.title || (d && d.title) || ''}${clsPart}`,
+            sections: [{ items }],
+            filename: `${safeFilename('未重默名单-' + (det.title || (d && d.title) || '默写'))}.png`,
+          });
+          App.toast('名单图片已生成，开始下载');
+        };
         modal.querySelector('#dct-o-save').onclick = async () => {
           const studentIds = [];
           modal.querySelectorAll('#dct-o-list input[type=checkbox]:checked').forEach((cb) => studentIds.push(cb.dataset.sid));
