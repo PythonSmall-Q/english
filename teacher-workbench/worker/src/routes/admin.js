@@ -13,6 +13,7 @@ import { requireAuth, audit } from '../middleware.js';
 import { getQuotaUsage, PERSONAL_DEFAULTS } from '../quota.js';
 import { previousAcademicYear, archiveTenantYear, archiveAllTenants } from '../archive.js';
 import { rolloverTenants } from '../rollover.js';
+import { purgeExpiredTrials } from '../trial.js';
 
 const app = new Hono();
 
@@ -564,6 +565,16 @@ app.post('/migrate', requireAuth, async (c) => {
     operatorEmail: user.email,
   });
   return c.json({ success: true, data: { tenant_id: tenantId, tenant_name: tenantName, restored, counts } });
+});
+
+/**
+ * POST /api/v1/admin/purge-trials — 手动触发到期试用空间物理删除（平台管理员，便于测试/运维）
+ * 只删 plan='trial' 且 expires_at <= now 的租户；返回被删除的空间名列表。
+ */
+app.post('/purge-trials', requireAuth, async (c) => {
+  requirePlatformAdmin(c);
+  const result = await purgeExpiredTrials(c.env);
+  return c.json({ success: true, data: result });
 });
 
 export default app;

@@ -35,7 +35,7 @@ async function matchClass(db, tenantId, className) {
  * 成功：{ created: n, unmatched: [...] }（unmatched 为未能匹配班级的原始行）
  */
 app.post('/students', requireAuth, requireTenant, requireRole(['admin']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const body = await c.req.json().catch(() => ({}));
@@ -94,7 +94,7 @@ app.post('/students', requireAuth, requireTenant, requireRole(['admin']), async 
  * 成功：{ created: n, unmatched: [...] }
  */
 app.post('/schedules', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const membership = c.get('membership');
@@ -186,7 +186,7 @@ app.post('/schedules', requireAuth, requireTenant, requireRole(['teacher']), asy
  * 成功：{ restored: 总条数, counts: { classes: n, students: n, ... } }，并写审计日志。
  */
 app.post('/restore', requireAuth, requireTenant, requireRole(['admin']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const body = await c.req.json().catch(() => null);

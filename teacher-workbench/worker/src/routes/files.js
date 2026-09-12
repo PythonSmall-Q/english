@@ -38,9 +38,13 @@ function toDto(row, c) {
  * body: 原始二进制；文件名取 X-File-Name 头（或 ?name= 查询参数）
  */
 app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+  // 试用空间禁止上传文件（在 FILES binding 检查之前拦截）
+  if (c.get('tenant')?.plan === 'trial') {
+    throw new ApiError('FORBIDDEN', '试用空间不能上传文件');
+  }
   if (!c.env.FILES) throw new ApiError('R2_DEVELOPING', '文件存储功能开发中');
 
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
 
@@ -75,7 +79,7 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) =>
 
 /** GET /api/v1/files — 当前租户文件列表（最近 100 个） */
 app.get('/', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const rows = await db
     .prepare('SELECT * FROM files WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 100')
@@ -86,7 +90,7 @@ app.get('/', requireAuth, requireTenant, async (c) => {
 
 /** GET /api/v1/files/:id — 文件元数据 + 下载 URL */
 app.get('/:id', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const row = await db
     .prepare('SELECT * FROM files WHERE tenant_id = ? AND id = ?')
@@ -100,7 +104,7 @@ app.get('/:id', requireAuth, requireTenant, async (c) => {
 app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
   if (!c.env.FILES) throw new ApiError('R2_DEVELOPING', '文件存储功能开发中');
 
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const row = await db

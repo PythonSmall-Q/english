@@ -10,7 +10,7 @@
  */
 
 import { Hono } from 'hono';
-import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
+import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear, getUserInfos } from '../db.js';
 import { requireAuth, requireTenant, requireRole, requireClassManager, canManageClass, canAssignClassTeachers, audit, requireTeacherPerm, assertCurrentYear } from '../middleware.js';
 import { checkQuota } from '../quota.js';
 
@@ -33,7 +33,7 @@ function parseGraduationYear(value) {
 
 /** GET /api/v1/classes — 班级列表（含学生数、班主任、年级组、任课老师、权限标记） */
 app.get('/', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const user = c.get('user');
   const academicYear = resolveAcademicYear(c.req.query('academic_year'));
@@ -41,10 +41,8 @@ app.get('/', requireAuth, requireTenant, async (c) => {
     .prepare(
       `SELECT c.*,
               (SELECT COUNT(*) FROM students s WHERE s.tenant_id = c.tenant_id AND s.class_id = c.id) AS student_count,
-              u.display_name AS teacher_name,
               g.name AS grade_group_name
          FROM classes c
-         LEFT JOIN users u ON u.id = c.teacher_id
          LEFT JOIN grade_groups g ON g.id = c.grade_group_id AND g.tenant_id = c.tenant_id
         WHERE c.tenant_id = ? AND c.academic_year = ?
         ORDER BY c.created_at`
@@ -52,20 +50,33 @@ app.get('/', requireAuth, requireTenant, async (c) => {
     .bind(tenantId, academicYear)
     .all();
 
+  // 班主任姓名：users 表只在主库（试用库 TRIAL_DB 无 users，不可跨库 JOIN），回主库批量查
+  const teacherInfos = await getUserInfos(
+    c.env.DB,
+    rows.results.map((r) => r.teacher_id)
+  );
+  for (const r of rows.results) {
+    r.teacher_name = r.teacher_id ? (teacherInfos.get(r.teacher_id)?.display_name ?? null) : null;
+  }
+
   // 全部任课老师（按班分组）
   const ctRows = await db
     .prepare(
-      `SELECT ct.class_id, ct.user_id, ct.subject, u.display_name
-         FROM class_teachers ct JOIN users u ON u.id = ct.user_id
+      `SELECT ct.class_id, ct.user_id, ct.subject
+         FROM class_teachers ct
         WHERE ct.tenant_id = ?
         ORDER BY ct.created_at`
     )
     .bind(tenantId)
     .all();
+  const ctInfos = await getUserInfos(
+    c.env.DB,
+    ctRows.results.map((t) => t.user_id)
+  );
   const teachersByClass = new Map();
   for (const t of ctRows.results) {
     if (!teachersByClass.has(t.class_id)) teachersByClass.set(t.class_id, []);
-    teachersByClass.get(t.class_id).push({ userId: t.user_id, name: t.display_name, subject: t.subject });
+    teachersByClass.get(t.class_id).push({ userId: t.user_id, name: ctInfos.get(t.user_id)?.display_name ?? null, subject: t.subject });
   }
 
   // 当前用户担任组长的年级组
@@ -103,7 +114,7 @@ app.get('/', requireAuth, requireTenant, async (c) => {
  * body: { name, grade?, graduation_year? }
  */
 app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeacherPerm('create_classes'), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const body = await c.req.json().catch(() => ({}));
@@ -140,7 +151,7 @@ async function getClassOr404(db, tenantId, id) {
 
 /** GET /api/v1/classes/:id — 班级详情（含学生数） */
 app.get('/:id', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const cls = await getClassOr404(db, tenantId, c.req.param('id'));
   const count = await db
@@ -157,7 +168,7 @@ app.get('/:id', requireAuth, requireTenant, async (c) => {
  *         grade_group_id?(须为本空间年级组，null=移出组) }
  */
 app.put('/:id', requireAuth, requireTenant, requireClassManager({ self: true }), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const cls = c.get('managedClass');
@@ -238,7 +249,7 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ self: true }),
  * 班内有学生时 400，提示先移除学生
  */
 app.delete('/:id', requireAuth, requireTenant, requireClassManager({ self: true }), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const cls = c.get('managedClass');
@@ -280,7 +291,7 @@ app.delete('/:id', requireAuth, requireTenant, requireClassManager({ self: true 
  * 任课老师获得该班写权限（canManageClass）
  */
 app.post('/:id/teachers', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const cls = await getClassOr404(db, tenantId, c.req.param('id'));
@@ -318,7 +329,7 @@ app.post('/:id/teachers', requireAuth, requireTenant, async (c) => {
  * DELETE /api/v1/classes/:id/teachers/:userId — 移除任课老师（同设置权限）
  */
 app.delete('/:id/teachers/:userId', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const cls = await getClassOr404(db, tenantId, c.req.param('id'));

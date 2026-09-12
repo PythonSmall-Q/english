@@ -8,7 +8,7 @@
  */
 
 import { Hono } from 'hono';
-import { ApiError, newId, now } from '../db.js';
+import { ApiError, newId, now, getUserInfos } from '../db.js';
 import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
 
 const app = new Hono();
@@ -25,32 +25,47 @@ async function requireMember(db, tenantId, userId) {
 
 /** GET /api/v1/grade-groups — 年级组列表（含组长、组内班级数与班级 id） */
 app.get('/', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const groups = await db
     .prepare(
-      `SELECT g.*, u.display_name AS leader_name, u.email AS leader_email
+      `SELECT g.*
          FROM grade_groups g
-         LEFT JOIN users u ON u.id = g.leader_user_id
         WHERE g.tenant_id = ?
         ORDER BY g.created_at`
     )
     .bind(tenantId)
     .all();
+  // 组长姓名/邮箱：users 表只在主库（试用库 TRIAL_DB 无 users，不可跨库 JOIN），回主库批量查
+  const leaderInfos = await getUserInfos(
+    c.env.DB,
+    groups.results.map((g) => g.leader_user_id)
+  );
+  for (const g of groups.results) {
+    const info = g.leader_user_id ? leaderInfos.get(g.leader_user_id) : null;
+    g.leader_name = info?.display_name ?? null;
+    g.leader_email = info?.email ?? null;
+  }
   const classes = await db
     .prepare('SELECT id, name, grade_group_id FROM classes WHERE tenant_id = ?')
     .bind(tenantId)
     .all();
   const prepLeaders = await db
     .prepare(
-      `SELECT p.group_id, p.user_id, u.display_name
+      `SELECT p.group_id, p.user_id
          FROM grade_group_prep_leaders p
-         JOIN users u ON u.id = p.user_id
-        WHERE p.tenant_id = ?
-        ORDER BY u.display_name`
+        WHERE p.tenant_id = ?`
     )
     .bind(tenantId)
     .all();
+  // 备课组长姓名同样回主库查
+  const prepInfos = await getUserInfos(
+    c.env.DB,
+    prepLeaders.results.map((p) => p.user_id)
+  );
+  const prepName = new Map(
+    prepLeaders.results.map((p) => [p.user_id, prepInfos.get(p.user_id)?.display_name ?? null])
+  );
   const byGroup = new Map();
   for (const cls of classes.results) {
     if (!cls.grade_group_id) continue;
@@ -60,7 +75,7 @@ app.get('/', requireAuth, requireTenant, async (c) => {
   const prepByGroup = new Map();
   for (const pl of prepLeaders.results) {
     if (!prepByGroup.has(pl.group_id)) prepByGroup.set(pl.group_id, []);
-    prepByGroup.get(pl.group_id).push({ userId: pl.user_id, name: pl.display_name });
+    prepByGroup.get(pl.group_id).push({ userId: pl.user_id, name: prepName.get(pl.user_id) });
   }
   return c.json({
     success: true,
@@ -80,7 +95,7 @@ app.get('/', requireAuth, requireTenant, async (c) => {
  * body: { name, leaderUserId? }
  */
 app.post('/', requireAuth, requireTenant, requireRole(['admin']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const body = await c.req.json().catch(() => ({}));
@@ -108,7 +123,7 @@ app.post('/', requireAuth, requireTenant, requireRole(['admin']), async (c) => {
  * body: { name?, leaderUserId?(null=撤销组长) }
  */
 app.put('/:id', requireAuth, requireTenant, requireRole(['admin']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const group = await db
@@ -138,7 +153,7 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['admin']), async (c) =>
  * 组内班级自动移出（grade_group_id 置空），班级本身不删
  */
 app.delete('/:id', requireAuth, requireTenant, requireRole(['admin']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const group = await db
@@ -181,7 +196,7 @@ async function requirePrepLeaderMember(db, tenantId, userId) {
  * body: { userId }；重复设置幂等返回现有记录；每组不限人数
  */
 app.post('/:id/prep-leaders', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const membership = c.get('membership');
   const tenantId = c.get('tenantId');
@@ -222,7 +237,7 @@ app.post('/:id/prep-leaders', requireAuth, requireTenant, async (c) => {
  * DELETE /api/v1/grade-groups/:id/prep-leaders/:userId — 移除备课组长（owner/admin 或本组组长）
  */
 app.delete('/:id/prep-leaders/:userId', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const membership = c.get('membership');
   const tenantId = c.get('tenantId');

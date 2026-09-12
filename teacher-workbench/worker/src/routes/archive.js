@@ -18,7 +18,7 @@ const app = new Hono();
 
 /** GET /api/v1/archive/status — 归档状态（requireAuth + requireTenant） */
 app.get('/status', requireAuth, requireTenant, async (c) => {
-  const data = await getArchiveStatus(c.env.DB, c.get('tenantId'));
+  const data = await getArchiveStatus(c.get('tenantDb') || c.env.DB, c.get('tenantId'));
   return c.json({ success: true, data });
 });
 
@@ -30,7 +30,7 @@ app.get('/status', requireAuth, requireTenant, async (c) => {
  * 未归档 → 404「该学年此模块尚未归档」；module 非白名单 → 400。
  */
 app.get('/download', requireAuth, requireTenant, requireRole(['admin']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const module = c.req.query('module');
   const academicYear = String(c.req.query('academic_year') || '').trim();

@@ -10,15 +10,55 @@
  */
 
 import { Hono } from 'hono';
-import { ApiError, newId, now, currentAcademicYear } from '../db.js';
+import { ApiError, newId, now, currentAcademicYear, getUserInfos } from '../db.js';
 import { requireAuth, requireTenant, requireRole, audit, getUserPermissions, TEACHER_PERMS } from '../middleware.js';
-import { getQuotaUsage, PERSONAL_DEFAULTS } from '../quota.js';
+import { getQuotaUsage, PERSONAL_DEFAULTS, PLAN_PRESETS } from '../quota.js';
 import { hashPassword, resolvePlatformRole } from '../auth-core.js';
 
 const app = new Hono();
 
 const INVITE_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 天
 const INVITE_ROLES = ['admin', 'teacher', 'viewer'];
+
+/**
+ * 取租户成员列表（含主库 users 的 email/display_name）。
+ * users 表只在主库：试用租户库（TRIAL_DB）内无法 JOIN users，
+ * 成员行从租户库（tenantDb）查、用户信息统一回主库批量补（正式租户 tenantDb 即主库，行为不变）。
+ * @param {object} tenantDb 租户所在库（c.get('tenantDb') || c.env.DB）
+ * @param {object} mainDb 主库（users 全局表所在）
+ * @param {string} orderSql ORDER BY 子句（如 "m.created_at"）
+ */
+async function listMembersWithUser(tenantDb, mainDb, tenantId, orderSql = 'm.created_at') {
+  const rows = await tenantDb
+    .prepare(`SELECT m.* FROM memberships m WHERE m.tenant_id = ? ORDER BY ${orderSql}`)
+    .bind(tenantId)
+    .all();
+  const infos = await getUserInfos(
+    mainDb,
+    rows.results.map((m) => m.user_id)
+  );
+  return rows.results.map((m) => ({
+    ...m,
+    email: infos.get(m.user_id)?.email ?? null,
+    display_name: infos.get(m.user_id)?.display_name ?? null,
+  }));
+}
+
+/**
+ * 双库查找租户所在库：先主库（正式租户），未命中再 TRIAL_DB（试用租户）。
+ * @returns {Promise<object>} 命中库的 D1 binding
+ * @throws {ApiError} FORBIDDEN 两库都不存在该租户
+ */
+async function resolveTenantDb(c, tenantId) {
+  const mainDb = c.env.DB;
+  const hit = await mainDb.prepare('SELECT id FROM tenants WHERE id = ?').bind(tenantId).first();
+  if (hit) return mainDb;
+  if (c.env.TRIAL_DB) {
+    const trialHit = await c.env.TRIAL_DB.prepare('SELECT id FROM tenants WHERE id = ?').bind(tenantId).first();
+    if (trialHit) return c.env.TRIAL_DB;
+  }
+  throw new ApiError('FORBIDDEN', '你不属于该空间');
+}
 
 /** 成员数配额校验：max_members 非空且已满 → 403（§租户账户数目） */
 async function checkMemberQuota(db, tenantId) {
@@ -62,21 +102,35 @@ async function requireMembership(db, userId, tenantId) {
   return membership;
 }
 
-/** GET /api/v1/tenants — 当前用户的租户列表（含到期标记） */
+/** GET /api/v1/tenants — 当前用户的租户列表（双库并集：主库 + TRIAL_DB，含到期标记与配额用量） */
 app.get('/', requireAuth, async (c) => {
   const user = c.get('user');
-  const rows = await c.env.DB.prepare(
-    `SELECT t.id, t.name, t.slug, t.type, t.status, t.expires_at, m.role
-       FROM memberships m JOIN tenants t ON t.id = m.tenant_id
-      WHERE m.user_id = ? AND m.status = 'active'
-      ORDER BY m.created_at`
-  )
-    .bind(user.id)
-    .all();
-  const tenants = rows.results.map((r) => ({
-    ...r,
-    expired: !!r.expires_at && r.expires_at <= now(),
-  }));
+  const dbs = c.env.TRIAL_DB ? [c.env.DB, c.env.TRIAL_DB] : [c.env.DB];
+  const tenants = [];
+  for (const db of dbs) {
+    const rows = await db
+      .prepare(
+        `SELECT t.id, t.name, t.slug, t.type, t.status, t.plan, t.expires_at, m.role
+           FROM memberships m JOIN tenants t ON t.id = m.tenant_id
+          WHERE m.user_id = ? AND m.status = 'active'
+          ORDER BY m.created_at`
+      )
+      .bind(user.id)
+      .all();
+    for (const r of rows.results) {
+      tenants.push({
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        type: r.type,
+        role: r.role,
+        plan: r.plan,
+        expiresAt: r.expires_at,
+        expired: !!r.expires_at && r.expires_at <= now(),
+        quota: await getQuotaUsage(db, r.id), // 用量按所在库统计
+      });
+    }
+  }
   return c.json({ success: true, data: { tenants } });
 });
 
@@ -85,11 +139,14 @@ app.get('/', requireAuth, async (c) => {
  * body: {
  *   name, slug, ownerEmail?, ownerName?, ownerPassword?,  // 初始管理员：邮箱已注册直接用；
  *         未注册时需提供 ownerPassword（≥8位）现场开户
+ *   plan?,        // 定价套餐 free|pro|school|custom，缺省 custom（= 商议，手动配额）；
+ *                 非法值 400。free/pro/school 时 tenant_quotas 与 maxMembers 用预设值，
+ *                 body.quotas/body.maxMembers 被忽略；custom 时沿用手动配额逻辑
  *   expiresAt?,   // 到期日期 YYYY-MM-DD，到期后空间只读、数据保留
- *   maxMembers?,  // 租户内账户数目上限（null=不限）
- *   quotas?,      // 其他业务配额
+ *   maxMembers?,  // 租户内账户数目上限（null=不限；仅 plan=custom 时生效）
+ *   quotas?,      // 其他业务配额（仅 plan=custom 时生效）
  * }
- * 流程：tenant（含到期日）→ quota（含成员上限）→ owner membership（batch）
+ * 流程：tenant（含套餐、到期日）→ quota（含成员上限）→ owner membership（batch）
  */
 app.post('/', requireAuth, async (c) => {
   const user = c.get('user');
@@ -108,7 +165,17 @@ app.post('/', requireAuth, async (c) => {
   if (slugTaken) throw new ApiError('CONFLICT', 'slug 已被使用');
 
   const expiresAt = readExpiresAt(body.expiresAt);
-  if (body.maxMembers !== undefined && body.maxMembers !== null) {
+
+  // 定价套餐：缺省 custom（商议，手动配额）；free/pro/school 用预设值并忽略 body 传入
+  const planKey =
+    body.plan === undefined || body.plan === null || body.plan === '' ? 'custom' : String(body.plan);
+  const planPreset = PLAN_PRESETS[planKey];
+  if (!planPreset) {
+    throw new ApiError('VALIDATION_ERROR', `plan 必须是 ${Object.keys(PLAN_PRESETS).join('|')}`);
+  }
+  const usePreset = !!planPreset.quotas; // custom 无预设 quotas
+
+  if (!usePreset && body.maxMembers !== undefined && body.maxMembers !== null) {
     const mm = Number(body.maxMembers);
     if (!Number.isInteger(mm) || mm < 1) {
       throw new ApiError('VALIDATION_ERROR', 'maxMembers 必须是正整数或 null');
@@ -139,17 +206,18 @@ app.post('/', requireAuth, async (c) => {
     }
   }
 
-  const quotas = { ...PERSONAL_DEFAULTS, ...(body.quotas || {}) };
+  const quotas = usePreset ? { ...planPreset.quotas } : { ...PERSONAL_DEFAULTS, ...(body.quotas || {}) };
+  const maxMembers = usePreset ? planPreset.maxMembers : body.maxMembers ?? null;
   const ts = now();
   const tenantId = newId();
 
   const statements = [
     db
       .prepare(
-        `INSERT INTO tenants (id, name, slug, type, status, created_by, expires_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)`
+        `INSERT INTO tenants (id, name, slug, type, status, plan, created_by, expires_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)`
       )
-      .bind(tenantId, name, slug, type, user.id, expiresAt, ts, ts),
+      .bind(tenantId, name, slug, type, planKey, user.id, expiresAt, ts, ts),
     db
       .prepare(
         `INSERT INTO tenant_quotas (tenant_id, max_classes, max_students, max_lessons, max_assignments,
@@ -166,7 +234,7 @@ app.post('/', requireAuth, async (c) => {
         quotas.max_exams ?? null,
         quotas.max_storage_bytes ?? null,
         quotas.max_ai_requests_month ?? null,
-        body.maxMembers ?? null,
+        maxMembers,
         ts,
         ts
       ),
@@ -197,31 +265,33 @@ app.post('/', requireAuth, async (c) => {
   }
   await db.batch(statements);
 
-  await audit(db, tenantId, user.id, '创建租户', 'tenant', tenantId, { name, slug, type, expiresAt });
+  await audit(db, tenantId, user.id, '创建租户', 'tenant', tenantId, { name, slug, type, plan: planKey, expiresAt });
   return c.json(
-    { success: true, data: { id: tenantId, name, slug, type, ownerId, expiresAt, createdOwner: createdOwner ? { email: createdOwner.email } : null } },
+    { success: true, data: { id: tenantId, name, slug, type, plan: planKey, ownerId, expiresAt, createdOwner: createdOwner ? { email: createdOwner.email } : null } },
     201
   );
 });
 
-/** GET /api/v1/tenants/:id — 详情 + 成员 + 配额（租户成员可见） */
+/** GET /api/v1/tenants/:id — 详情 + 成员 + 配额（租户成员可见；双库查找：主库 → TRIAL_DB） */
 app.get('/:id', requireAuth, async (c) => {
   const user = c.get('user');
   const tenantId = c.req.param('id');
-  const db = c.env.DB;
+  const db = await resolveTenantDb(c, tenantId);
   await requireMembership(db, user.id, tenantId);
 
   const tenant = await db.prepare('SELECT * FROM tenants WHERE id = ?').bind(tenantId).first();
   if (!tenant) throw new ApiError('NOT_FOUND', '租户不存在');
-  const members = await db
-    .prepare(
-      `SELECT m.id, m.role, m.status, m.created_at, u.id AS user_id, u.email, u.display_name
-         FROM memberships m JOIN users u ON u.id = m.user_id
-        WHERE m.tenant_id = ?
-        ORDER BY m.created_at`
-    )
-    .bind(tenantId)
-    .all();
+  // 成员行在租户库，users 信息回主库补（试用库无 users 表）
+  const memberRows = await listMembersWithUser(db, c.env.DB, tenantId);
+  const members = memberRows.map((m) => ({
+    id: m.id,
+    role: m.role,
+    status: m.status,
+    created_at: m.created_at,
+    user_id: m.user_id,
+    email: m.email,
+    display_name: m.display_name,
+  }));
   const quota = await db
     .prepare('SELECT * FROM tenant_quotas WHERE tenant_id = ?')
     .bind(tenantId)
@@ -229,7 +299,7 @@ app.get('/:id', requireAuth, async (c) => {
 
   return c.json({
     success: true,
-    data: { tenant, members: members.results, quota, usage: await getQuotaUsage(db, tenantId) },
+    data: { tenant, members, quota, usage: await getQuotaUsage(db, tenantId) },
   });
 });
 
@@ -249,13 +319,15 @@ app.post('/:id/members', requireAuth, requireTenant, requireRole(['admin']), asy
     throw new ApiError('VALIDATION_ERROR', `role 必须是 ${INVITE_ROLES.join('|')}`);
   }
 
-  const db = c.env.DB;
-  const existing = await db
-    .prepare(
-      "SELECT id FROM memberships WHERE tenant_id = ? AND status = 'active' AND user_id = (SELECT id FROM users WHERE email = ?)"
-    )
-    .bind(tenantId, email)
-    .first();
+  const db = c.get('tenantDb') || c.env.DB;
+  // users 表只在主库：先回主库按邮箱定位用户，再在租户库查成员关系
+  const invitee = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+  const existing = invitee
+    ? await db
+        .prepare("SELECT id FROM memberships WHERE tenant_id = ? AND status = 'active' AND user_id = ?")
+        .bind(tenantId, invitee.id)
+        .first()
+    : null;
   if (existing) throw new ApiError('CONFLICT', '该用户已是空间成员');
 
   // 随机 32B 邀请 token，仅本次响应返回原始值
@@ -302,8 +374,10 @@ app.post('/:id/accounts', requireAuth, requireTenant, requireRole(['admin']), as
     throw new ApiError('VALIDATION_ERROR', `role 必须是 ${INVITE_ROLES.join('|')}`);
   }
 
-  const db = c.env.DB;
-  const existingUser = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  // 租户级（成员关系/配额/审计）走租户库；users 全局表只查/写主库
+  const db = c.get('tenantDb') || c.env.DB;
+  const mainDb = c.env.DB;
+  const existingUser = await mainDb.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
   if (existingUser) {
     const membership = await db
       .prepare('SELECT * FROM memberships WHERE tenant_id = ? AND user_id = ?')
@@ -347,7 +421,8 @@ app.post('/:id/accounts', requireAuth, requireTenant, requireRole(['admin']), as
   } else {
     userId = newId();
     statements.push(
-      db
+      // users 全局表只写主库
+      mainDb
         .prepare(
           `INSERT INTO users (id, email, password_hash, display_name, platform_role, status, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`
@@ -399,7 +474,8 @@ app.post('/invitations/accept', requireAuth, async (c) => {
   const token = String(body.token || '');
   if (!token) throw new ApiError('VALIDATION_ERROR', 'token 不能为空');
 
-  const db = c.env.DB;
+  // 邀请/租户/成员关系都是租户级数据：试用租户在 TRIAL_DB 内闭环
+  const db = c.get('tenantDb') || c.env.DB;
   const invite = await db
     .prepare('SELECT * FROM invitations WHERE token_hash = ?')
     .bind(await sha256Hex(token))
@@ -474,7 +550,7 @@ app.delete('/:id/members/:userId', requireAuth, requireTenant, requireRole(['own
   const operator = c.get('user');
   const operatorRole = c.get('membership').role;
   const targetUserId = c.req.param('userId');
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
 
   const target = await db
     .prepare('SELECT * FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = ?')
@@ -550,17 +626,10 @@ const USER_QUOTA_RESOURCES = ['lessons', 'assignments', 'dictations', 'ai', 'fil
  */
 app.get('/:id/quota-detail', requireAuth, requireTenant, requireRole(['owner', 'admin']), async (c) => {
   const tenantId = c.get('tenantId');
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
 
-  const members = await db
-    .prepare(
-      `SELECT m.user_id, m.role, m.status, u.email, u.display_name
-         FROM memberships m JOIN users u ON u.id = m.user_id
-        WHERE m.tenant_id = ?
-        ORDER BY m.status = 'removed', m.created_at`
-    )
-    .bind(tenantId)
-    .all();
+  // 成员行在租户库，users 信息（email/display_name）回主库补（试用库无 users 表）
+  const members = await listMembersWithUser(db, c.env.DB, tenantId, "m.status = 'removed', m.created_at");
 
   // 全租户权限关闭记录一次取出（allowed=0 的 perm 集合），按用户分组
   const permRows = await db
@@ -573,9 +642,8 @@ app.get('/:id/quota-detail', requireAuth, requireTenant, requireRole(['owner', '
     deniedPerms.get(r.user_id).add(r.perm);
   }
 
-  const monthPrefix = new Date().toISOString().slice(0, 7);
   const users = [];
-  for (const m of members.results) {
+  for (const m of members) {
     const userId = m.user_id;
     const usage = await getUserUsage(db, tenantId, userId);
     const quotaRows = await db
@@ -616,7 +684,7 @@ app.put('/:id/members/:userId/quota', requireAuth, requireTenant, requireRole(['
   const tenantId = c.get('tenantId');
   const operator = c.get('user');
   const targetUserId = c.req.param('userId');
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const body = await c.req.json().catch(() => ({}));
 
   const resource = String(body.resource || '');
@@ -670,7 +738,7 @@ app.get('/:id/academic-years', requireAuth, requireTenant, async (c) => {
   if (tenantId !== c.get('tenantId')) {
     throw new ApiError('FORBIDDEN', '你不属于该空间');
   }
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   // 逐表取 distinct 学年后在内存合并降序（避免 compound SELECT 在 D1 本地模式下的条数限制）
   const TABLES = ['classes', 'students', 'lessons', 'schedules', 'assignments', 'dictations', 'exams'];
   const yearSet = new Set();
@@ -696,7 +764,7 @@ app.get('/:id/my-quota', requireAuth, requireTenant, async (c) => {
   const tenantId = c.get('tenantId');
   const user = c.get('user');
   const membership = c.get('membership');
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
 
   const usage = await getUserUsage(db, tenantId, user.id);
   const quotaRows = await db
@@ -719,7 +787,7 @@ app.put('/:id/members/:userId/permissions', requireAuth, requireTenant, requireR
   const tenantId = c.get('tenantId');
   const operator = c.get('user');
   const targetUserId = c.req.param('userId');
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const body = await c.req.json().catch(() => ({}));
 
   const perm = String(body.perm || '');

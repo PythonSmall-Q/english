@@ -32,6 +32,8 @@ import archiveRoutes from './routes/archive.js';
 import graduatedRoutes from './routes/graduated.js';
 import { archiveAllTenants } from './archive.js';
 import { rolloverTenants } from './rollover.js';
+import { purgeExpiredTrials } from './trial.js';
+import trialRoutes from './routes/trial.js';
 
 const app = new Hono();
 
@@ -70,6 +72,7 @@ app.route('/api/v1/dashboard', dashboardRoutes);
 app.route('/api/v1/grade-groups', gradeGroupRoutes);
 app.route('/api/v1/archive', archiveRoutes);
 app.route('/api/v1/graduated', graduatedRoutes);
+app.route('/api/v1/trials', trialRoutes);
 
 app.onError(onError);
 app.notFound(notFoundHandler);
@@ -80,7 +83,8 @@ app.notFound(notFoundHandler);
  * - scheduled：定时触发（wrangler.toml [triggers]）
  *   · 9/1 任务（北京时间凌晨）：学年初自动结转 rolloverTenants + 毕业班归档
  *   · 10/1 任务（北京时间凌晨）：压缩归档所有租户上一学年的默写/作业/考试数据
- *   两者分别 try/catch：9/1 任务因无 10 月任务数据 archiveAllTenants 通常 no-op，10/1 同理。
+ *   · 每日（北京时间 03:12）：物理删除到期试用空间 purgeExpiredTrials
+ *   三者分别 try/catch：9/1 任务因无 10 月任务数据 archiveAllTenants 通常 no-op，10/1 同理。
  */
 export default {
   fetch: app.fetch,
@@ -94,6 +98,11 @@ export default {
       await archiveAllTenants(env);
     } catch (err) {
       console.error('[scheduled] 学年归档失败:', err);
+    }
+    try {
+      await purgeExpiredTrials(env);
+    } catch (err) {
+      console.error('[scheduled] 试用空间清理失败:', err);
     }
   },
 };

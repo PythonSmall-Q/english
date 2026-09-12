@@ -76,7 +76,7 @@ async function validateScheduleBody(db, tenantId, body, existing) {
  * 支持 ?weekday=1-7 过滤、?academic_year= 学年过滤（缺省/非法回退当前学年）；按 weekday、period 排序
  */
 app.get('/', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const weekday = c.req.query('weekday');
   const academicYear = resolveAcademicYear(c.req.query('academic_year'));
@@ -124,7 +124,7 @@ async function requireScheduleManager(db, tenantId, user, scheduleLike) {
  * body: { weekday, period?, class_id?, title?, start_time?, end_time?, lesson_type?, classroom?, scope? }
  */
 app.post('/', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const body = await c.req.json().catch(() => ({}));
@@ -175,7 +175,7 @@ async function getScheduleOr404(db, tenantId, id) {
 
 /** PUT /api/v1/schedules/:id — 更新课表条目（按新旧归属判定管理权限） */
 app.put('/:id', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const schedule = await getScheduleOr404(db, tenantId, c.req.param('id'));
@@ -218,7 +218,7 @@ app.put('/:id', requireAuth, requireTenant, async (c) => {
 
 /** DELETE /api/v1/schedules/:id — 删除课表条目（该班管理者/管理员，物理删除） */
 app.delete('/:id', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const schedule = await getScheduleOr404(db, tenantId, c.req.param('id'));

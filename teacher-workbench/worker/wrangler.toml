@@ -14,10 +14,20 @@ migrations_dir = "migrations"
 # database_id 先用占位符：用 npx wrangler d1 create teacher-workbench-graduated 创建后替换。
 [[d1_databases]]
 binding = "GRAD_DB"
-database_name = "teacher-workbench-graduated"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_name = "grad_db"
+database_id = "6154a55e-5c4f-4a2c-857f-40029642aad0"
 
 migrations_dir = "grad-migrations"
+
+# 试用租户独立库（TRIAL_DB）：试用空间（plan='trial'）的租户行、成员关系、配额
+# 与全部业务数据只存本库，主库 DB 不再存任何试用数据；users/sessions 等全局表
+# 永远在主库。到期试用空间由每日 cron 在本库内物理删除。
+[[d1_databases]]
+binding = "TRIAL_DB"
+database_name = "trialuser"
+database_id = "631ee25e-3414-4a2c-b48e-9368db88cd5c"
+
+migrations_dir = "trial-migrations"
 
 [[r2_buckets]]
 binding = "FILES"
@@ -39,5 +49,7 @@ port = 8787
 #   （非毕业班级 academic_year 更新为新学年；毕业班整体归档到 GRAD_DB 并从主库删除）
 # - 每年北京时间 10 月 1 日凌晨 03:00（UTC 9 月 30 日 19:00）：自动压缩归档
 #   所有租户上一学年的默写/作业/考试数据到 year_archives，并删除对应明细行
+# - 每日北京时间 03:12（UTC 19:12）：物理删除到期试用空间（plan='trial' 且
+#   expires_at <= now 的租户全部数据，含 R2 文件对象与 tenants 行本身）
 [triggers]
-schedules = ["0 19 30 9 *", "0 19 31 8 *"]
+crons = ["0 19 30 9 *", "0 19 31 8 *", "12 19 * * *"]

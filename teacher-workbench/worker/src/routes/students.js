@@ -34,7 +34,7 @@ function currentWeekRange() {
  * 每条附 alert 预警统计（§28），避免前端逐生调详情（N+1）
  */
 app.get('/', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const classId = c.req.query('class_id');
   const q = (c.req.query('q') || '').trim();
@@ -134,7 +134,7 @@ async function requireClassInTenant(db, tenantId, classId) {
  * body: { class_id, name, student_no?, gender?, status?, notes? }
  */
 app.post('/', requireAuth, requireTenant, requireClassManager(), requireTeacherPerm('create_students'), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const body = c.get('_body') || (await c.req.json().catch(() => ({})));
@@ -232,7 +232,7 @@ async function getAlertStats(db, tenantId, studentId) {
 
 /** GET /api/v1/students/:id — 详情 + 预警统计 */
 app.get('/:id', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const student = await getStudentOr404(db, tenantId, c.req.param('id'));
   const cls = student.class_id
@@ -244,7 +244,7 @@ app.get('/:id', requireAuth, requireTenant, async (c) => {
 
 /** PUT /api/v1/students/:id — 更新学生（该班管理者） */
 app.put('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', table: 'students' }), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const student = await getStudentOr404(db, tenantId, c.req.param('id'));
@@ -286,7 +286,7 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', t
 
 /** DELETE /api/v1/students/:id — 删除学生（该班管理者，物理删除） */
 app.delete('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', table: 'students' }), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const student = await getStudentOr404(db, tenantId, c.req.param('id'));
@@ -306,7 +306,7 @@ app.delete('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id'
  * classRank = 班内名次（同分同名次）；无成绩或未分班 → null
  */
 app.get('/:id/exam-scores', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const student = await getStudentOr404(db, tenantId, c.req.param('id'));
   const cls = student.class_id

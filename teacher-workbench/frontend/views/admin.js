@@ -9,6 +9,13 @@
 /** 租户类型/状态中文映射 */
 const TENANT_TYPE_LABELS = { personal: '个人空间', organization: '组织' };
 const TENANT_STATUS_LABELS = { active: '正常', disabled: '已停用' };
+/** 定价套餐（创建租户三选一预设，缺省 custom=商议/手动配额） */
+const PLAN_LABELS = { free: '免费版', pro: '专业版', school: '学校版', custom: '商议' };
+const PLAN_SUMMARIES = {
+  free: '1 个班级 · 30 名学生 · AI 20 次/月 · 10MB 存储 · 最多 5 名成员',
+  pro: '10 个班级 · 300 名学生 · AI 500 次/月 · 5GB 存储 · 最多 30 名成员',
+  school: '班级 / 学生 / 教案等不限 · AI 5000 次/月 · 50GB 存储 · 成员不限',
+};
 /** 可编辑配额字段（§20 + 成员数上限） */
 const QUOTA_FIELDS = [
   ['max_classes', '班级上限'],
@@ -51,6 +58,18 @@ App.registerView('admin', {
         </div>
         <div class="form-row">
           <div><label class="form-label">管理员初始密码（邮箱未注册时必填，≥8 位）</label><input class="form-input" id="t-owner-password" type="password" placeholder="留空则要求邮箱已注册"></div>
+        </div>
+        <div class="form-row">
+          <div style="grid-column:1/-1">
+            <label class="form-label">定价套餐</label>
+            <div style="display:flex;gap:16px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="t-plan" value="free"><span>免费版</span></label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="t-plan" value="pro"><span>专业版</span></label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="t-plan" value="school"><span>学校版</span></label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="t-plan" value="custom" checked><span>商议（自定义）</span></label>
+            </div>
+            <div id="t-plan-summary" class="muted" style="margin-top:6px;font-size:12.5px">创建后可点列表里的「配额/到期」自行填写</div>
+          </div>
         </div>
         <div class="modal-actions">
           <button class="btn btn-primary" id="t-create" type="button">创建租户</button>
@@ -307,6 +326,16 @@ function bindMigrate(el) {
 
 /** 创建租户（§73：tenant → quota → owner membership → 发送/生成邀请 由后端完成） */
 function bindCreate(el) {
+  // 套餐 radio：切换时更新配额摘要；前三档走预设（成员上限输入被忽略），custom 保持手动配额
+  const summaryBox = el.querySelector('#t-plan-summary');
+  el.querySelectorAll('input[name="t-plan"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      const plan = el.querySelector('input[name="t-plan"]:checked').value;
+      summaryBox.textContent = plan === 'custom'
+        ? '创建后可点列表里的「配额/到期」自行填写'
+        : PLAN_SUMMARIES[plan];
+    });
+  });
   el.querySelector('#t-create').addEventListener('click', async () => {
     const name = el.querySelector('#t-name').value.trim();
     const slug = el.querySelector('#t-slug').value.trim();
@@ -315,24 +344,33 @@ function bindCreate(el) {
     const ownerEmail = el.querySelector('#t-owner-email').value.trim();
     const ownerName = el.querySelector('#t-owner-name').value.trim();
     const ownerPassword = el.querySelector('#t-owner-password').value;
+    const plan = el.querySelector('input[name="t-plan"]:checked').value;
     if (!name || !slug) {
       App.toast('租户名称与 Slug 不能为空');
       return;
     }
     try {
-      // POST /tenants 仅 platform_admin（§5/§73）；类型固定 organization，配额可创建后再调配额编辑
+      // POST /tenants 仅 platform_admin（§5/§73）；类型固定 organization，套餐前三档用预设配额，custom 走手动配额
       const body = { name, slug, type: 'organization', expiresAt };
-      if (maxMembersRaw) body.maxMembers = Number(maxMembersRaw);
+      if (plan !== 'custom') {
+        body.plan = plan; // 预设套餐：maxMembers/quotas 由后端按套餐写入，忽略手动值
+      } else if (maxMembersRaw) {
+        body.maxMembers = Number(maxMembersRaw);
+      }
       if (ownerEmail) {
         body.ownerEmail = ownerEmail;
         if (ownerName) body.ownerName = ownerName;
         if (ownerPassword) body.ownerPassword = ownerPassword;
       }
       const data = await api.tenants.create(body);
-      App.toast(data.createdOwner ? `租户已创建，已为 ${data.createdOwner.email} 开户` : '租户已创建');
+      const planLabel = PLAN_LABELS[data.plan] || PLAN_LABELS[plan];
+      const suffix = `（套餐：${planLabel}）`;
+      App.toast((data.createdOwner ? `租户已创建，已为 ${data.createdOwner.email} 开户` : '租户已创建') + suffix);
       ['#t-name', '#t-slug', '#t-expires', '#t-max-members', '#t-owner-email', '#t-owner-name', '#t-owner-password'].forEach(
         (sel) => (el.querySelector(sel).value = '')
       );
+      el.querySelector('input[name="t-plan"][value="custom"]').checked = true;
+      summaryBox.textContent = '创建后可点列表里的「配额/到期」自行填写';
       await renderTenants();
     } catch (e) {
       App.toast(e.message || '创建失败');
@@ -352,11 +390,14 @@ async function renderTenants() {
     }
     box.innerHTML = `
       <table class="table">
-        <thead><tr><th>名称</th><th>Slug</th><th>类型</th><th>状态</th><th>到期日期</th><th>成员数</th><th>操作</th></tr></thead>
+        <thead><tr><th>名称</th><th>Slug</th><th>类型</th><th>套餐</th><th>状态</th><th>到期日期</th><th>成员数</th><th>操作</th></tr></thead>
         <tbody>
           ${tenants
             .map((t) => {
               const expired = !!t.expired;
+              const planBadge = PLAN_LABELS[t.plan]
+                ? `<span class="badge badge-info">${PLAN_LABELS[t.plan]}</span>`
+                : '<span class="badge">商议</span>';
               const statusBadge = expired
                 ? '<span class="badge badge-warning">已到期</span>'
                 : `<span class="badge ${t.status === 'active' ? 'badge-success' : 'badge-leave'}">${TENANT_STATUS_LABELS[t.status] || App.esc(t.status)}</span>`;
@@ -364,6 +405,7 @@ async function renderTenants() {
                 <td>${App.esc(t.name)}</td>
                 <td>${App.esc(t.slug)}</td>
                 <td>${TENANT_TYPE_LABELS[t.type] || App.esc(t.type)}</td>
+                <td>${planBadge}</td>
                 <td>${statusBadge}</td>
                 <td class="muted">${expired ? `<span style="color:var(--danger)">${App.esc((t.expires_at || '').slice(0, 10))}</span>` : App.esc((t.expires_at || '').slice(0, 10) || '—')}</td>
                 <td>${t.memberCount ?? t.member_count ?? '-'}</td>

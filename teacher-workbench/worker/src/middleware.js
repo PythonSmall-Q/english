@@ -6,7 +6,7 @@
  *     const user = c.get('user');        // users 行（含 id/email/display_name/platform_role）
  *     const tenantId = c.get('tenantId'); // 当前租户（来自 X-Tenant-Id 头，已验证归属）
  *     const membership = c.get('membership'); // memberships 行（role/status）
- *     const db = c.env.DB;
+ *     const db = c.get('tenantDb') || c.env.DB; // 租户所在库（正式=主库，试用=TRIAL_DB）
  *     ...
  *   });
  * - 角色层级：owner > admin > teacher > viewer
@@ -36,7 +36,14 @@ export async function requireAuth(c, next) {
 /**
  * 租户中间件：读 X-Tenant-Id 头 → 查 memberships 验证归属 → 挂载上下文。
  * 必须在 requireAuth 之后使用。
- * 挂载：c.set('tenantId') / c.set('membership') / c.set('tenant')
+ *
+ * 双库解析：先按原逻辑查主库 memberships → tenants；membership 或 tenant 未命中
+ * 且 env.TRIAL_DB 存在时，改用 TRIAL_DB 重查（memberships 先，再 tenants）——
+ * 试用租户（plan='trial'）整体迁入 TRIAL_DB，主库不再存任何试用数据。
+ * 命中后 c.set('tenantDb', 命中库)（主库命中也 set 主库句柄），后续路由一律
+ * 用 c.get('tenantDb') || c.env.DB 取租户库；TRIAL_DB 缺失时行为与纯主库完全一致。
+ *
+ * 挂载：c.set('tenantId') / c.set('membership') / c.set('tenant') / c.set('tenantDb')
  * @throws {ApiError} BAD_REQUEST（缺头）/ FORBIDDEN（非成员或租户停用）
  */
 export async function requireTenant(c, next) {
@@ -45,17 +52,40 @@ export async function requireTenant(c, next) {
     throw new ApiError('BAD_REQUEST', '缺少 X-Tenant-Id 请求头');
   }
   const user = c.get('user');
-  const membership = await c.env.DB.prepare(
-    "SELECT * FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'"
-  )
+
+  // 第一跳：主库（正式租户）
+  let db = c.env.DB;
+  let membership = await db
+    .prepare(
+      "SELECT * FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'"
+    )
     .bind(tenantId, user.id)
     .first();
+  let tenant = null;
+  if (membership) {
+    tenant = await db.prepare('SELECT * FROM tenants WHERE id = ?').bind(tenantId).first();
+  }
+
+  // 第二跳：试用库（仅当主库未命中且 TRIAL_DB 已配置；TRIAL_DB 未命中维持原 403 文案）
+  if ((!membership || !tenant) && c.env.TRIAL_DB) {
+    const trialDb = c.env.TRIAL_DB;
+    if (!membership) {
+      membership = await trialDb
+        .prepare(
+          "SELECT * FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'"
+        )
+        .bind(tenantId, user.id)
+        .first();
+    }
+    if (membership) {
+      tenant = await trialDb.prepare('SELECT * FROM tenants WHERE id = ?').bind(tenantId).first();
+    }
+    if (membership && tenant) db = trialDb;
+  }
+
   if (!membership) {
     throw new ApiError('FORBIDDEN', '你不属于该空间或成员状态异常');
   }
-  const tenant = await c.env.DB.prepare('SELECT * FROM tenants WHERE id = ?')
-    .bind(tenantId)
-    .first();
   if (!tenant) {
     throw new ApiError('FORBIDDEN', '空间不存在或已被停用');
   }
@@ -74,6 +104,7 @@ export async function requireTenant(c, next) {
   c.set('tenantId', tenantId);
   c.set('membership', membership);
   c.set('tenant', tenant);
+  c.set('tenantDb', db);
   c.set('tenantReadOnly', tenant.status !== 'active' || expired);
   await next();
 }
@@ -187,7 +218,7 @@ export async function canAssignClassTeachers(db, tenantId, userId, cls) {
  */
 export function requireClassManager(options = {}) {
   return async (c, next) => {
-    const db = c.env.DB;
+    const db = c.get('tenantDb') || c.env.DB;
     const tenantId = c.get('tenantId');
     const user = c.get('user');
 
@@ -288,9 +319,8 @@ export function requireTeacherPerm(perm) {
       await next();
       return;
     }
-    const row = await c.env.DB.prepare(
-      'SELECT allowed FROM user_permissions WHERE tenant_id = ? AND user_id = ? AND perm = ?'
-    )
+    const row = await (c.get('tenantDb') || c.env.DB)
+      .prepare('SELECT allowed FROM user_permissions WHERE tenant_id = ? AND user_id = ? AND perm = ?')
       .bind(c.get('tenantId'), c.get('user').id, perm)
       .first();
     if (row && row.allowed === 0) {

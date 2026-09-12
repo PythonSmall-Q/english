@@ -16,7 +16,7 @@ import { requireAuth, requireTenant, requireRole } from '../middleware.js';
 const app = new Hono();
 
 app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
 
   // 今日课表（period 可能为空，空值排最后）；weekday 与 schedules 路由同口径 1=周一…7=周日

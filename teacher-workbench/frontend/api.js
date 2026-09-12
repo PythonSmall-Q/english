@@ -324,6 +324,12 @@
     download: (id) => request(`/graduated/${id}/download`),
   };
 
+  // —— 3 天试用（plan='trial'，一生一次，到期物理删除）——
+  const trials = {
+    /** 创建试用空间；成功返回 { tenant }；已试用过返回 409 */
+    start: () => request('/trials/start', { method: 'POST', body: {} }),
+  };
+
   // —— 平台管理（§72/§73，仅 platform_admin）——
   const admin = {
     tenants: () => request('/admin/tenants'),
@@ -341,5 +347,5 @@
     migrate: (body) => request('/admin/migrate', { method: 'POST', body }),
   };
 
-  window.api = { auth, tenants, gradeGroups, classes, students, lessons, schedules, assignments, dictations, exams, dashboard, ai, files, import: imp, export: exp, archive, graduated, admin };
+  window.api = { auth, tenants, gradeGroups, classes, students, lessons, schedules, assignments, dictations, exams, dashboard, ai, files, import: imp, export: exp, archive, graduated, trials, admin };
 })();

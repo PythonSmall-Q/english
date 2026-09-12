@@ -9,6 +9,62 @@
 
 import { ApiError } from './db.js';
 
+/**
+ * 定价套餐预设（§73 创建租户三选一）：
+ * - free/pro/school：创建租户时以其 quotas 写入 tenant_quotas、maxMembers 写入 max_members（忽略 body 传入值）
+ * - custom（商议）：无预设，沿用 body.quotas/body.maxMembers 手动配额
+ * quotas 键与 tenant_quotas 列一致；NULL 表示不限
+ */
+export const PLAN_PRESETS = {
+  free: {
+    label: '免费版',
+    quotas: {
+      max_classes: 1,
+      max_students: 30,
+      max_lessons: 50,
+      max_assignments: 100,
+      max_dictations: 50,
+      max_exams: 20,
+      max_storage_bytes: 10485760, // 10MB
+      max_ai_requests_month: 20,
+    },
+    maxMembers: 5,
+  },
+  pro: {
+    label: '专业版',
+    quotas: {
+      max_classes: 10,
+      max_students: 300,
+      max_lessons: 500,
+      max_assignments: 1000,
+      max_dictations: 500,
+      max_exams: 100,
+      max_storage_bytes: 5368709120, // 5GB
+      max_ai_requests_month: 500,
+    },
+    maxMembers: 30,
+  },
+  school: {
+    label: '学校版',
+    quotas: {
+      max_classes: null,
+      max_students: null,
+      max_lessons: null,
+      max_assignments: null,
+      max_dictations: null,
+      max_exams: null,
+      max_storage_bytes: 53687091200, // 50GB
+      max_ai_requests_month: 5000,
+    },
+    maxMembers: null,
+  },
+  custom: {
+    label: '商议',
+    quotas: null,
+    maxMembers: null,
+  },
+};
+
 /** 个人空间（type=personal）默认配额，注册时写入 tenant_quotas */
 export const PERSONAL_DEFAULTS = {
   max_classes: 2,

@@ -92,6 +92,27 @@ export const forbidden = (msg = '没有权限执行此操作') => new ApiError('
 export const notFound = (msg = '资源不存在') => new ApiError('NOT_FOUND', msg);
 
 /**
+ * 批量取用户信息（id/email/display_name）。users 表只在主库：试用租户库（TRIAL_DB）
+ * 不含 users 表，租户路由里需要展示用户名（班主任/组长/成员等）时用本函数回主库查，
+ * 避免跨库 JOIN。ids 中的 null/undefined 自动忽略；返回 Map<id, row>。
+ * @param {object} mainDb 主库 D1 binding（c.env.DB）
+ * @param {Array<string|null|undefined>} ids
+ * @returns {Promise<Map<string, {id:string, email:string, display_name:string}>>}
+ */
+export async function getUserInfos(mainDb, ids) {
+  const unique = [...new Set(ids.filter(Boolean))];
+  const map = new Map();
+  if (unique.length === 0 || !mainDb) return map;
+  const placeholders = unique.map(() => '?').join(',');
+  const rows = await mainDb
+    .prepare(`SELECT id, email, display_name FROM users WHERE id IN (${placeholders})`)
+    .bind(...unique)
+    .all();
+  for (const r of rows.results) map.set(r.id, r);
+  return map;
+}
+
+/**
  * 构造统一错误 Response（§83）。供 Hono onError 与 404 处理使用。
  * @param {string} code
  * @param {string} message

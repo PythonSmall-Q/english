@@ -791,10 +791,10 @@ select.form-input {
   line-height: 1.5;
 }
 
-/* 定价三档卡片 */
+/* 定价四档卡片 */
 .landing-pricing-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 16px;
   align-items: stretch;
   margin-bottom: 32px;
@@ -931,6 +931,22 @@ select.form-input {
   font-size: 12px;
 }
 
+.landing-trial-note {
+  margin: 16px 0 0;
+  text-align: center;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.landing-trial-link {
+  font-size: 13px;
+  padding: 3px 12px;
+}
+
 .landing-footer {
   text-align: center;
   font-size: 12px;
@@ -942,8 +958,8 @@ select.form-input {
   }
 
   .landing-pricing-grid {
-    grid-template-columns: 1fr;
-    max-width: 420px;
+    grid-template-columns: repeat(2, 1fr);
+    max-width: 640px;
     margin-left: auto;
     margin-right: auto;
   }
@@ -956,6 +972,11 @@ select.form-input {
 
   .landing-features-grid {
     grid-template-columns: 1fr;
+  }
+
+  .landing-pricing-grid {
+    grid-template-columns: 1fr;
+    max-width: 420px;
   }
 }
 

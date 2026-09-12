@@ -137,7 +137,7 @@ function readScope(value) {
  * 每条附统计：通过 / 未过（passed=0 且未标记需重默）/ 需重默 / 已重默计数
  */
 app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const classId = c.req.query('class_id');
   const academicYear = resolveAcademicYear(c.req.query('academic_year'));
@@ -213,7 +213,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
  * scope='class' 时 class_id 必填且须属于当前租户；scope='grade' 时 class_id 可空
  */
 app.post('/', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const body = await c.req.json().catch(() => ({}));
@@ -260,7 +260,7 @@ app.post('/', requireAuth, requireTenant, async (c) => {
  * 结果名单关联学生表，附学号/姓名/班级；无记录的学生不在名单中
  */
 app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
 
@@ -313,7 +313,7 @@ app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) =
  * body: { title?, class_id?, scope?, dictation_date?, material_url? }
  */
 app.put('/:id', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
@@ -358,7 +358,7 @@ app.put('/:id', requireAuth, requireTenant, async (c) => {
  * DELETE /dictations/:id — 物理删除默写及其结果记录
  */
 app.delete('/:id', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
@@ -388,7 +388,7 @@ app.delete('/:id', requireAuth, requireTenant, async (c) => {
  * scope='grade' 时任一学生所在班须为当前用户可管理班级（owner/admin 不受限）
  */
 app.post('/:id/results/bulk', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));
@@ -468,7 +468,7 @@ app.post('/:id/results/bulk', requireAuth, requireTenant, async (c) => {
  * 将指定学生 retest_completed=1、retest_required=0（仅更新已有结果记录的学生）
  */
 app.post('/:id/retest', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const dictation = await getDictationOr404(db, tenantId, c.req.param('id'));

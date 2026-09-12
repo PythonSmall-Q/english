@@ -372,21 +372,38 @@ window.App = {
     document.getElementById('ts-btn')?.classList.remove('open');
   },
 
-  /** 租户切换器：>1 个空间时显示，否则隐藏（§69）。自定义下拉。 */
+  /** 租户切换器：>1 个空间时显示，否则隐藏（§69）；当前为试用空间时即使单空间也显示（试用徽标）。自定义下拉。 */
   updateTenantSwitcher() {
     const wrap = document.getElementById('tenant-switcher');
     if (!wrap) return;
     const tenants = App.state.tenants;
-    if (!tenants || tenants.length <= 1) {
+    const current = App.state.tenant || tenants[0];
+    // 试用空间徽标需要挂在切换器按钮上，单空间试用也保持显示
+    if ((!tenants || tenants.length <= 1) && current?.plan !== 'trial') {
       wrap.classList.add('hidden');
       return;
     }
     wrap.classList.remove('hidden');
-    const current = App.state.tenant || tenants[0];
     // 按钮显示当前空间
     document.getElementById('ts-icon').textContent = current.type === 'personal' ? '🏠' : '🏫';
     document.getElementById('ts-name').textContent = current.name;
     document.getElementById('ts-name').title = current.name;
+    // 试用空间徽标：plan='trial' 时显示在名称旁，含剩余天数（ceil）
+    const tsBtn = document.getElementById('ts-btn');
+    let badge = document.getElementById('ts-trial-badge');
+    if (current.plan === 'trial' && current.expires_at) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.id = 'ts-trial-badge';
+        badge.className = 'ts-badge';
+        tsBtn.insertBefore(badge, tsBtn.querySelector('.ts-caret'));
+      }
+      const days = Math.max(0, Math.ceil((new Date(current.expires_at).getTime() - Date.now()) / 86400000));
+      badge.textContent = `试用 · 剩 ${days} 天`;
+      badge.title = `试用空间将于 ${String(current.expires_at).slice(0, 10)} 到期，到期后数据将被删除`;
+    } else if (badge) {
+      badge.remove();
+    }
     // 下拉项
     const menu = document.getElementById('ts-menu');
     menu.innerHTML = tenants
@@ -396,6 +413,7 @@ window.App = {
           <button type="button" class="ts-item ${active ? 'active' : ''}" data-ts-id="${App.esc(t.id)}">
             <span class="ts-item-icon">${t.type === 'personal' ? '🏠' : '🏫'}</span>
             <span class="ts-item-name" title="${App.esc(t.name)}">${App.esc(t.name)}</span>
+            ${t.plan === 'trial' ? '<span class="ts-badge">试用</span>' : ''}
             ${t.expired ? '<span class="ts-badge">已到期</span>' : ''}
             ${active ? '<span class="ts-check">✓</span>' : ''}
           </button>`;
@@ -492,6 +510,78 @@ window.App = {
     );
   },
 
+  /**
+   * 3 天试用：落地页点了「免费试用」后（localStorage 'wb_trial_intent'），
+   * 在注册/登录进入工作台时自动创建试用空间。标记先清除，保证只触发一次；
+   * 网络错误也 toast。成功：刷新租户列表并自动切换到新试用空间（切不过去就只刷新）。
+   */
+  async startTrialIfIntent() {
+    if (localStorage.getItem('wb_trial_intent') !== '1') return;
+    // 先清除标记：无论成败，本次登录只触发一次
+    localStorage.removeItem('wb_trial_intent');
+    let tenant;
+    try {
+      const data = await api.trials.start();
+      tenant = data && data.tenant;
+      App.toast('试用空间已创建，3 天后到期，到期后数据将被删除');
+    } catch (e) {
+      // 409「每个账号只能试用一次」与网络错误都透传后端/客户端 message
+      App.toast((e && e.message) || '试用空间创建失败，请稍后再试');
+      return;
+    }
+    // 刷新租户列表：auth/me 带配额，GET /tenants 带 plan/expires_at，二者合并（保留 quota）
+    try {
+      const me = await api.auth.me();
+      App.state.user = me.user || App.state.user;
+      const fresh = me.tenants || [];
+      try {
+        const data = await api.tenants.list();
+        const meta = new Map((data.tenants || []).map((t) => [t.id, t]));
+        for (const t of fresh) {
+          const m = meta.get(t.id);
+          if (m) Object.assign(t, { plan: m.plan, expires_at: m.expires_at, expired: m.expired });
+        }
+      } catch (e) {
+        /* 无 plan 数据则徽标不显示，不影响主流程 */
+      }
+      App.state.tenants = fresh;
+    } catch (e) {
+      // 刷新失败：仅当创建接口已返回租户对象时补入列表，否则保持现状
+      if (tenant && tenant.id && !App.state.tenants.some((x) => x.id === tenant.id)) App.state.tenants.push(tenant);
+    }
+    // 已进主框架：自动切换；仍在无空间引导页/登录页：重新走启动流程进入工作台
+    const inApp = !document.getElementById('app-frame').classList.contains('hidden');
+    if (!inApp) {
+      await App.boot();
+      return;
+    }
+    App.updateTenantSwitcher();
+    if (tenant && tenant.id && App.state.tenants.some((t) => t.id === tenant.id)) {
+      try {
+        await App.setTenant(tenant.id);
+      } catch (e) {
+        /* 切换失败：列表已刷新，停留在当前空间 */
+      }
+    }
+  },
+
+  /**
+   * 合并 GET /tenants 的 plan/expires_at 到租户列表（试用徽标依赖这两个字段；
+   * auth/me 不返回 plan）。失败静默降级：不显示试用徽标。
+   */
+  async syncTenantPlans() {
+    try {
+      const data = await api.tenants.list();
+      const meta = new Map((data.tenants || []).map((t) => [t.id, t]));
+      App.state.tenants = App.state.tenants.map((t) => {
+        const m = meta.get(t.id);
+        return m ? { ...t, plan: m.plan, expires_at: m.expires_at, expired: m.expired } : t;
+      });
+    } catch (e) {
+      /* 静默降级 */
+    }
+  },
+
   /** 进入应用主框架（认证成功后调用） */
   enterApp() {
     document.getElementById('auth-screen').classList.add('hidden');
@@ -576,6 +666,8 @@ window.App = {
       // 无空间账号（平台关闭自动个人空间后注册）：提示联系学校管理员加入
       if (App.state.tenants.length === 0) {
         App.showNoWorkspace(App.state.user);
+        // 试用意图：为无空间账号直接创建试用空间，成功后重新进入工作台
+        App.startTrialIfIntent();
         return;
       }
       // 默认选中 personal 空间，否则第一个（§22）
@@ -583,9 +675,13 @@ window.App = {
       App.state.tenant = personal || App.state.tenants[0] || null;
       App.state.quota = App.state.tenant?.quota || null;
       await App.loadAcademicYears();
+      // 合并 plan/expires_at（试用徽标用；auth/me 不返回 plan），失败静默
+      await App.syncTenantPlans();
       App.enterApp();
       // 学年归档提醒（§63）：进入工作台后异步检查，9/15–9/30 每日一次
       App.checkArchiveReminder();
+      // 3 天试用：落地页点了「免费试用」的，进入工作台后自动创建试用空间（仅一次）
+      App.startTrialIfIntent();
     } catch (err) {
       if (err && err.code !== 'UNAUTHORIZED') {
         App.toast((err && err.message) || '加载失败');

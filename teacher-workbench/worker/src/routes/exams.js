@@ -74,7 +74,7 @@ function listScoresStmt(db, tenantId, examId) {
  * 支持 ?academic_year= 学年过滤（缺省/非法回退当前学年）
  */
 app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const academicYear = resolveAcademicYear(c.req.query('academic_year'));
 
@@ -110,7 +110,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
  * 班级考试：创建者须可管理该班；全年段考试：owner/admin、本租户任意年级组组长或备课组长。
  */
 app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeacherPerm('create_exams'), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const body = await c.req.json().catch(() => ({}));
@@ -157,7 +157,7 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeach
  * GET /api/v1/exams/:id — 考试详情 + 分数名单
  */
 app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
   const scores = await listScoresStmt(db, tenantId, exam.id).all();
@@ -168,7 +168,7 @@ app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) =
  * PUT /api/v1/exams/:id — 编辑考试（name/subject/exam_date/paper_url）
  */
 app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
@@ -200,7 +200,7 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
  * DELETE /api/v1/exams/:id — 删除考试（物理删除，级联删小分/分数/考试本身，db.batch 事务）
  */
 app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
@@ -255,7 +255,7 @@ function matchStudent(row, byNo, byNameClass) {
  * 返回 { created, updated, failed, unmatched }，未匹配/非法行不写入。
  */
 app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), requireTeacherPerm('create_exams'), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
@@ -413,7 +413,7 @@ function rankInClass(list) {
  * 支持 ?class_id=：overview/bands/questionTypes/rankings 仅统计该班（名次班内计算）；classCompare 保持全校对比
  */
 app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
 
@@ -520,7 +520,7 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
  * 班级考试 → 可管理考试所在班；全年段考试 → 可管理该生所在班（未分班学生需为年级组组长/备课组长/管理员）。
  */
 app.put('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
@@ -583,7 +583,7 @@ app.put('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['te
  * 返回：总分、班级排名、超过全班百分比、各题型得分 vs 班均（柱状图数据）、薄弱题型、建议
  */
 app.get('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
   const studentId = c.req.param('studentId');

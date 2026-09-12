@@ -12,7 +12,7 @@
  */
 
 import { Hono } from 'hono';
-import { ApiError, newId, now, currentAcademicYear } from '../db.js';
+import { ApiError, newId, now, currentAcademicYear, getUserInfos } from '../db.js';
 import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
 import { checkQuota } from '../quota.js';
 
@@ -50,7 +50,7 @@ async function validateClassId(db, tenantId, classId) {
  * 列表显式排除 content 字段（正文体积大，走 GET /:id 获取），附带 creator_name 与 attachment_count
  */
 app.get('/', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const status = c.req.query('status');
@@ -63,10 +63,8 @@ app.get('/', requireAuth, requireTenant, async (c) => {
     `SELECT l.id, l.tenant_id, l.teacher_id, l.class_id, l.title, l.lesson_type, l.objective,
             l.status, l.academic_year, l.created_at, l.updated_at,
             c.name AS class_name,
-            u.display_name AS creator_name,
             (SELECT COUNT(*) FROM lesson_files lf WHERE lf.lesson_id = l.id) AS attachment_count
        FROM lessons l LEFT JOIN classes c ON c.id = l.class_id AND c.tenant_id = l.tenant_id
-       LEFT JOIN users u ON u.id = l.teacher_id
       WHERE l.tenant_id = ?`;
   const params = [tenantId];
   if (status) {
@@ -96,7 +94,16 @@ app.get('/', requireAuth, requireTenant, async (c) => {
   sql += ' ORDER BY l.created_at DESC';
 
   const rows = await db.prepare(sql).bind(...params).all();
-  return c.json({ success: true, data: { lessons: rows.results } });
+  // 创建者姓名：users 表只在主库（试用库 TRIAL_DB 无 users，不可跨库 JOIN），回主库批量查
+  const creatorInfos = await getUserInfos(
+    c.env.DB,
+    rows.results.map((r) => r.teacher_id)
+  );
+  const lessons = rows.results.map((r) => ({
+    ...r,
+    creator_name: r.teacher_id ? (creatorInfos.get(r.teacher_id)?.display_name ?? null) : null,
+  }));
+  return c.json({ success: true, data: { lessons } });
 });
 
 /**
@@ -105,7 +112,7 @@ app.get('/', requireAuth, requireTenant, async (c) => {
  * 不存在或非本租户 → 404
  */
 app.get('/:id', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const row = await db
     .prepare(
@@ -141,7 +148,7 @@ app.get('/:id', requireAuth, requireTenant, async (c) => {
  * body: { title, class_id?, lesson_type?, objective?, content? }
  */
 app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const body = await c.req.json().catch(() => ({}));
@@ -194,7 +201,7 @@ async function getLessonOr404(db, tenantId, id) {
  * 可更新：title、class_id、lesson_type、objective、content（body.content !== undefined 时可更新，含置 null）、status（pending/completed，即完成/取消完成）
  */
 app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const lesson = await getLessonOr404(db, tenantId, c.req.param('id'));
@@ -245,7 +252,7 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
 
 /** DELETE /api/v1/lessons/:id — 删除教案（teacher 起，物理删除） */
 app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const lesson = await getLessonOr404(db, tenantId, c.req.param('id'));
@@ -266,7 +273,7 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
  * body: { file_id }；文件必须存在于 files 表且属本租户；同 lesson+file 重复关联 → 400
  */
 app.post('/:id/files', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const lesson = await getLessonOr404(db, tenantId, c.req.param('id'));
@@ -315,7 +322,7 @@ app.post('/:id/files', requireAuth, requireTenant, requireRole(['teacher']), asy
  * 仅删除 lesson_files 关联行，不删除 files 记录与 R2 本体；关联不存在 → 404
  */
 app.delete('/:id/files/:fileId', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const lesson = await getLessonOr404(db, tenantId, c.req.param('id'));
@@ -348,7 +355,7 @@ app.delete('/:id/files/:fileId', requireAuth, requireTenant, requireRole(['teach
  * D1 无多语句事务，多步写保持简单顺序执行。
  */
 app.post('/:id/duplicate', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const lesson = await getLessonOr404(db, tenantId, c.req.param('id'));

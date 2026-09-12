@@ -24,20 +24,29 @@ const LANDING_PRICING = {
   free: { price: 0, priceLabel: '¥0', period: '永久' },
   pro: { monthly: 29, yearly: 299, savePct: 14 },
   school: { monthly: 199, yearly: 1999, savePct: 16 },
+  custom: { priceLabel: '面议' },
 };
 
-/** 定价功能对比表（'—' 表示不支持） */
+/** 3 天试用入口文案 */
+const LANDING_TRIAL = {
+  heroCta: '免费试用 3 天',
+  banner: '🎉 无需付费：3 天试用全部功能 · 限额 1 · 到期后数据自动删除',
+  bannerCta: '立即试用',
+};
+
+/** 定价功能对比表（'—' 表示不支持；custom 列为定制版） */
 const LANDING_COMPARE = [
-  { name: '班级数量', free: '1', pro: '10', school: '不限' },
-  { name: '学生数量', free: '30', pro: '300', school: '不限' },
-  { name: '教案/作业/默写/考试', free: '基础额度', pro: '不限', school: '不限' },
-  { name: 'AI 助手（次/月）', free: '20', pro: '500', school: '5000' },
-  { name: '文件存储', free: '—', pro: '5GB', school: '50GB' },
-  { name: '学年压缩归档', free: '—', pro: '✓', school: '✓' },
-  { name: '毕业班级归档下载', free: '—', pro: '—', school: '✓' },
-  { name: '年级组/备课组权限', free: '—', pro: '—', school: '✓' },
-  { name: '批量数据迁入', free: '—', pro: '—', school: '✓' },
-  { name: '技术支持', free: '社区', pro: '邮件', school: '专属' },
+  { name: '班级数量', free: '1', pro: '10', school: '不限', custom: '不限' },
+  { name: '学生数量', free: '30', pro: '300', school: '不限', custom: '不限' },
+  { name: '教案/作业/默写/考试', free: '基础额度', pro: '不限', school: '不限', custom: '不限' },
+  { name: 'AI 助手（次/月）', free: '20', pro: '500', school: '5000', custom: '不限' },
+  { name: '文件存储', free: '—', pro: '5GB', school: '50GB', custom: '不限' },
+  { name: '学年压缩归档', free: '—', pro: '✓', school: '✓', custom: '✓' },
+  { name: '毕业班级归档下载', free: '—', pro: '—', school: '✓', custom: '✓' },
+  { name: '年级组/备课组权限', free: '—', pro: '—', school: '✓', custom: '✓' },
+  { name: '批量数据迁入', free: '—', pro: '—', school: '✓', custom: '✓' },
+  { name: '私有化部署 / 定制开发', free: '—', pro: '—', school: '—', custom: '✓' },
+  { name: '技术支持', free: '社区', pro: '邮件', school: '专属', custom: '专属' },
 ];
 
 /** 渲染未登录首页到 #auth-screen */
@@ -58,6 +67,7 @@ App.showLanding = function () {
         <div class="landing-actions">
           <button class="btn btn-primary" id="landing-login" type="button">登录</button>
           <button class="btn" id="landing-register" type="button">注册</button>
+          <button class="btn" id="landing-trial" type="button">${LANDING_TRIAL.heroCta}</button>
         </div>
       </section>
 
@@ -119,7 +129,23 @@ App.showLanding = function () {
             </ul>
             <button class="btn landing-price-cta" type="button" data-scroll-top>联系我们</button>
           </div>
+          <div class="landing-price-card">
+            <div class="landing-price-name">定制版</div>
+            <div class="landing-price-amount">${LANDING_PRICING.custom.priceLabel}</div>
+            <div class="landing-price-yearly muted">面向教育集团 / 区域部署</div>
+            <ul class="landing-price-list">
+              <li>班级 / 学生 / 存储不限</li>
+              <li>私有化部署</li>
+              <li>定制开发</li>
+              <li>专属支持</li>
+            </ul>
+            <button class="btn landing-price-cta" type="button" data-scroll-top>联系我们</button>
+          </div>
         </div>
+        <p class="landing-trial-note muted">
+          ${LANDING_TRIAL.banner}
+          <button class="btn landing-trial-link" id="landing-trial-pricing" type="button">${LANDING_TRIAL.bannerCta}</button>
+        </p>
         <div class="landing-compare-wrap">
           <table class="landing-compare">
             <thead>
@@ -128,6 +154,7 @@ App.showLanding = function () {
                 <th>免费版</th>
                 <th class="col-featured">专业版</th>
                 <th>学校版</th>
+                <th>定制版</th>
               </tr>
             </thead>
             <tbody>
@@ -138,6 +165,7 @@ App.showLanding = function () {
                   <td>${App.esc(row.free)}</td>
                   <td class="col-featured">${App.esc(row.pro)}</td>
                   <td>${App.esc(row.school)}</td>
+                  <td>${App.esc(row.custom)}</td>
                 </tr>`
               ).join('')}
             </tbody>
@@ -153,6 +181,13 @@ App.showLanding = function () {
 
   document.getElementById('landing-login').addEventListener('click', () => App.showAuthScreen('login'));
   document.getElementById('landing-register').addEventListener('click', () => App.showAuthScreen('register'));
+  // 试用入口：记下意图后走与「注册」相同的登录/注册流程，进入工作台后自动创建试用空间
+  const startTrial = () => {
+    localStorage.setItem('wb_trial_intent', '1');
+    App.showAuthScreen('register');
+  };
+  document.getElementById('landing-trial').addEventListener('click', startTrial);
+  document.getElementById('landing-trial-pricing').addEventListener('click', startTrial);
   screen.querySelectorAll('[data-anchor]').forEach((link) => {
     link.addEventListener('click', (e) => {
       e.preventDefault();

@@ -40,7 +40,7 @@ async function getClassOr404(db, tenantId, classId) {
  * 支持 ?class_id= 过滤、?academic_year= 学年过滤（缺省/非法回退当前学年）；每条附统计：总人数/已交/未交（missing+pending）/提交率
  */
 app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const classId = c.req.query('class_id');
   const academicYear = resolveAcademicYear(c.req.query('academic_year'));
@@ -100,7 +100,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
  * body: { class_id, title, content?, deadline? }
  */
 app.post('/', requireAuth, requireTenant, requireClassManager(), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const body = c.get('_body') || (await c.req.json().catch(() => ({})));
@@ -132,7 +132,7 @@ app.post('/', requireAuth, requireTenant, requireClassManager(), async (c) => {
  * body: { title?, content?, deadline?, status? }
  */
 app.put('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', table: 'assignments' }), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const assignment = await getAssignmentOr404(db, tenantId, c.req.param('id'));
@@ -160,7 +160,7 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', t
  * DELETE /assignments/:id — 物理删除作业及其提交记录
  */
 app.delete('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', table: 'assignments' }), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const assignment = await getAssignmentOr404(db, tenantId, c.req.param('id'));
@@ -188,7 +188,7 @@ app.delete('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id'
  * 学生必须属于作业所属班级
  */
 app.post('/:id/submissions/bulk', requireAuth, requireTenant, requireClassManager({ param: 'id', table: 'assignments' }), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const assignment = await getAssignmentOr404(db, tenantId, c.req.param('id'));
@@ -255,7 +255,7 @@ app.post('/:id/submissions/bulk', requireAuth, requireTenant, requireClassManage
  * 无提交记录的学生 status 记为 pending
  */
 app.get('/:id/submissions', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const assignment = await getAssignmentOr404(db, tenantId, c.req.param('id'));
 

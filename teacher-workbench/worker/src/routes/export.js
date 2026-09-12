@@ -18,7 +18,7 @@ const app = new Hono();
  *        submissions, dictations, dictationResults, exams, scores, subscores }
  */
 app.get('/backup', requireAuth, requireTenant, requireRole(['admin']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
 
@@ -56,7 +56,7 @@ app.get('/backup', requireAuth, requireTenant, requireRole(['admin']), async (c)
  * 返回含班级名与备注的学生列表
  */
 app.get('/students', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const rows = await db
     .prepare(
@@ -78,7 +78,7 @@ app.get('/students', requireAuth, requireTenant, requireRole(['teacher']), async
  * - 考试：当前学年全部考试（班级 + 全年段），每生每门成绩一列（无成绩为 null）
  */
 app.get('/class-stats', requireAuth, requireTenant, async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
 

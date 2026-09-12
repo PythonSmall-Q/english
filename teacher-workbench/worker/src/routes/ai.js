@@ -96,7 +96,9 @@ function mockGenerate(type, prompt) {
  * 成功：{ result, mock: true|false }（并写入 ai_generations 供历史与配额统计）
  */
 app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  // 租户级（配额、生成记录）走试用库/主库 tenantDb；用户级 AI Provider 配置 user_ai_settings 只在主库
+  const db = c.get('tenantDb') || c.env.DB;
+  const mainDb = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const body = await c.req.json().catch(() => ({}));
@@ -107,13 +109,13 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
   }
   if (!prompt) throw new ApiError('VALIDATION_ERROR', 'prompt 不能为空');
 
-  // §43：写操作前先校验 AI 月度配额
+  // §43：写操作前先校验 AI 月度配额（租户级，按所在库统计）
   await checkQuota(db, tenantId, 'ai', user.id);
 
   let result;
   let mock = false;
-  // Provider 优先级：用户自配（数据库）> 环境变量 > 内置 mock
-  const userSettings = await getUserAiSettings(db, user.id);
+  // Provider 优先级：用户自配（主库 user_ai_settings 表）> 环境变量 > 内置 mock
+  const userSettings = await getUserAiSettings(mainDb, user.id);
   const apiKey = userSettings?.api_key || c.env.AI_API_KEY || '';
   if (apiKey) {
     // 真实 Provider：Workers 代理调用（§42），30 秒超时，非 2xx 视为内部错误
@@ -168,7 +170,7 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
  * GET /api/v1/ai/history — 最近 20 条生成记录（当前租户）
  */
 app.get('/history', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
-  const db = c.env.DB;
+  const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const rows = await db
     .prepare(
@@ -185,6 +187,7 @@ app.get('/history', requireAuth, requireTenant, requireRole(['teacher']), async 
  * 响应：{ baseUrl, model, hasKey, keyMasked, source: 'user'|'env'|'mock' }
  */
 app.get('/settings', requireAuth, async (c) => {
+  // user_ai_settings 是用户级全局表，只在主库（试用租户也不例外）
   const db = c.env.DB;
   const user = c.get('user');
   const row = await getUserAiSettings(db, user.id);
@@ -207,6 +210,7 @@ app.get('/settings', requireAuth, async (c) => {
  * - 未提供的字段保持原值；apiKey 传空串表示保持原密钥
  */
 app.put('/settings', requireAuth, async (c) => {
+  // user_ai_settings 是用户级全局表，只在主库（试用租户也不例外）
   const db = c.env.DB;
   const user = c.get('user');
   const body = await c.req.json().catch(() => ({}));
