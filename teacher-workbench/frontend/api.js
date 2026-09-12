@@ -108,6 +108,9 @@
     get: (id) => request(`/classes/${id}`),
     update: (id, body) => request(`/classes/${id}`, { method: 'PUT', body }),
     remove: (id) => request(`/classes/${id}`, { method: 'DELETE' }),
+    // 班级任课老师（canAssignTeachers：owner/admin、本班年级组长、本班班主任）
+    addTeacher: (id, body) => request(`/classes/${id}/teachers`, { method: 'POST', body }),
+    removeTeacher: (id, userId) => request(`/classes/${id}/teachers/${userId}`, { method: 'DELETE' }),
   };
 
   // —— Students（§55）——

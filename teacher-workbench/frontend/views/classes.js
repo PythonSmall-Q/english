@@ -6,9 +6,10 @@
  *  - 「查看学生」→ 传递 class_id 给「学生管理」视图后跳转
  *  - 「编辑 / 删除」仅在 cls.canManage 时渲染（删除走 confirmDialog）
  *  - 右上「新建班级」→ modal 表单（名称/年级/学年），受配额限制
- *  - owner/admin 专属「年级组」管理区：组列表卡片（组长/班级数/设组长/删除组）、新建组
- *  - owner/admin：卡片上「年级组」下拉（change 即保存）；owner/admin 或本班年级组长：
- *    卡片上「班主任」下拉（成员 + 未分配，change 即保存）；普通班主任不显示（后端 403）
+ *  - 「年级组」管理区：owner/admin 见全部组（建组/删组/设组长）；
+ *    年级组长见「我带领的年级组」（组内班级 + 每班「设置老师」入口）
+ *  - owner/admin：卡片上「年级组」下拉（change 即保存）；canAssignTeachers（owner/admin、
+ *    本班年级组长、本班班主任）：卡片上「班主任」下拉 + 「＋任课老师」（chips 可移除）
  * 数据全部来自 api.classes.* / api.gradeGroups.* / api.tenants.get。
  *
  * 跨视图传参约定（供 students.js 读取）：
@@ -46,6 +47,13 @@ function clsInjectStyles() {
     .cls-field { display: flex; align-items: center; gap: 6px; font-size: 13px; }
     .cls-field > label { color: var(--text-muted); white-space: nowrap; }
     .cls-field select { flex: 1; min-width: 0; }
+    .cls-chips-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .cls-chip { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; background: #f8fafc; }
+    .cls-chip-x { border: none; background: none; cursor: pointer; color: var(--text-muted); font-size: 13px; padding: 0; line-height: 1; }
+    .cls-chip-x:hover { color: var(--danger); }
+    .cls-gclass { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+    .cls-gclass:last-child { border-bottom: none; }
+    .cls-gclass-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   `;
   document.head.appendChild(style);
 }
@@ -79,11 +87,10 @@ App.registerView('classes', {
       return;
     }
 
-    // 是否某班的年级组长（可改该班班主任）
-    const isLeaderOf = (cls) =>
-      !!cls.grade_group_id && groups.some((g) => g.id === cls.grade_group_id && g.leader_user_id && g.leader_user_id === myId);
-    // 成员列表：owner/admin（选组长/班主任）或年级组长（选班主任）需要；个人空间 members 为空/报错则容错
-    if (isAdmin || classes.some((c) => c.canManage && isLeaderOf(c))) {
+    // 我带领的组（年级组长，即使不是 owner/admin 也有管理入口）
+    const ledGroups = groups.filter((g) => g.leader_user_id && g.leader_user_id === myId);
+    // 成员列表：owner/admin（选组长/班主任）、任一班 canAssignTeachers（班主任/组长设老师）需要；个人空间 members 为空/报错则容错
+    if (isAdmin || ledGroups.length || classes.some((c) => c.canAssignTeachers)) {
       try {
         const t = await api.tenants.get(App.state.tenant.id);
         members = (t.members || []).filter((m) => !m.status || m.status === 'active');
@@ -92,19 +99,18 @@ App.registerView('classes', {
       }
     }
 
-    // —— 年级组管理区（仅 owner/admin）——
-    const groupsHtml = isAdmin
-      ? `
-      <div class="card cls-sec">
-        <div class="cls-sec-head">
-          <span class="cls-sec-title">年级组（${groups.length}）</span>
-          <button class="btn btn-sm" type="button" id="cls-new-group">＋ 新建年级组</button>
-        </div>
-        ${
-          groups.length
-            ? `<div class="cls-group-grid">${groups
-                .map(
-                  (g) => `
+    // 任课老师摘要（组长面板用）：「英语·张三、数学·李四」，无则「无」
+    const subsSummary = (c) => {
+      const list = c.subjectTeachers || [];
+      return list.length
+        ? list.map((t) => App.esc(t.subject ? `${t.subject}·${t.name}` : t.name)).join('、')
+        : '无';
+    };
+
+    // 组卡片：owner/admin 全量管理版；组长仅看自己带领的组（班级清单 + 设置老师入口）
+    const groupCardHtml = (g) => {
+      if (isAdmin) {
+        return `
               <div class="cls-group" data-grp-id="${App.esc(g.id)}">
                 <div class="cls-group-name">${App.esc(g.name)}</div>
                 <div class="cls-group-meta">组长：${
@@ -119,9 +125,45 @@ App.registerView('classes', {
                   <button class="btn btn-sm" type="button" data-grp-leader="${App.esc(g.id)}">设组长</button>
                   <button class="btn btn-sm btn-danger" type="button" data-grp-del="${App.esc(g.id)}">删除组</button>
                 </div>
-              </div>`
-                )
-                .join('')}</div>`
+              </div>`;
+      }
+      const clsList = (g.classes || []).map((gc) => classes.find((c) => c.id === gc.id)).filter(Boolean);
+      return `
+              <div class="cls-group" data-grp-id="${App.esc(g.id)}">
+                <div class="cls-group-name">${App.esc(g.name)}</div>
+                <div class="cls-group-classes">组内 ${clsList.length} 个班</div>
+                ${
+                  clsList.length
+                    ? clsList
+                        .map(
+                          (c) => `
+                  <div class="cls-gclass">
+                    <div class="cls-gclass-head">
+                      <span>${App.esc(c.name)}</span>
+                      <button class="btn btn-sm" type="button" data-cls-setup="${App.esc(c.id)}">设置老师</button>
+                    </div>
+                    <div class="cls-group-meta">班主任：${App.esc(c.teacher_name || '未分配')} ｜ 任课：${subsSummary(c)}</div>
+                  </div>`
+                        )
+                        .join('')
+                    : '<div class="cls-group-classes">（暂无班级）</div>'
+                }
+              </div>`;
+    };
+
+    // —— 年级组管理区：owner/admin 全部组；年级组长仅自己带领的组 ——
+    const showGroupsPanel = isAdmin || ledGroups.length > 0;
+    const panelGroups = isAdmin ? groups : ledGroups;
+    const groupsHtml = showGroupsPanel
+      ? `
+      <div class="card cls-sec">
+        <div class="cls-sec-head">
+          <span class="cls-sec-title">${isAdmin ? `年级组（${groups.length}）` : `我带领的年级组（${ledGroups.length}）`}</span>
+          ${isAdmin ? '<button class="btn btn-sm" type="button" id="cls-new-group">＋ 新建年级组</button>' : ''}
+        </div>
+        ${
+          panelGroups.length
+            ? `<div class="cls-group-grid">${panelGroups.map(groupCardHtml).join('')}</div>`
             : '<div class="muted" style="font-size:13px">还没有年级组。年级组长可协助管理本组班级的班主任设置。</div>'
         }
       </div>`
@@ -151,9 +193,9 @@ App.registerView('classes', {
                        .join('')}
                    </select></div>`
               : '';
-            // 班主任下拉：owner/admin 或本班年级组长（普通班主任本人改 teacher_id 后端 403，不显示）
+            // 班主任下拉：canAssignTeachers（owner/admin、本班年级组长、本班班主任）
             const tSelect =
-              c.canManage && (isAdmin || isLeaderOf(c))
+              c.canAssignTeachers
                 ? `<div class="cls-field"><label>班主任</label>
                      <select class="form-input" data-cls-t="${App.esc(c.id)}">
                        <option value="">未分配</option>
@@ -167,6 +209,25 @@ App.registerView('classes', {
                          .join('')}
                      </select></div>`
                 : '';
+            // 任课老师 chips（subject 为 null 只显示姓名）；canAssignTeachers 可「＋任课老师」、chips 带 × 移除
+            const subs = c.subjectTeachers || [];
+            const subChips = subs
+              .map(
+                (t) =>
+                  `<span class="cls-chip">${App.esc(t.subject ? `${t.subject}·${t.name}` : t.name)}${
+                    c.canAssignTeachers
+                      ? `<button class="cls-chip-x" type="button" data-cls-rmt="${App.esc(c.id)}" data-uid="${App.esc(t.userId)}" title="移除任课老师">×</button>`
+                      : ''
+                  }</span>`
+              )
+              .join('');
+            const subLine = `<div class="cls-card-meta cls-chips-row"><span style="white-space:nowrap">任课：</span>${
+              subChips || '<span class="muted">—</span>'
+            }${
+              c.canAssignTeachers
+                ? `<button class="btn btn-sm" type="button" data-cls-addt="${App.esc(c.id)}">＋任课老师</button>`
+                : ''
+            }</div>`;
             // 编辑/删除仅可管理者可见；只读班级仅保留「查看学生」
             const manageBtns = c.canManage
               ? `<button class="btn btn-sm" type="button" data-cls-edit="${App.esc(c.id)}">编辑</button>
@@ -177,6 +238,7 @@ App.registerView('classes', {
           <div class="cls-card-name">${App.esc(c.name)}</div>
           <div class="cls-card-meta">${App.esc([c.grade, c.academic_year].filter(Boolean).join(' · ') || '未设置年级/学年')}</div>
           <div class="cls-card-meta">班主任：${App.esc(c.teacher_name || '未分配')} ｜ 年级组：${App.esc(c.grade_group_name || '未分组')}</div>
+          ${subLine}
           <div class="cls-card-count"><strong>${Number(c.student_count) || 0}</strong>名学生</div>
           ${ggSelect}
           ${tSelect}
@@ -238,7 +300,7 @@ App.registerView('classes', {
       });
     });
 
-    // 卡片上「班主任」下拉：change 即保存（owner/admin 或本班年级组长渲染）
+    // 卡片上「班主任」下拉：change 即保存（canAssignTeachers 渲染：owner/admin、本班年级组长、本班班主任）
     el.querySelectorAll('[data-cls-t]').forEach((sel) => {
       sel.addEventListener('change', async () => {
         const cls = classes.find((c) => c.id === sel.dataset.clsT);
@@ -251,6 +313,37 @@ App.registerView('classes', {
           App.toast((err && err.message) || '操作失败');
           App.showView('classes');
         }
+      });
+    });
+
+    // 卡片上「＋任课老师」→ 添加弹窗（canAssignTeachers 渲染）
+    el.querySelectorAll('[data-cls-addt]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const cls = classes.find((c) => c.id === btn.dataset.clsAddt);
+        if (cls) this.openAddTeacher(cls, members);
+      });
+    });
+
+    // 任课老师 chips 的 ×：直接移除（无需确认）
+    el.querySelectorAll('[data-cls-rmt]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const cls = classes.find((c) => c.id === btn.dataset.clsRmt);
+        if (!cls) return;
+        try {
+          await api.classes.removeTeacher(cls.id, btn.dataset.uid);
+          App.toast('已移除任课老师');
+          App.showView('classes'); // 重新渲染
+        } catch (err) {
+          App.toast((err && err.message) || '操作失败');
+        }
+      });
+    });
+
+    // 组长面板「设置老师」→ 内嵌老师设置弹窗（班主任 + 任课老师）
+    el.querySelectorAll('[data-cls-setup]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const cls = classes.find((c) => c.id === btn.dataset.clsSetup);
+        if (cls) this.openClassTeachers(cls, members);
       });
     });
 
@@ -432,5 +525,164 @@ App.registerView('classes', {
         };
       }
     );
+  },
+
+  /** 添加任课老师 modal（成员下拉排除班主任与已有任课老师；科目选填） */
+  openAddTeacher(cls, members) {
+    const excluded = new Set([cls.teacher_id, ...(cls.subjectTeachers || []).map((t) => t.userId)].filter(Boolean));
+    const candidates = members.filter((m) => !excluded.has(m.user_id));
+    App.modal(
+      `添加任课老师 — ${cls.name}`,
+      `
+      <label class="form-label" for="cls-at-m">成员 *</label>
+      <select class="form-input" id="cls-at-m">
+        <option value="">选择成员…</option>
+        ${candidates
+          .map(
+            (m) =>
+              `<option value="${App.esc(m.user_id)}">${App.esc(`${m.display_name || ''}（${m.email || m.user_id}）`)}</option>`
+          )
+          .join('')}
+      </select>
+      <label class="form-label" for="cls-at-s">科目（选填）</label>
+      <input class="form-input" id="cls-at-s" type="text" placeholder="如：英语 / 数学">
+      <div class="modal-actions">
+        <button class="btn" type="button" id="cls-at-cancel">取消</button>
+        <button class="btn btn-primary" type="button" id="cls-at-save" ${candidates.length ? '' : 'disabled'}>添加</button>
+      </div>`,
+      () => {
+        document.getElementById('cls-at-cancel').onclick = () => App.closeModal();
+        document.getElementById('cls-at-save').onclick = async () => {
+          const userId = document.getElementById('cls-at-m').value;
+          if (!userId) {
+            App.toast('请选择成员');
+            return;
+          }
+          const subject = document.getElementById('cls-at-s').value.trim() || null;
+          const saveBtn = document.getElementById('cls-at-save');
+          saveBtn.disabled = true;
+          try {
+            await api.classes.addTeacher(cls.id, { userId, subject });
+            App.closeModal();
+            App.toast('已添加任课老师');
+            App.showView('classes'); // 重新渲染
+          } catch (err) {
+            saveBtn.disabled = false;
+            App.toast((err && err.message) || '操作失败');
+          }
+        };
+      }
+    );
+  },
+
+  /** 班级老师设置 modal（组长面板「设置老师」入口：班主任下拉 + 任课老师增删，全部 change/点击即保存） */
+  openClassTeachers(cls, members) {
+    const view = this;
+    // 弹窗内操作成功后重新拉取本班数据并重画弹窗；弹窗关闭（任意方式）后刷新背景视图
+    async function refresh() {
+      try {
+        const data = await api.classes.list();
+        const fresh = (data.classes || []).find((x) => x.id === cls.id);
+        if (fresh) cls = fresh;
+      } catch (e) {
+        /* 拉取失败仍用本地数据重画 */
+      }
+      draw();
+    }
+    function draw() {
+      const excluded = new Set([cls.teacher_id, ...(cls.subjectTeachers || []).map((t) => t.userId)].filter(Boolean));
+      const candidates = members.filter((m) => !excluded.has(m.user_id));
+      const subs = cls.subjectTeachers || [];
+      App.modal(
+        `设置老师 — ${cls.name}`,
+        `
+        <label class="form-label" for="cls-ct-t">班主任</label>
+        <select class="form-input" id="cls-ct-t">${view.memberOptions(members, cls.teacher_id, '未分配')}</select>
+        <label class="form-label">任课老师</label>
+        <div class="cls-chips-row" style="margin-bottom:8px">
+          ${
+            subs.length
+              ? subs
+                  .map(
+                    (t) =>
+                      `<span class="cls-chip">${App.esc(t.subject ? `${t.subject}·${t.name}` : t.name)}<button class="cls-chip-x" type="button" data-rmt="${App.esc(t.userId)}" title="移除任课老师">×</button></span>`
+                  )
+                  .join('')
+              : '<span class="muted" style="font-size:13px">暂无任课老师</span>'
+          }
+        </div>
+        <div class="cls-field">
+          <select class="form-input" id="cls-ct-m">
+            <option value="">选择成员…</option>
+            ${candidates
+              .map(
+                (m) =>
+                  `<option value="${App.esc(m.user_id)}">${App.esc(`${m.display_name || ''}（${m.email || m.user_id}）`)}</option>`
+              )
+              .join('')}
+          </select>
+          <input class="form-input" id="cls-ct-s" type="text" placeholder="科目（选填）" style="max-width:110px">
+        </div>
+        <div class="modal-actions">
+          <button class="btn" type="button" id="cls-ct-done">完成</button>
+          <button class="btn btn-primary" type="button" id="cls-ct-add" ${candidates.length ? '' : 'disabled'}>＋添加</button>
+        </div>`,
+        (modal) => {
+          modal.querySelector('#cls-ct-t').onchange = async (e) => {
+            try {
+              await api.classes.update(cls.id, { teacher_id: e.target.value || null });
+              App.toast('班主任已更新');
+              await refresh();
+            } catch (err) {
+              App.toast((err && err.message) || '操作失败');
+              draw();
+            }
+          };
+          modal.querySelectorAll('[data-rmt]').forEach((btn) => {
+            btn.onclick = async () => {
+              try {
+                await api.classes.removeTeacher(cls.id, btn.dataset.rmt);
+                App.toast('已移除任课老师');
+                await refresh();
+              } catch (err) {
+                App.toast((err && err.message) || '操作失败');
+              }
+            };
+          });
+          modal.querySelector('#cls-ct-add').onclick = async () => {
+            const userId = modal.querySelector('#cls-ct-m').value;
+            if (!userId) {
+              App.toast('请选择成员');
+              return;
+            }
+            const subject = modal.querySelector('#cls-ct-s').value.trim() || null;
+            const addBtn = modal.querySelector('#cls-ct-add');
+            addBtn.disabled = true;
+            try {
+              await api.classes.addTeacher(cls.id, { userId, subject });
+              App.toast('已添加任课老师');
+              await refresh();
+            } catch (err) {
+              addBtn.disabled = false;
+              App.toast((err && err.message) || '操作失败');
+            }
+          };
+          modal.querySelector('#cls-ct-done').onclick = () => {
+            App.closeModal();
+            App.showView('classes'); // 重新渲染
+          };
+        }
+      );
+    }
+    // 弹窗被任意方式关闭（×/遮罩/完成）后刷新背景视图
+    const root = document.getElementById('modal-root');
+    const mo = new MutationObserver(() => {
+      if (!root.querySelector('.modal-mask')) {
+        mo.disconnect();
+        App.showView('classes'); // 重新渲染
+      }
+    });
+    mo.observe(root, { childList: true });
+    draw();
   },
 });
