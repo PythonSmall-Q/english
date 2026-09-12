@@ -11,7 +11,7 @@
 
 import { Hono } from 'hono';
 import { ApiError, newId, now } from '../db.js';
-import { requireAuth, requireTenant, requireRole, requireClassManager, canManageClass, canAssignClassTeachers, audit } from '../middleware.js';
+import { requireAuth, requireTenant, requireRole, requireClassManager, canManageClass, canAssignClassTeachers, audit, requireTeacherPerm } from '../middleware.js';
 import { checkQuota } from '../quota.js';
 
 const app = new Hono();
@@ -71,6 +71,8 @@ app.get('/', requireAuth, requireTenant, async (c) => {
       ...cls,
       subjectTeachers,
       canManage,
+      // 可删除班级的人：owner/admin、本班年级组长（班主任/任课老师不可删）
+      canDelete: isAdmin || isLeader || false,
       // 可设置老师的人：owner/admin、本班年级组长、本班班主任
       canAssignTeachers: isAdmin || isLeader || cls.teacher_id === user.id || false,
     });
@@ -83,7 +85,7 @@ app.get('/', requireAuth, requireTenant, async (c) => {
  * 创建者自动成为班主任；年级组/班主任调整走 PUT
  * body: { name, grade?, academic_year? }
  */
-app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeacherPerm('create_classes'), async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
@@ -140,6 +142,7 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ self: true }),
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const cls = c.get('managedClass');
+  const membership = c.get('membership');
   const body = await c.req.json().catch(() => ({}));
 
   const name = body.name != null ? String(body.name).trim() : cls.name;
@@ -152,11 +155,20 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ self: true }),
         : null
       : cls.academic_year;
 
-  // 班主任：须为空间成员；设置权限 = owner/admin、年级组长、本班班主任
+  // 班主任：须为空间成员；设置权限 = owner/admin、本班年级组长（班主任本人不可改班主任字段）
   let teacherId = cls.teacher_id;
   if (body.teacher_id !== undefined) {
-    if (!(await canAssignClassTeachers(db, tenantId, user.id, cls))) {
-      throw new ApiError('FORBIDDEN', '只有租户管理员、年级组长或班主任可以设置班主任');
+    const isAdminUser = membership.role === 'owner' || membership.role === 'admin';
+    let canSetHeadTeacher = isAdminUser;
+    if (!canSetHeadTeacher && cls.grade_group_id) {
+      const led = await db
+        .prepare('SELECT id FROM grade_groups WHERE id = ? AND tenant_id = ? AND leader_user_id = ?')
+        .bind(cls.grade_group_id, tenantId, user.id)
+        .first();
+      canSetHeadTeacher = !!led;
+    }
+    if (!canSetHeadTeacher) {
+      throw new ApiError('FORBIDDEN', '只有租户管理员或年级组长可以设置班主任');
     }
     if (body.teacher_id === null) {
       teacherId = null;
@@ -173,7 +185,6 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ self: true }),
   // 年级组归属：仅 owner/admin
   let gradeGroupId = cls.grade_group_id;
   if (body.grade_group_id !== undefined) {
-    const membership = c.get('membership');
     if (membership.role !== 'owner' && membership.role !== 'admin') {
       throw new ApiError('FORBIDDEN', '只有租户管理员可以调整年级组归属');
     }
@@ -201,7 +212,7 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ self: true }),
 });
 
 /**
- * DELETE /api/v1/classes/:id — 删除班级（owner/admin、本班班主任、年级组长）
+ * DELETE /api/v1/classes/:id — 删除班级（owner/admin、本班年级组长；班主任不可删）
  * 班内有学生时 400，提示先移除学生
  */
 app.delete('/:id', requireAuth, requireTenant, requireClassManager({ self: true }), async (c) => {
@@ -209,6 +220,21 @@ app.delete('/:id', requireAuth, requireTenant, requireClassManager({ self: true 
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const cls = c.get('managedClass');
+
+  // 删除权限：owner/admin、本班年级组长（班主任/任课老师不可删）
+  const membership = c.get('membership');
+  const isAdmin = membership.role === 'owner' || membership.role === 'admin';
+  let isLeader = false;
+  if (!isAdmin && cls.grade_group_id) {
+    const led = await db
+      .prepare('SELECT id FROM grade_groups WHERE id = ? AND tenant_id = ? AND leader_user_id = ?')
+      .bind(cls.grade_group_id, tenantId, user.id)
+      .first();
+    isLeader = !!led;
+  }
+  if (!isAdmin && !isLeader) {
+    throw new ApiError('FORBIDDEN', '班主任不能删除班级，请联系空间管理员');
+  }
 
   const count = await db
     .prepare('SELECT COUNT(*) AS n FROM students WHERE tenant_id = ? AND class_id = ?')

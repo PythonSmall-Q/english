@@ -4,12 +4,13 @@
  * 功能：
  *  - 班级卡片网格（班级名/年级/学年/学生数/班主任/年级组）
  *  - 「查看学生」→ 传递 class_id 给「学生管理」视图后跳转
- *  - 「编辑 / 删除」仅在 cls.canManage 时渲染（删除走 confirmDialog）
+ *  - 「编辑 / 删除」：编辑在 cls.canManage 时渲染；删除仅 cls.canDelete（owner/admin、本班年级组长）
  *  - 右上「新建班级」→ modal 表单（名称/年级/学年），受配额限制
  *  - 「年级组」管理区：owner/admin 见全部组（建组/删组/设组长）；
  *    年级组长见「我带领的年级组」（组内班级 + 每班「设置老师」入口）
  *  - owner/admin：卡片上「年级组」下拉（change 即保存）；canAssignTeachers（owner/admin、
- *    本班年级组长、本班班主任）：卡片上「班主任」下拉 + 「＋任课老师」（chips 可移除）
+ *    本班年级组长、本班班主任）：「＋任课老师」（chips 可移除）；canDelete（owner/admin、
+ *    本班年级组长）：卡片上「班主任」下拉 + 「删除」按钮
  * 数据全部来自 api.classes.* / api.gradeGroups.* / api.tenants.get。
  *
  * 跨视图传参约定（供 students.js 读取）：
@@ -73,14 +74,17 @@ App.registerView('classes', {
     let classes;
     let groups = [];
     let members = [];
+    let myPerms = null; // 我的功能权限（取不到默认显示，由后端 403 兜底）
     try {
       // 班级 + 年级组并行加载（grade-groups 列表对空间成员开放，个人空间报错则容错为空）
-      const [clsData, grpData] = await Promise.all([
+      const [clsData, grpData, quotaData] = await Promise.all([
         api.classes.list(),
         api.gradeGroups.list().catch(() => ({ groups: [] })),
+        api.tenants.myQuota(App.state.tenant.id).catch(() => null),
       ]);
       classes = clsData.classes || [];
       groups = grpData.groups || [];
+      myPerms = quotaData?.permissions || null;
     } catch (err) {
       el.innerHTML = '<div class="card"><div class="card-title">我的班级</div><div class="muted">加载失败，请稍后重试</div></div>';
       App.toast((err && err.message) || '加载失败');
@@ -169,11 +173,12 @@ App.registerView('classes', {
       </div>`
       : '';
 
-    // 工具条：右上「新建班级」
+    // 工具条：右上「新建班级」（管理员关闭 create_classes 权限时隐藏，后端 403 兜底）
+    const canCreateClass = !myPerms || myPerms.create_classes !== false;
     const headHtml = `
       <div class="cls-head">
         <span class="cls-head-title">共 ${classes.length} 个班级</span>
-        <button class="btn btn-primary" type="button" id="cls-new">＋ 新建班级</button>
+        ${canCreateClass ? '<button class="btn btn-primary" type="button" id="cls-new">＋ 新建班级</button>' : ''}
       </div>`;
 
     // 空状态 / 卡片网格
@@ -193,10 +198,9 @@ App.registerView('classes', {
                        .join('')}
                    </select></div>`
               : '';
-            // 班主任下拉：canAssignTeachers（owner/admin、本班年级组长、本班班主任）
-            const tSelect =
-              c.canAssignTeachers
-                ? `<div class="cls-field"><label>班主任</label>
+            // 班主任下拉：仅 canDelete（owner/admin、本班年级组长）可改；班主任本人见禁用态 + 提示
+            const tSelect = c.canDelete
+              ? `<div class="cls-field"><label>班主任</label>
                      <select class="form-input" data-cls-t="${App.esc(c.id)}">
                        <option value="">未分配</option>
                        ${members
@@ -208,6 +212,12 @@ App.registerView('classes', {
                          )
                          .join('')}
                      </select></div>`
+              : c.canAssignTeachers
+                ? `<div class="cls-field"><label>班主任</label>
+                     <select class="form-input" disabled>
+                       <option selected>${App.esc(c.teacher_name || '未分配')}</option>
+                     </select></div>
+                   <div class="muted" style="font-size:12px">班主任由空间管理员或年级组长调整</div>`
                 : '';
             // 任课老师 chips（subject 为 null 只显示姓名）；canAssignTeachers 可「＋任课老师」、chips 带 × 移除
             const subs = c.subjectTeachers || [];
@@ -228,10 +238,12 @@ App.registerView('classes', {
                 ? `<button class="btn btn-sm" type="button" data-cls-addt="${App.esc(c.id)}">＋任课老师</button>`
                 : ''
             }</div>`;
-            // 编辑/删除仅可管理者可见；只读班级仅保留「查看学生」
+            // 编辑：可管理者（canManage）可见；删除：仅 canDelete（owner/admin、本班年级组长）
             const manageBtns = c.canManage
-              ? `<button class="btn btn-sm" type="button" data-cls-edit="${App.esc(c.id)}">编辑</button>
-                 <button class="btn btn-sm btn-danger" type="button" data-cls-del="${App.esc(c.id)}">删除</button>`
+              ? `<button class="btn btn-sm" type="button" data-cls-edit="${App.esc(c.id)}">编辑</button>`
+              : '';
+            const deleteBtn = c.canDelete
+              ? `<button class="btn btn-sm btn-danger" type="button" data-cls-del="${App.esc(c.id)}">删除</button>`
               : '';
             return `
         <div class="card cls-card" data-cls-id="${App.esc(c.id)}">
@@ -245,6 +257,7 @@ App.registerView('classes', {
           <div class="cls-card-actions">
             <button class="btn btn-sm btn-primary" type="button" data-cls-students="${App.esc(c.id)}" data-cls-name="${App.esc(c.name)}">查看学生</button>
             ${manageBtns}
+            ${deleteBtn}
           </div>
         </div>`;
           })
@@ -254,7 +267,8 @@ App.registerView('classes', {
     el.innerHTML = groupsHtml + headHtml + bodyHtml;
 
     // —— 事件绑定 ——
-    document.getElementById('cls-new').addEventListener('click', () => this.openForm(null));
+    const clsNewBtn = document.getElementById('cls-new');
+    if (clsNewBtn) clsNewBtn.addEventListener('click', () => this.openForm(null));
 
     const ggSel = document.getElementById('cls-new-group');
     if (ggSel) ggSel.addEventListener('click', () => this.openGroupForm(members));
@@ -300,7 +314,7 @@ App.registerView('classes', {
       });
     });
 
-    // 卡片上「班主任」下拉：change 即保存（canAssignTeachers 渲染：owner/admin、本班年级组长、本班班主任）
+    // 卡片上「班主任」下拉：change 即保存（canDelete 渲染：owner/admin、本班年级组长；班主任本人仅见禁用提示）
     el.querySelectorAll('[data-cls-t]').forEach((sel) => {
       sel.addEventListener('change', async () => {
         const cls = classes.find((c) => c.id === sel.dataset.clsT);

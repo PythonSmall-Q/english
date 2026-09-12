@@ -44,6 +44,7 @@
   let containerEl = null;
   let canManageMap = new Map(); // class_id → canManage（班级级权限感知）
   let anyManageable = false; // 是否存在可管理班级
+  let canCreateStudents = true; // create_students 功能权限（my-quota，取不到默认 true，后端 403 兜底）
 
   /** 统一错误提示：额度超限给固定文案（§21） */
   function errMsg(err, fallback) {
@@ -107,8 +108,14 @@
     const content = containerEl.querySelector('#stu-content');
     content.innerHTML = '<div class="card"><div class="muted">加载中…</div></div>';
     try {
-      const [clsData, stuData] = await Promise.all([api.classes.list(), api.students.list()]);
+      const tenantId = App.state.tenant?.id;
+      const [clsData, stuData, quotaData] = await Promise.all([
+        api.classes.list(),
+        api.students.list(),
+        tenantId ? api.tenants.myQuota(tenantId).catch(() => null) : Promise.resolve(null),
+      ]);
       classes = clsData.classes || [];
+      canCreateStudents = !quotaData?.permissions || quotaData.permissions.create_students !== false;
       // 班级级权限感知：编辑/删除学生、添加学生按 canManage 控制（服务端另有 403 兜底）
       canManageMap = new Map(classes.map((c) => [c.id, !!c.canManage]));
       anyManageable = classes.some((c) => !!c.canManage);
@@ -162,9 +169,9 @@
 
   function renderContent() {
     const content = containerEl.querySelector('#stu-content');
-    // 「添加学生」仅存在可管理班级时显示
+    // 「添加学生」仅存在可管理班级且未被管理员关闭 create_students 权限时显示
     const addBtn = containerEl.querySelector('#stu-btn-add');
-    if (addBtn) addBtn.style.display = anyManageable ? '' : 'none';
+    if (addBtn) addBtn.style.display = anyManageable && canCreateStudents ? '' : 'none';
     if (!classes.length) {
       content.innerHTML = '<div class="card"><div class="muted">当前空间还没有班级，请先在「我的班级」中创建。</div></div>';
       return;
@@ -359,6 +366,7 @@
       alertOnly = false;
       canManageMap = new Map();
       anyManageable = false;
+      canCreateStudents = true;
       containerEl = el;
 
       // 消费「我的班级 → 查看学生」传入的班级过滤（classes.js 双通道约定，二选一读取）

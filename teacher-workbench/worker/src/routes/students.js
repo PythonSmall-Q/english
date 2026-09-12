@@ -13,7 +13,7 @@
 
 import { Hono } from 'hono';
 import { ApiError, newId, now } from '../db.js';
-import { requireAuth, requireTenant, requireClassManager, audit } from '../middleware.js';
+import { requireAuth, requireTenant, requireClassManager, audit, requireTeacherPerm } from '../middleware.js';
 import { checkQuota } from '../quota.js';
 
 const app = new Hono();
@@ -132,7 +132,7 @@ async function requireClassInTenant(db, tenantId, classId) {
  * POST /api/v1/students — 新建学生（班级管理者：owner/admin、班主任、年级组长）
  * body: { class_id, name, student_no?, gender?, status?, notes? }
  */
-app.post('/', requireAuth, requireTenant, requireClassManager(), async (c) => {
+app.post('/', requireAuth, requireTenant, requireClassManager(), requireTeacherPerm('create_students'), async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');

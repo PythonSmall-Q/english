@@ -100,6 +100,11 @@
     /** 硬删除已移除成员在本空间的内容；resources 可选，默认全部 */
     purgeMember: (id, userId, resources) =>
       request(`/tenants/${id}/members/${userId}/purge`, { method: 'POST', body: resources ? { resources } : {} }),
+    /** 当前成员自己的配额/用量/权限（任何成员可用；permissions 对 owner/admin 恒 true） */
+    myQuota: (id) => request(`/tenants/${id}/my-quota`),
+    /** 设置成员功能权限（owner/admin；perm ∈ create_classes/create_students/create_exams） */
+    updateMemberPermission: (id, userId, perm, allowed) =>
+      request(`/tenants/${id}/members/${userId}/permissions`, { method: 'PUT', body: { perm, allowed } }),
   };
 
   // —— GradeGroups 年级组（年级组长 = 本年级子管理员）——

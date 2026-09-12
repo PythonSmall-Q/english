@@ -205,6 +205,63 @@ export function requireRole(roles) {
   };
 }
 
+/** 教师级权限（owner/admin 可针对单个成员开关；无记录 = 允许） */
+export const TEACHER_PERMS = ['create_classes', 'create_students', 'create_exams'];
+
+/** 权限中文名（错误提示用） */
+export const TEACHER_PERM_LABELS = {
+  create_classes: '新增班级',
+  create_students: '添加学生',
+  create_exams: '新增考试',
+};
+
+/**
+ * 读取某成员的三项教师权限：owner/admin 恒 true；其余查 user_permissions，
+ * 有 allowed=0 记录 → false，无记录 → true。
+ * @returns {Promise<{create_classes:boolean, create_students:boolean, create_exams:boolean}>}
+ */
+export async function getUserPermissions(db, tenantId, userId, role) {
+  const permissions = { create_classes: true, create_students: true, create_exams: true };
+  if (role === 'owner' || role === 'admin') return permissions;
+  const rows = await db
+    .prepare(
+      'SELECT perm, allowed FROM user_permissions WHERE tenant_id = ? AND user_id = ? AND allowed = 0'
+    )
+    .bind(tenantId, userId)
+    .all();
+  for (const r of rows.results) {
+    if (r.perm in permissions) permissions[r.perm] = false;
+  }
+  return permissions;
+}
+
+/**
+ * 教师权限中间件：在 requireRole 之后使用。非 owner/admin 成员若被管理员
+ * 显式关闭该权限 → 403 PERMISSION_DENIED。
+ * 用法：app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeacherPerm('create_classes'), ...)
+ */
+export function requireTeacherPerm(perm) {
+  return async (c, next) => {
+    const membership = c.get('membership');
+    if (membership.role === 'owner' || membership.role === 'admin') {
+      await next();
+      return;
+    }
+    const row = await c.env.DB.prepare(
+      'SELECT allowed FROM user_permissions WHERE tenant_id = ? AND user_id = ? AND perm = ?'
+    )
+      .bind(c.get('tenantId'), c.get('user').id, perm)
+      .first();
+    if (row && row.allowed === 0) {
+      throw new ApiError(
+        'PERMISSION_DENIED',
+        `管理员已关闭你「${TEACHER_PERM_LABELS[perm] || perm}」的权限`
+      );
+    }
+    await next();
+  };
+}
+
 /**
  * 写审计日志（§63）。metadata 为任意对象，将序列化为 JSON 字符串。
  * 用法：await audit(c.env.DB, c.get('tenantId'), c.get('user').id, '创建学生', 'student', id, {...})

@@ -11,7 +11,7 @@
 
 import { Hono } from 'hono';
 import { ApiError, newId, now } from '../db.js';
-import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
+import { requireAuth, requireTenant, requireRole, audit, getUserPermissions, TEACHER_PERMS } from '../middleware.js';
 import { getQuotaUsage, PERSONAL_DEFAULTS } from '../quota.js';
 import { hashPassword, resolvePlatformRole } from '../auth-core.js';
 
@@ -508,6 +508,39 @@ app.delete('/:id/members/:userId', requireAuth, requireTenant, requireRole(['own
   return c.json({ success: true, data: { removed: true } });
 });
 
+/** 按归属列统计某成员在本租户的五项用量（lessons/assignments/dictations 按 teacher_id；
+ *  files 按 created_by，storageBytes 为 size 求和；ai 按 user_id + 当月） */
+async function getUserUsage(db, tenantId, userId) {
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  return {
+    lessons: (
+      await db.prepare('SELECT COUNT(*) AS n FROM lessons WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId).first()
+    ).n,
+    assignments: (
+      await db.prepare('SELECT COUNT(*) AS n FROM assignments WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId).first()
+    ).n,
+    dictations: (
+      await db.prepare('SELECT COUNT(*) AS n FROM dictations WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId).first()
+    ).n,
+    files: (
+      await db.prepare('SELECT COUNT(*) AS n FROM files WHERE tenant_id = ? AND created_by = ?').bind(tenantId, userId).first()
+    ).n,
+    aiMonth: (
+      await db
+        .prepare('SELECT COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND user_id = ? AND substr(created_at, 1, 7) = ?')
+        .bind(tenantId, userId, monthPrefix)
+        .first()
+    ).n,
+    storageBytes:
+      (
+        await db
+          .prepare('SELECT COALESCE(SUM(size), 0) AS n FROM files WHERE tenant_id = ? AND created_by = ?')
+          .bind(tenantId, userId)
+          .first()
+      ).n || 0,
+  };
+}
+
 /** 按用户配额覆盖支持的资源（files 按数量） */
 const USER_QUOTA_RESOURCES = ['lessons', 'assignments', 'dictations', 'ai', 'files'];
 
@@ -529,43 +562,33 @@ app.get('/:id/quota-detail', requireAuth, requireTenant, requireRole(['owner', '
     .bind(tenantId)
     .all();
 
+  // 全租户权限关闭记录一次取出（allowed=0 的 perm 集合），按用户分组
+  const permRows = await db
+    .prepare('SELECT user_id, perm FROM user_permissions WHERE tenant_id = ? AND allowed = 0')
+    .bind(tenantId)
+    .all();
+  const deniedPerms = new Map();
+  for (const r of permRows.results) {
+    if (!deniedPerms.has(r.user_id)) deniedPerms.set(r.user_id, new Set());
+    deniedPerms.get(r.user_id).add(r.perm);
+  }
+
   const monthPrefix = new Date().toISOString().slice(0, 7);
   const users = [];
   for (const m of members.results) {
     const userId = m.user_id;
-    const usage = {
-      lessons: (
-        await db.prepare('SELECT COUNT(*) AS n FROM lessons WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId).first()
-      ).n,
-      assignments: (
-        await db.prepare('SELECT COUNT(*) AS n FROM assignments WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId).first()
-      ).n,
-      dictations: (
-        await db.prepare('SELECT COUNT(*) AS n FROM dictations WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId).first()
-      ).n,
-      files: (
-        await db.prepare('SELECT COUNT(*) AS n FROM files WHERE tenant_id = ? AND created_by = ?').bind(tenantId, userId).first()
-      ).n,
-      aiMonth: (
-        await db
-          .prepare('SELECT COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND user_id = ? AND substr(created_at, 1, 7) = ?')
-          .bind(tenantId, userId, monthPrefix)
-          .first()
-      ).n,
-      storageBytes:
-        (
-          await db
-            .prepare('SELECT COALESCE(SUM(size), 0) AS n FROM files WHERE tenant_id = ? AND created_by = ?')
-            .bind(tenantId, userId)
-            .first()
-        ).n || 0,
-    };
+    const usage = await getUserUsage(db, tenantId, userId);
     const quotaRows = await db
       .prepare('SELECT resource, quota FROM user_quotas WHERE tenant_id = ? AND user_id = ?')
       .bind(tenantId, userId)
       .all();
     const quotas = {};
     for (const r of quotaRows.results) quotas[r.resource] = r.quota;
+    const denied = deniedPerms.get(userId) || new Set();
+    const permissions = {};
+    for (const perm of TEACHER_PERMS) {
+      permissions[perm] = m.role === 'owner' || m.role === 'admin' ? true : !denied.has(perm);
+    }
     users.push({
       userId,
       email: m.email,
@@ -574,6 +597,7 @@ app.get('/:id/quota-detail', requireAuth, requireTenant, requireRole(['owner', '
       membershipStatus: m.status,
       usage,
       quotas,
+      permissions,
     });
   }
 
@@ -634,6 +658,80 @@ app.put('/:id/members/:userId/quota', requireAuth, requireTenant, requireRole(['
     quota: body.quota ?? null,
   });
   return c.json({ success: true, data: { userId: targetUserId, resource, quota: body.quota ?? null } });
+});
+
+/**
+ * GET /api/v1/tenants/:id/my-quota — 当前成员自己的用量/配额/权限（任何 active 成员）
+ * 返回 { quotas（来自 user_quotas，无记录的资源不在其中）, usage, permissions }
+ * owner/admin 的 permissions 恒 true；其余查 user_permissions（无记录 = true）。
+ */
+app.get('/:id/my-quota', requireAuth, requireTenant, async (c) => {
+  const tenantId = c.get('tenantId');
+  const user = c.get('user');
+  const membership = c.get('membership');
+  const db = c.env.DB;
+
+  const usage = await getUserUsage(db, tenantId, user.id);
+  const quotaRows = await db
+    .prepare('SELECT resource, quota FROM user_quotas WHERE tenant_id = ? AND user_id = ?')
+    .bind(tenantId, user.id)
+    .all();
+  const quotas = {};
+  for (const r of quotaRows.results) quotas[r.resource] = r.quota;
+  const permissions = await getUserPermissions(db, tenantId, user.id, membership.role);
+
+  return c.json({ success: true, data: { quotas, usage, permissions } });
+});
+
+/**
+ * PUT /api/v1/tenants/:id/members/:userId/permissions — 设置成员教师权限（owner/admin）
+ * body: { perm: create_classes|create_students|create_exams, allowed: boolean }
+ * allowed=false 存 allowed=0；allowed=true 删除该行（无记录 = 允许，保持一致）。
+ */
+app.put('/:id/members/:userId/permissions', requireAuth, requireTenant, requireRole(['owner', 'admin']), async (c) => {
+  const tenantId = c.get('tenantId');
+  const operator = c.get('user');
+  const targetUserId = c.req.param('userId');
+  const db = c.env.DB;
+  const body = await c.req.json().catch(() => ({}));
+
+  const perm = String(body.perm || '');
+  if (!TEACHER_PERMS.includes(perm)) {
+    throw new ApiError('VALIDATION_ERROR', `perm 必须是 ${TEACHER_PERMS.join('|')}`);
+  }
+  if (typeof body.allowed !== 'boolean') {
+    throw new ApiError('VALIDATION_ERROR', 'allowed 必须是布尔值');
+  }
+
+  const membership = await db
+    .prepare('SELECT id, role, status FROM memberships WHERE tenant_id = ? AND user_id = ?')
+    .bind(tenantId, targetUserId)
+    .first();
+  if (!membership) throw new ApiError('NOT_FOUND', '成员不存在');
+
+  if (body.allowed) {
+    await db
+      .prepare('DELETE FROM user_permissions WHERE tenant_id = ? AND user_id = ? AND perm = ?')
+      .bind(tenantId, targetUserId, perm)
+      .run();
+  } else {
+    const ts = now();
+    await db
+      .prepare(
+        `INSERT INTO user_permissions (tenant_id, user_id, perm, allowed, updated_at)
+         VALUES (?, ?, ?, 0, ?)
+         ON CONFLICT(tenant_id, user_id, perm) DO UPDATE SET allowed = 0, updated_at = ?`
+      )
+      .bind(tenantId, targetUserId, perm, ts, ts)
+      .run();
+  }
+
+  await audit(db, tenantId, operator.id, '更新成员权限', 'user_permission', targetUserId, {
+    targetUserId,
+    perm,
+    allowed: body.allowed,
+  });
+  return c.json({ success: true, data: { userId: targetUserId, perm, allowed: body.allowed } });
 });
 
 /**

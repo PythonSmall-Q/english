@@ -26,6 +26,13 @@ const USER_QUOTA_RESOURCES = [
   ['files', '文件数'],
 ];
 
+/** 成员功能权限（与后端 user_permissions perm 一致） */
+const PERM_ITEMS = [
+  ['create_classes', '新增班级'],
+  ['create_students', '添加学生'],
+  ['create_exams', '新增考试'],
+];
+
 /** 字节 → 人类可读（KB/MB） */
 function formatBytes(n) {
   const v = Number(n) || 0;
@@ -115,6 +122,7 @@ function renderMembers(tenantId, users) {
           <th>成员</th><th>状态</th>
           <th>教案</th><th>作业</th><th>默写</th><th>文件</th><th>AI本月</th><th>存储</th>
           <th>按用户配额（留空=不限）</th>
+          <th>权限</th>
           <th>操作</th>
         </tr>
       </thead>
@@ -138,6 +146,23 @@ function renderMembers(tenantId, users) {
             const purgeBtn = removed
               ? `<button class="btn btn-sm btn-danger" data-purge="${App.esc(u.userId)}" data-name="${App.esc(u.displayName || u.email || '')}" type="button">清除数据</button>`
               : '';
+            // 权限列：owner/admin 恒全部允许；已移除成员留空；其余成员三个 toggle，初始值取 permissions（默认 true）
+            const isAdminRow = u.role === 'owner' || u.role === 'admin';
+            let permCell;
+            if (removed) {
+              permCell = '';
+            } else if (isAdminRow) {
+              permCell = '<span class="muted">全部允许</span>';
+            } else {
+              const perms = u.permissions || {};
+              permCell = PERM_ITEMS.map(
+                ([key, label]) => `
+                  <label style="display:inline-flex;align-items:center;gap:3px;margin:2px 8px 2px 0;font-size:12.5px;white-space:nowrap">
+                    <input type="checkbox" data-perm-toggle="${key}" data-uid="${App.esc(u.userId)}"${perms[key] !== false ? ' checked' : ''}>
+                    <span>${label}</span>
+                  </label>`
+              ).join('');
+            }
             return `<tr>
               <td>${App.esc(u.displayName || '')}<div class="muted" style="font-size:12px">${App.esc(u.email)}</div></td>
               <td>${statusBadge}</td>
@@ -148,6 +173,7 @@ function renderMembers(tenantId, users) {
               <td>${usage.aiMonth ?? 0}</td>
               <td class="muted">${formatBytes(usage.storageBytes)}</td>
               <td>${quotaInputs}</td>
+              <td>${permCell}</td>
               <td>
                 <button class="btn btn-sm" data-save-quota="${App.esc(u.userId)}" type="button">保存</button>
                 ${purgeBtn}
@@ -177,6 +203,26 @@ function renderMembers(tenantId, users) {
         await renderQuotaPage(tenantId);
       } catch (e) {
         App.toast(e.message || '保存失败');
+      }
+    });
+  });
+
+  // 成员功能权限 toggle：变更即保存（取消勾选 = 管理员显式关闭，后端 403 兜底）
+  box.querySelectorAll('[data-perm-toggle]').forEach((input) => {
+    input.addEventListener('change', async () => {
+      const userId = input.dataset.uid;
+      const perm = input.dataset.permToggle;
+      const allowed = input.checked;
+      input.disabled = true;
+      try {
+        await api.tenants.updateMemberPermission(tenantId, userId, perm, allowed);
+        const label = (PERM_ITEMS.find(([k]) => k === perm) || [])[1] || perm;
+        App.toast(`已${allowed ? '开启' : '关闭'}「${label}」权限`);
+      } catch (e) {
+        input.checked = !allowed; // 回滚
+        App.toast(e.message || '保存失败');
+      } finally {
+        input.disabled = false;
       }
     });
   });

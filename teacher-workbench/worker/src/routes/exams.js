@@ -10,7 +10,7 @@
  */
 
 import { Hono } from 'hono';
-import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
+import { requireAuth, requireTenant, requireRole, audit, requireTeacherPerm } from '../middleware.js';
 import { ApiError, newId, now } from '../db.js';
 import { checkQuota } from '../quota.js';
 
@@ -70,7 +70,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
  * POST /api/v1/exams — 新建考试（§36，需 exams 配额）
  * body: { name(必填), subject?, exam_date? }
  */
-app.post('/', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeacherPerm('create_exams'), async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
@@ -181,7 +181,7 @@ function matchStudent(row, byNo, byNameClass) {
  * 已存在则更新（scores 按 exam+student 唯一；subscores 按 exam+student+question_type 唯一）。
  * 返回 { created, updated, failed, unmatched }，未匹配/非法行不写入。
  */
-app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), requireTeacherPerm('create_exams'), async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');

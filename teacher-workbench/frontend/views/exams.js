@@ -275,13 +275,21 @@
 
   /** 当前视图根节点（刷新列表用） */
   let rootEl = null;
+  /** create_exams 功能权限（my-quota，取不到默认 true，后端 403 兜底） */
+  let canCreateExams = true;
 
   async function loadExams() {
     if (!rootEl) return [];
     rootEl.innerHTML = '<div class="card"><div class="muted">加载中…</div></div>';
     let exams;
     try {
-      exams = await api.exams.list();
+      const tenantId = App.state.tenant?.id;
+      const [list, quotaData] = await Promise.all([
+        api.exams.list(),
+        tenantId ? api.tenants.myQuota(tenantId).catch(() => null) : Promise.resolve(null),
+      ]);
+      exams = list;
+      canCreateExams = !quotaData?.permissions || quotaData.permissions.create_exams !== false;
     } catch (err) {
       rootEl.innerHTML = '';
       const card = document.createElement('div');
@@ -300,7 +308,7 @@
     wrap.innerHTML = `
       <div class="ex-toolbar">
         <span class="muted">共 ${exams.length} 场考试</span>
-        <button class="btn btn-primary" id="ex-new" type="button">＋ 新建考试</button>
+        ${canCreateExams ? '<button class="btn btn-primary" id="ex-new" type="button">＋ 新建考试</button>' : ''}
       </div>
       <div id="ex-list"></div>`;
     const listEl = wrap.querySelector('#ex-list');
@@ -317,8 +325,8 @@
           <td>${Number(e.student_count || 0)}</td>
           <td>${fmtScore(e.avg_score)}</td>
           <td class="ex-ops">
-            <button class="btn btn-sm" data-act="import-scores" data-id="${esc(e.id)}" type="button">导入成绩</button>
-            <button class="btn btn-sm" data-act="import-subscores" data-id="${esc(e.id)}" type="button">导入小分</button>
+            ${canCreateExams ? `<button class="btn btn-sm" data-act="import-scores" data-id="${esc(e.id)}" type="button">导入成绩</button>
+            <button class="btn btn-sm" data-act="import-subscores" data-id="${esc(e.id)}" type="button">导入小分</button>` : ''}
             <button class="btn btn-sm" data-act="analysis" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">查看分析</button>
             <button class="btn btn-sm" data-act="report" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">个性化报告</button>
             <button class="btn btn-sm" data-act="paper" data-id="${esc(e.id)}" data-has-paper="${e.paper_url ? '1' : ''}" type="button">${e.paper_url ? '查看试卷' : '上传试卷'}</button>
@@ -337,7 +345,8 @@
         btn.addEventListener('click', () => onRowAction(btn.dataset));
       });
     }
-    wrap.querySelector('#ex-new').addEventListener('click', () => openExamForm(null));
+    const exNewBtn = wrap.querySelector('#ex-new');
+    if (exNewBtn) exNewBtn.addEventListener('click', () => openExamForm(null));
     return wrap;
   }
 

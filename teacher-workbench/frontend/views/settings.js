@@ -132,6 +132,12 @@ App.registerView('settings', {
         <div id="member-list" style="margin-top:12px"></div>
       </div>
 
+      <!-- 2.1 我的配额（所有成员可见，仅展示当前用户自己的数据） -->
+      <div class="card">
+        <div class="card-title">我的配额</div>
+        <div id="my-quota"><div class="muted">加载中…</div></div>
+      </div>
+
       <!-- 3. 数据管理（§50/§51） -->
       <div class="card">
         <div class="card-title">数据管理</div>
@@ -182,6 +188,7 @@ App.registerView('settings', {
 
     bindProfile();
     await renderSpace();
+    await renderMyQuota();
     bindDataManagement();
     bindImportEntries();
     await bindAiSettings();
@@ -348,13 +355,15 @@ async function renderSpace() {
         ${members
           .map((m) => {
             const uid = m.user_id ?? m.userId ?? '';
-            const removeBtn = canManage && canRemove(m)
+            const removed = m.status === 'removed';
+            // 已移除成员：数据保留、不可再次移除（重新添加可恢复）
+            const removeBtn = canManage && !removed && canRemove(m)
               ? `<button class="btn btn-sm btn-danger" data-remove-member="${App.esc(uid)}" data-name="${App.esc(m.display_name || m.email || '')}" type="button">移除</button>`
               : '';
             return `<tr>
               <td>${App.esc(m.email)}</td>
               <td>${App.esc(m.display_name || '')}</td>
-              <td><span class="badge badge-info">${ROLE_LABELS[m.role] || App.esc(m.role)}</span></td>
+              <td>${removed ? '<span class="badge badge-leave">已移除</span> ' : ''}<span class="badge badge-info">${ROLE_LABELS[m.role] || App.esc(m.role)}</span></td>
               ${canManage ? `<td>${removeBtn}</td>` : ''}
             </tr>`;
           })
@@ -382,6 +391,67 @@ async function renderSpace() {
       });
     });
   }
+}
+
+/** 我的配额：usage 键 → [显示名, quotas 中对应的按用户上限键]（usage.aiMonth 对应 quotas.ai） */
+const MY_QUOTA_ITEMS = [
+  ['lessons', '教案', 'lessons'],
+  ['assignments', '作业', 'assignments'],
+  ['dictations', '默写', 'dictations'],
+  ['files', '文件数', 'files'],
+  ['aiMonth', 'AI（本月）', 'ai'],
+];
+
+/** 字节 → 人类可读（KB/MB） */
+function fmtStorageBytes(n) {
+  const v = Number(n) || 0;
+  if (v >= 1024 * 1024) return (v / 1024 / 1024).toFixed(1) + ' MB';
+  if (v >= 1024) return (v / 1024).toFixed(1) + ' KB';
+  return v + ' B';
+}
+
+/** 我的配额区块：仅当前用户自己的用量/个人上限/被关闭的功能权限（普通成员不可见他人数据） */
+async function renderMyQuota() {
+  const tenant = App.state.tenant;
+  const box = document.getElementById('my-quota');
+  if (!tenant || !box) return;
+  let data;
+  try {
+    data = await api.tenants.myQuota(tenant.id);
+  } catch (e) {
+    box.innerHTML = `<div class="muted">加载失败：${App.esc((e && e.message) || '未知错误')}</div>`;
+    return;
+  }
+  const usage = data.usage || {};
+  const quotas = data.quotas || {};
+  const permLabels = { create_classes: '新增班级', create_students: '添加学生', create_exams: '新增考试' };
+  const closed = Object.entries(permLabels).filter(([key]) => data.permissions && data.permissions[key] === false);
+  const usageRows = MY_QUOTA_ITEMS.map(([key, label, quotaKey]) => {
+    const limit = quotas[quotaKey || key];
+    const unlimited = limit === null || limit === undefined;
+    return `
+      <div class="quota-item">
+        <div class="quota-item-header">
+          <span>${label}</span>
+          <span class="muted">${usage[key] ?? 0} / ${unlimited ? '不限' : '上限 ' + limit}</span>
+        </div>
+      </div>`;
+  }).join('');
+  const permHtml = closed.length
+    ? `<div style="margin-top:12px;padding:10px 12px;border-radius:8px;background:#fffbeb;border:1px solid #fde68a;font-size:13px">
+         ${closed.map(([, label]) => `<div><span class="badge badge-warning">已关闭</span> 管理员已关闭你「${label}」的权限</div>`).join('')}
+       </div>`
+    : '';
+  box.innerHTML =
+    usageRows +
+    `<div class="quota-item">
+       <div class="quota-item-header">
+         <span>文件存储</span>
+         <span class="muted">${fmtStorageBytes(usage.storageBytes)}</span>
+       </div>
+     </div>` +
+    `<div class="muted" style="margin-top:8px;font-size:12.5px">以上为你在本空间的个人用量与个人上限（「不限」表示跟随空间配额）。</div>` +
+    permHtml;
 }
 
 /** 添加账户弹窗：邮箱已注册直接加入，未注册现场开户（§租户管理员添加账户） */
