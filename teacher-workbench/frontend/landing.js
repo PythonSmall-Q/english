@@ -20,11 +20,13 @@ const LANDING_FEATURES = [
 ];
 
 /** 定价（占位，可按运营调整） */
+// 定价为占位，可按运营调整；付费版统一「联系我们」，微信号见 CONTACT_WECHAT
+const CONTACT_WECHAT = '19512002721';
 const LANDING_PRICING = {
-  free: { price: 0, priceLabel: '¥0', period: '永久' },
-  pro: { monthly: 29, yearly: 299, savePct: 14 },
-  school: { monthly: 199, yearly: 1999, savePct: 16 },
-  custom: { priceLabel: '面议' },
+  free: { contact: true },
+  pro: { contact: true },
+  school: { contact: true },
+  custom: { contact: true },
 };
 
 /** 3 天试用入口文案 */
@@ -92,20 +94,21 @@ App.showLanding = function () {
         <div class="landing-pricing-grid">
           <div class="landing-price-card">
             <div class="landing-price-name">基础版</div>
-            <div class="landing-price-amount">¥${LANDING_PRICING.free.price}<span class="landing-price-period"> / ${LANDING_PRICING.free.period}</span></div>
+            <div class="landing-price-amount">联系我们</div>
+            <div class="landing-price-yearly muted">微信 ${CONTACT_WECHAT}（点击复制）</div>
             <ul class="landing-price-list">
               <li>1 个班级</li>
               <li>30 名学生</li>
               <li>每月 20 次 AI</li>
               <li>基础功能</li>
             </ul>
-            <button class="btn landing-price-cta" type="button" data-scroll-top>立即开始</button>
+            <button class="btn landing-price-cta" type="button" data-copy-wechat>联系我们</button>
           </div>
           <div class="landing-price-card landing-price-card-featured">
             <span class="landing-price-badge">最受欢迎</span>
             <div class="landing-price-name">专业版</div>
-            <div class="landing-price-amount">¥${LANDING_PRICING.pro.monthly}<span class="landing-price-period"> / 月</span></div>
-            <div class="landing-price-yearly muted">¥${LANDING_PRICING.pro.yearly} / 年，省 ${LANDING_PRICING.pro.savePct}%</div>
+            <div class="landing-price-amount">联系我们</div>
+            <div class="landing-price-yearly muted">微信 ${CONTACT_WECHAT}（点击复制）</div>
             <ul class="landing-price-list">
               <li>10 个班级</li>
               <li>300 名学生</li>
@@ -113,12 +116,12 @@ App.showLanding = function () {
               <li>5GB 文件存储</li>
               <li>学年归档</li>
             </ul>
-            <button class="btn btn-primary landing-price-cta" type="button" data-scroll-top>立即开始</button>
+            <button class="btn btn-primary landing-price-cta" type="button" data-copy-wechat>联系我们</button>
           </div>
           <div class="landing-price-card">
             <div class="landing-price-name">学校版</div>
-            <div class="landing-price-amount">¥${LANDING_PRICING.school.monthly}<span class="landing-price-period"> / 月</span></div>
-            <div class="landing-price-yearly muted">¥${LANDING_PRICING.school.yearly} / 年，省 ${LANDING_PRICING.school.savePct}%</div>
+            <div class="landing-price-amount">联系我们</div>
+            <div class="landing-price-yearly muted">微信 ${CONTACT_WECHAT}（点击复制）</div>
             <ul class="landing-price-list">
               <li>不限班级与学生</li>
               <li>每月 5000 次 AI</li>
@@ -127,19 +130,29 @@ App.showLanding = function () {
               <li>年级组/备课组权限</li>
               <li>数据迁入 · 专属支持</li>
             </ul>
-            <button class="btn landing-price-cta" type="button" data-scroll-top>联系我们</button>
+            <button class="btn landing-price-cta" type="button" data-copy-wechat>联系我们</button>
           </div>
           <div class="landing-price-card">
             <div class="landing-price-name">定制版</div>
-            <div class="landing-price-amount">${LANDING_PRICING.custom.priceLabel}</div>
-            <div class="landing-price-yearly muted">面向教育集团 / 区域部署</div>
+            <div class="landing-price-amount">联系我们</div>
+            <div class="landing-price-yearly muted">微信 ${CONTACT_WECHAT}（点击复制） · 面向教育集团 / 区域部署</div>
             <ul class="landing-price-list">
               <li>班级 / 学生 / 存储不限</li>
               <li>私有化部署</li>
               <li>定制开发</li>
               <li>专属支持</li>
             </ul>
-            <button class="btn landing-price-cta" type="button" data-scroll-top>联系我们</button>
+            <button class="btn landing-price-cta" type="button" data-copy-wechat>联系我们</button>
+          </div>
+        </div>
+        <div class="landing-contact card">
+          <img class="landing-contact-qr" src="assets/wechat-qr.png" alt="微信二维码"
+               onerror="this.parentElement.classList.add('landing-contact-noqr')">
+          <div class="landing-contact-info">
+            <div class="landing-contact-title">开通付费版本</div>
+            <div class="landing-contact-sub muted">扫码或搜索微信号联系我们，为你开通对应版本</div>
+            <div class="landing-contact-wechat">微信：<b>${CONTACT_WECHAT}</b></div>
+            <button class="btn btn-primary" type="button" data-copy-wechat>复制微信号</button>
           </div>
         </div>
         <p class="landing-trial-note muted">
@@ -171,7 +184,7 @@ App.showLanding = function () {
             </tbody>
           </table>
         </div>
-        <p class="landing-compare-note muted">实际配额以平台管理员配置为准 · 联系管理员开通付费版本</p>
+        <p class="landing-compare-note muted">实际配额以平台管理员配置为准 · 付费版本请联系微信 ${CONTACT_WECHAT} 开通</p>
       </section>
 
       <footer class="landing-footer muted">英语教师教学工作台 · 让教学事务井井有条</footer>
@@ -196,5 +209,18 @@ App.showLanding = function () {
   });
   screen.querySelectorAll('[data-scroll-top]').forEach((btn) => {
     btn.addEventListener('click', () => scrollTo(screen.querySelector('.landing-hero')));
+  });
+  // 付费版「联系我们」：点击复制微信号
+  screen.querySelectorAll('[data-copy-wechat]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(CONTACT_WECHAT);
+        const old = btn.textContent;
+        btn.textContent = '已复制 ✓';
+        setTimeout(() => (btn.textContent = old), 1500);
+      } catch {
+        window.prompt('请手动复制微信号：', CONTACT_WECHAT);
+      }
+    });
   });
 };

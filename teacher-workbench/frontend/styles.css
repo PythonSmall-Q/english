@@ -942,6 +942,33 @@ select.form-input {
   flex-wrap: wrap;
 }
 
+/* 定价区联系卡片（微信二维码） */
+.landing-contact {
+  margin: 24px auto 0;
+  max-width: 560px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 20px 28px;
+}
+.landing-contact-qr {
+  width: 148px;
+  height: 148px;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.landing-contact-info { text-align: left; }
+.landing-contact-title { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
+.landing-contact-sub { font-size: 13px; margin-bottom: 10px; }
+.landing-contact-wechat { font-size: 15px; margin-bottom: 12px; }
+.landing-contact-noqr .landing-contact-qr { display: none; }
+@media (max-width: 760px) {
+  .landing-contact { flex-direction: column; text-align: center; gap: 14px; }
+  .landing-contact-info { text-align: center; }
+}
+
 .landing-trial-link {
   font-size: 13px;
   padding: 3px 12px;
