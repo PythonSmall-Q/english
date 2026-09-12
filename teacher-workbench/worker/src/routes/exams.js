@@ -10,7 +10,7 @@
  */
 
 import { Hono } from 'hono';
-import { requireAuth, requireTenant, requireRole, audit, requireTeacherPerm, assertCurrentYear, canImportForClass } from '../middleware.js';
+import { requireAuth, requireTenant, requireRole, audit, requireTeacherPerm, assertCurrentYear, canManageClass } from '../middleware.js';
 import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
 import { checkQuota } from '../quota.js';
 
@@ -19,14 +19,42 @@ const app = new Hono();
 /** 保留两位小数（输出统计用） */
 const round2 = (n) => (n === null || n === undefined ? null : Math.round(n * 100) / 100);
 
-/** 查询租户内考试，不存在抛 NOT_FOUND */
+/** 查询租户内考试（含班级名，供范围徽标/编辑回显），不存在抛 NOT_FOUND */
 async function getExam(db, tenantId, examId) {
   const exam = await db
-    .prepare('SELECT * FROM exams WHERE tenant_id = ? AND id = ?')
+    .prepare(
+      `SELECT e.*, cl.name AS class_name
+         FROM exams e
+         LEFT JOIN classes cl ON cl.id = e.class_id AND cl.tenant_id = e.tenant_id
+        WHERE e.tenant_id = ? AND e.id = ?`
+    )
     .bind(tenantId, examId)
     .first();
   if (!exam) throw new ApiError('NOT_FOUND', '考试不存在');
   return exam;
+}
+
+/**
+ * 考试级管理权限：
+ * - owner/admin 恒可管理
+ * - scope='class' → 可管理该班（canManageClass，含任课老师/班主任/年级组长）
+ * - scope='grade' → 本租户任意年级组组长（grade_groups.leader_user_id）
+ */
+async function canManageExam(db, tenantId, user, exam) {
+  const membership = await db
+    .prepare("SELECT role FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
+    .bind(tenantId, user.id)
+    .first();
+  if (membership && (membership.role === 'owner' || membership.role === 'admin')) return true;
+  if ((exam.scope || 'grade') === 'class') {
+    const check = await canManageClass(db, tenantId, user.id, exam.class_id);
+    return check.ok;
+  }
+  const group = await db
+    .prepare('SELECT id FROM grade_groups WHERE tenant_id = ? AND leader_user_id = ? LIMIT 1')
+    .bind(tenantId, user.id)
+    .first();
+  return !!group;
 }
 
 /** 查询考试分数名单（join 学生/班级，按分数降序） */
@@ -55,11 +83,12 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   const academicYear = resolveAcademicYear(c.req.query('academic_year'));
   const rows = await db
     .prepare(
-      `SELECT e.*,
+      `SELECT e.*, cl.name AS class_name,
               (SELECT COUNT(*) FROM exam_scores s WHERE s.exam_id = e.id) AS student_count,
               (SELECT ROUND(AVG(s.score), 2) FROM exam_scores s
                 WHERE s.exam_id = e.id AND s.score IS NOT NULL) AS avg_score
        FROM exams e
+       LEFT JOIN classes cl ON cl.id = e.class_id AND cl.tenant_id = e.tenant_id
        WHERE e.tenant_id = ? AND e.academic_year = ?
        ORDER BY e.exam_date DESC, e.created_at DESC`
     )
@@ -70,7 +99,9 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
 
 /**
  * POST /api/v1/exams — 新建考试（§36，需 exams 配额）
- * body: { name(必填), subject?, exam_date? }
+ * body: { name(必填), subject?, exam_date?, scope?: 'class'|'grade', class_id? }
+ * scope 缺省：有 class_id 视为 'class'，否则 'grade'。
+ * 班级考试：创建者须可管理该班；全年段考试：owner/admin 或本租户任意年级组组长。
  */
 app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeacherPerm('create_exams'), async (c) => {
   const db = c.env.DB;
@@ -83,17 +114,35 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeach
   const subject = body.subject ? String(body.subject).trim() : null;
   const examDate = body.exam_date ? String(body.exam_date).trim() : null;
 
+  let scope = body.scope !== undefined && body.scope !== null ? String(body.scope).trim() : '';
+  let classId = body.class_id ? String(body.class_id).trim() : null;
+  if (!scope) scope = classId ? 'class' : 'grade';
+  if (scope !== 'class' && scope !== 'grade') {
+    throw new ApiError('VALIDATION_ERROR', "scope 必须为 'class' 或 'grade'");
+  }
+  if (scope === 'class') {
+    if (!classId) throw new ApiError('VALIDATION_ERROR', '班级考试必须指定 class_id');
+    const check = await canManageClass(db, tenantId, user.id, classId);
+    if (!check.ok) throw new ApiError(check.cls ? 'FORBIDDEN' : 'NOT_FOUND', check.reason);
+  } else {
+    // 全年段考试：仅 owner/admin 或本租户任意年级组组长
+    if (!(await canManageExam(db, tenantId, user, { scope: 'grade' }))) {
+      throw new ApiError('FORBIDDEN', '仅管理员或年级组长可创建全年段考试');
+    }
+    classId = null; // class_id 忽略
+  }
+
   await checkQuota(db, tenantId, 'exams');
 
   const id = newId();
   await db
     .prepare(
-      `INSERT INTO exams (id, tenant_id, name, subject, exam_date, academic_year, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO exams (id, tenant_id, name, subject, exam_date, academic_year, scope, class_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(id, tenantId, name, subject, examDate, currentAcademicYear(), now())
+    .bind(id, tenantId, name, subject, examDate, currentAcademicYear(), scope, classId, now())
     .run();
-  await audit(db, tenantId, user.id, 'create_exam', '考试', id, { name });
+  await audit(db, tenantId, user.id, 'create_exam', '考试', id, { name, scope });
   const exam = await getExam(db, tenantId, id);
   return c.json({ success: true, data: exam }, 201);
 });
@@ -118,6 +167,11 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
   const body = await c.req.json().catch(() => ({}));
+
+  // 考试级权限：owner/admin、班级考试→该班管理者、全年段考试→年级组组长
+  if (!(await canManageExam(db, tenantId, user, exam))) {
+    throw new ApiError('FORBIDDEN', '你没有权限管理该考试');
+  }
 
   // 学年归档保护：非当前学年 → 403
   await assertCurrentYear(db, tenantId, 'exams', exam.id);
@@ -144,6 +198,11 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
   const user = c.get('user');
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
+
+  // 考试级权限：owner/admin、班级考试→该班管理者、全年段考试→年级组组长
+  if (!(await canManageExam(db, tenantId, user, exam))) {
+    throw new ApiError('FORBIDDEN', '你没有权限管理该考试');
+  }
 
   // 学年归档保护：非当前学年 → 403
   await assertCurrentYear(db, tenantId, 'exams', exam.id);
@@ -193,7 +252,6 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
   const db = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
-  const membership = c.get('membership');
   const exam = await getExam(db, tenantId, c.req.param('id'));
 
   // 学年归档保护：非当前学年 → 403（历史学年数据仅可查看）
@@ -224,13 +282,7 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
     if (st.name && st.class_name) byNameClass.set(`${String(st.name).trim()}|${String(st.class_name).trim()}`, st);
   }
 
-  // 导入权限：班级 id → { teacher_id, grade_group_id }（班主任/年级组长/owner/admin 可导入）
-  const classRows = await db
-    .prepare('SELECT id, teacher_id, grade_group_id FROM classes WHERE tenant_id = ?')
-    .bind(tenantId)
-    .all();
-  const classMap = new Map(classRows.results.map((cls) => [cls.id, cls]));
-
+  // 导入权限：班级管理者（班主任/任课老师/年级组长/owner/admin）可导入，按学生所属班判定
   const stmts = [];
   let created = 0;
   let updated = 0;
@@ -244,11 +296,9 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
       unmatched.push(row);
       continue;
     }
-    // 导入权限：按学生所属班级限制（班主任 / owner / admin / 年级组长）；未分班学生不限制
     if (student.class_id) {
-      const cls = classMap.get(student.class_id);
-      const allowed = await canImportForClass(db, tenantId, user, membership, cls);
-      if (!allowed) {
+      const allowed = await canManageClass(db, tenantId, user.id, student.class_id);
+      if (!allowed.ok) {
         unmatched.push({
           row,
           reason: type === 'scores' ? '你不是该班班主任，无权导入该班成绩' : '你不是该班班主任，无权导入该班小分',
@@ -354,15 +404,26 @@ function rankInClass(list) {
 /**
  * GET /api/v1/exams/:id/analysis — 成绩分析
  * 返回：参考人数/均分/最高/最低/分数段分布、分班均分对比、各题型均分与得分率、班内排名
+ * 支持 ?class_id=：overview/bands/questionTypes/rankings 仅统计该班（名次班内计算）；classCompare 保持全校对比
  */
 app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   const db = c.env.DB;
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
 
+  const filterClassId = c.req.query('class_id') || null;
+  if (filterClassId) {
+    const cls = await db
+      .prepare('SELECT id FROM classes WHERE id = ? AND tenant_id = ?')
+      .bind(filterClassId, tenantId)
+      .first();
+    if (!cls) throw new ApiError('BAD_REQUEST', '班级不存在或不属于当前空间');
+  }
+
   const scoresRes = await listScoresStmt(db, tenantId, exam.id).all();
   const scores = scoresRes.results;
-  const valid = scores.filter((s) => s.score !== null && s.score !== undefined);
+  const allValid = scores.filter((s) => s.score !== null && s.score !== undefined);
+  const valid = filterClassId ? allValid.filter((s) => s.class_id === filterClassId) : allValid;
 
   // 总分概览 + 分数段分布
   const nums = valid.map((s) => s.score);
@@ -377,9 +438,9 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
     })),
   };
 
-  // 分班均分对比
+  // 分班均分对比（不受 class_id 过滤影响，保持全校对比）
   const classMap = new Map();
-  for (const s of valid) {
+  for (const s of allValid) {
     const key = s.class_id || '(无班级)';
     if (!classMap.has(key)) classMap.set(key, { classId: s.class_id, className: s.class_name || '(无班级)', scores: [] });
     classMap.get(key).scores.push(s.score);
@@ -393,19 +454,23 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
     }))
     .sort((a, b) => a.className.localeCompare(b.className, 'zh-Hans-CN'));
 
-  // 各题型均分与得分率（得分率 = Σscore / Σmax_score）
-  const subRes = await db
-    .prepare(
-      `SELECT question_type, COUNT(*) AS count,
+  // 各题型均分与得分率（得分率 = Σscore / Σmax_score）；传 class_id 时仅统计该班
+  let subSql = `SELECT question_type, COUNT(*) AS count,
               AVG(score) AS avg_score,
               SUM(score) AS sum_score, SUM(max_score) AS sum_max
        FROM exam_subscores
-       WHERE tenant_id = ? AND exam_id = ?
-       GROUP BY question_type
-       ORDER BY question_type`
-    )
-    .bind(tenantId, exam.id)
-    .all();
+       WHERE tenant_id = ? AND exam_id = ?`;
+  const subParams = [tenantId, exam.id];
+  if (filterClassId) {
+    subSql = `SELECT ss.question_type, COUNT(*) AS count,
+              AVG(ss.score) AS avg_score,
+              SUM(ss.score) AS sum_score, SUM(ss.max_score) AS sum_max
+       FROM exam_subscores ss JOIN students st ON st.id = ss.student_id
+       WHERE ss.tenant_id = ? AND ss.exam_id = ? AND st.class_id = ?`;
+    subParams.push(filterClassId);
+  }
+  subSql += ' GROUP BY question_type ORDER BY question_type';
+  const subRes = await db.prepare(subSql).bind(...subParams).all();
   const questionTypes = subRes.results.map((r) => ({
     questionType: r.question_type,
     count: r.count,
@@ -413,7 +478,7 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
     rate: r.sum_max ? round2(r.sum_score / r.sum_max) : null,
   }));
 
-  // 班内排名（按班级分组，分数降序）
+  // 班内排名（按班级分组，分数降序）；传 class_id 时只有该班一组，名次班内从 1 起
   const byClass = new Map();
   for (const s of valid) {
     const key = s.class_id || '(无班级)';
@@ -432,6 +497,7 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
         studentName: s.student_name,
         score: s.score,
         rank: s.rank,
+        classId: g?.classId ?? null,
       })),
     };
   });
@@ -440,6 +506,70 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
     success: true,
     data: { exam, overview, classCompare, questionTypes, rankings },
   });
+});
+
+/**
+ * PUT /api/v1/exams/:id/students/:studentId — 单独登记/修改某学生总分（UPSERT）
+ * body: { score: number }
+ * 班级考试 → 可管理考试所在班；全年段考试 → 可管理该生所在班（未分班学生需为年级组组长/管理员）。
+ */
+app.put('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+  const db = c.env.DB;
+  const user = c.get('user');
+  const tenantId = c.get('tenantId');
+  const exam = await getExam(db, tenantId, c.req.param('id'));
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'exams', exam.id);
+
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.score !== 'number' || !Number.isFinite(body.score)) {
+    throw new ApiError('VALIDATION_ERROR', 'score 必须为有限数字');
+  }
+  const score = body.score;
+
+  const student = await db
+    .prepare('SELECT id, name, class_id FROM students WHERE id = ? AND tenant_id = ?')
+    .bind(c.req.param('studentId'), tenantId)
+    .first();
+  if (!student) throw new ApiError('NOT_FOUND', '学生不存在');
+
+  if ((exam.scope || 'grade') === 'class') {
+    const check = await canManageClass(db, tenantId, user.id, exam.class_id);
+    if (!check.ok) throw new ApiError('FORBIDDEN', check.reason);
+  } else if (student.class_id) {
+    const check = await canManageClass(db, tenantId, user.id, student.class_id);
+    if (!check.ok) throw new ApiError('FORBIDDEN', check.reason);
+  } else if (!(await canManageExam(db, tenantId, user, exam))) {
+    // 未分班学生：回退到考试级权限（owner/admin/年级组组长）
+    throw new ApiError('FORBIDDEN', '你没有权限登记该学生成绩');
+  }
+
+  const existing = await db
+    .prepare('SELECT id FROM exam_scores WHERE exam_id = ? AND student_id = ?')
+    .bind(exam.id, student.id)
+    .first();
+  if (existing) {
+    await db
+      .prepare('UPDATE exam_scores SET score = ?, created_at = ? WHERE id = ?')
+      .bind(score, now(), existing.id)
+      .run();
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO exam_scores (id, tenant_id, exam_id, student_id, score, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .bind(newId(), tenantId, exam.id, student.id, score, now())
+      .run();
+  }
+  await audit(db, tenantId, user.id, 'set_exam_score', '考试', exam.id, {
+    examName: exam.name,
+    studentId: student.id,
+    studentName: student.name,
+    score,
+  });
+  return c.json({ success: true, data: { exam_id: exam.id, student_id: student.id, score } });
 });
 
 /**

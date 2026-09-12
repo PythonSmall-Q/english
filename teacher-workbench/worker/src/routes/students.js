@@ -13,7 +13,7 @@
 
 import { Hono } from 'hono';
 import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
-import { requireAuth, requireTenant, requireClassManager, audit, requireTeacherPerm, assertCurrentYear } from '../middleware.js';
+import { requireAuth, requireTenant, requireClassManager, requireRole, audit, requireTeacherPerm, assertCurrentYear } from '../middleware.js';
 import { checkQuota } from '../quota.js';
 
 const app = new Hono();
@@ -297,6 +297,114 @@ app.delete('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id'
   await db.prepare('DELETE FROM students WHERE id = ? AND tenant_id = ?').bind(student.id, tenantId).run();
   await audit(db, tenantId, user.id, '删除学生', 'student', student.id, { name: student.name });
   return c.json({ success: true, data: { deleted: true } });
+});
+
+/**
+ * GET /api/v1/students/:id/exam-scores — 该生当前学年全部考试成绩（viewer 起）
+ * 返回 { student: {id, studentNo, name, className}, exams: [{examId, name, subject, examDate,
+ *       scope, score, classRank, subscores: [{questionType, score, maxScore}]}] }
+ * classRank = 班内名次（同分同名次）；无成绩或未分班 → null
+ */
+app.get('/:id/exam-scores', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
+  const db = c.env.DB;
+  const tenantId = c.get('tenantId');
+  const student = await getStudentOr404(db, tenantId, c.req.param('id'));
+  const cls = student.class_id
+    ? await db.prepare('SELECT id, name FROM classes WHERE id = ? AND tenant_id = ?').bind(student.class_id, tenantId).first()
+    : null;
+
+  // 当前学年全部考试 + 该生总分
+  const examRes = await db
+    .prepare(
+      `SELECT e.id, e.name, e.subject, e.exam_date, e.scope, s.score
+         FROM exams e
+         LEFT JOIN exam_scores s ON s.exam_id = e.id AND s.student_id = ?
+        WHERE e.tenant_id = ? AND e.academic_year = ?
+        ORDER BY e.exam_date DESC, e.created_at DESC`
+    )
+    .bind(student.id, tenantId, currentAcademicYear())
+    .all();
+  const examList = examRes.results;
+
+  // 一次性取这些考试的全部成绩（含班级），内存中按考试→班级分组算班内名次
+  const scoresByExam = new Map();
+  if (examList.length) {
+    const ph = examList.map(() => '?').join(',');
+    const rows = await db
+      .prepare(
+        `SELECT s.exam_id, s.student_id, s.score, st.class_id
+           FROM exam_scores s JOIN students st ON st.id = s.student_id
+          WHERE s.tenant_id = ? AND s.exam_id IN (${ph})`
+      )
+      .bind(tenantId, ...examList.map((e) => e.id))
+      .all();
+    for (const r of rows.results) {
+      if (r.score === null || r.score === undefined) continue;
+      if (!scoresByExam.has(r.exam_id)) scoresByExam.set(r.exam_id, []);
+      scoresByExam.get(r.exam_id).push(r);
+    }
+  }
+
+  // 该生这些考试的小分
+  const subByExam = new Map();
+  if (examList.length) {
+    const ph = examList.map(() => '?').join(',');
+    const rows = await db
+      .prepare(
+        `SELECT exam_id, question_type, score, max_score
+           FROM exam_subscores
+          WHERE tenant_id = ? AND student_id = ? AND exam_id IN (${ph})
+          ORDER BY question_type`
+      )
+      .bind(tenantId, student.id, ...examList.map((e) => e.id))
+      .all();
+    for (const r of rows.results) {
+      if (!subByExam.has(r.exam_id)) subByExam.set(r.exam_id, []);
+      subByExam.get(r.exam_id).push({ questionType: r.question_type, score: r.score, maxScore: r.max_score });
+    }
+  }
+
+  const exams = examList.map((e) => {
+    let classRank = null;
+    if (e.score !== null && e.score !== undefined && student.class_id) {
+      const classmates = (scoresByExam.get(e.id) || []).filter((r) => r.class_id === student.class_id);
+      const sorted = [...classmates].sort((a, b) => b.score - a.score);
+      let prevScore = null;
+      let prevRank = 0;
+      for (let i = 0; i < sorted.length; i++) {
+        const r = sorted[i].score === prevScore ? prevRank : i + 1;
+        prevScore = sorted[i].score;
+        prevRank = r;
+        if (sorted[i].student_id === student.id) {
+          classRank = r;
+          break;
+        }
+      }
+    }
+    return {
+      examId: e.id,
+      name: e.name,
+      subject: e.subject,
+      examDate: e.exam_date,
+      scope: e.scope || 'grade',
+      score: e.score ?? null,
+      classRank,
+      subscores: subByExam.get(e.id) || [],
+    };
+  });
+
+  return c.json({
+    success: true,
+    data: {
+      student: {
+        id: student.id,
+        studentNo: student.student_no,
+        name: student.name,
+        className: cls?.name ?? null,
+      },
+      exams,
+    },
+  });
 });
 
 export default app;

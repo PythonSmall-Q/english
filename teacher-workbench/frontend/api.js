@@ -161,6 +161,8 @@
     update: (id, body) => request(`/students/${id}`, { method: 'PUT', body }),
     remove: (id) => request(`/students/${id}`, { method: 'DELETE' }),
     search: (q, query) => request('/students/search', { query: { q, ...query } }),
+    /** 该生当前学年全部考试成绩（viewer 起）：总分 + 班内名次 + 各题型小分 */
+    examScores: (studentId) => request(`/students/${studentId}/exam-scores`),
   };
 
   // —— Lessons 备课中心（§56）——
@@ -210,7 +212,11 @@
     update: (id, body) => request(`/exams/${id}`, { method: 'PUT', body }),
     remove: (id) => request(`/exams/${id}`, { method: 'DELETE' }),
     import: (id, body) => request(`/exams/${id}/import`, { method: 'POST', body }),
-    analysis: (id) => request(`/exams/${id}/analysis`),
+    /** 成绩分析；传 classId 时 overview/分数段/题型/班内排名仅统计该班（各班均分对比始终为全校） */
+    analysis: (id, classId) => request(`/exams/${id}/analysis`, { query: classId ? { class_id: classId } : {} }),
+    /** 单独登记/修改某生总分（班主任/任课老师可登记本班，年段考可登记本班学生） */
+    setScore: (examId, studentId, score) =>
+      request(`/exams/${examId}/students/${studentId}`, { method: 'PUT', body: { score } }),
     studentReport: (id, studentId) => request(`/exams/${id}/students/${studentId}`),
   };
 

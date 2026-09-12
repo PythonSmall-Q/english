@@ -40,6 +40,17 @@
 .ex-chart-wrap { overflow-x: auto; }
 .ex-class-block { margin-bottom: 14px; }
 .ex-report-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.ex-report-head label { margin: 0; }
+.ex-badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #4f5bd5; margin-left: 6px; vertical-align: 1px; }
+.ex-badge.ex-badge-grade { background: #e8f7f3; color: #2a9d8f; }
+.ex-scope-row { display: flex; gap: 18px; align-items: center; margin: 4px 0; }
+.ex-scope-row label { display: inline-flex; align-items: center; gap: 5px; margin: 0; font-size: 13px; color: #333; cursor: pointer; }
+.ex-analysis-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; font-size: 13px; color: #555; }
+.ex-analysis-bar select { max-width: 220px; }
+.ex-score-btn { margin-left: 8px; }
+.ex-subscore { display: inline-block; margin: 2px 6px 2px 0; }
+.ex-stu-select { max-width: 360px; }
+.ex-stu-table td { vertical-align: top; }
 `;
 
   let styleInjected = false;
@@ -303,14 +314,25 @@
     return exams || [];
   }
 
+  /** 范围徽标：班级考试 → 班级名；全年段考试 → 全年段 */
+  function scopeBadge(e) {
+    return e.scope === 'class'
+      ? `<span class="ex-badge">${esc(e.class_name || '班级考试')}</span>`
+      : `<span class="ex-badge ex-badge-grade">全年段</span>`;
+  }
+
   function renderList(exams) {
     const wrap = document.createElement('div');
     wrap.innerHTML = `
       <div class="ex-toolbar">
         <span class="muted">共 ${exams.length} 场考试</span>
-        ${canCreateExams ? '<button class="btn btn-primary" id="ex-new" type="button">＋ 新建考试</button>' : ''}
+        <span style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" id="ex-stu-scores" type="button">学生成绩</button>
+          ${canCreateExams ? '<button class="btn btn-primary" id="ex-new" type="button">＋ 新建考试</button>' : ''}
+        </span>
       </div>
       <div id="ex-list"></div>`;
+    wrap.querySelector('#ex-stu-scores').addEventListener('click', openStudentScores);
     const listEl = wrap.querySelector('#ex-list');
     if (!exams.length) {
       listEl.innerHTML = `<div class="card"><div class="muted">还没有考试。点击右上角「新建考试」，再导入成绩即可查看分析。</div></div>`;
@@ -319,7 +341,7 @@
         .map(
           (e) => `
         <tr>
-          <td>${esc(e.name)}</td>
+          <td>${esc(e.name)}${scopeBadge(e)}</td>
           <td>${esc(e.subject || '—')}</td>
           <td>${esc(e.exam_date || '—')}</td>
           <td>${Number(e.student_count || 0)}</td>
@@ -426,14 +448,49 @@
   }
 
   /** 新建 / 编辑考试 */
-  function openExamForm(exam) {
+  async function openExamForm(exam) {
     const isEdit = !!exam;
+    // 班级考试：我可管理的班；全年段考试：owner/admin 或我带领的年级组
+    let managedClasses = [];
+    let canCreateGrade = false;
+    try {
+      const [classData, groupData, me] = await Promise.all([
+        api.classes.list().catch(() => ({ classes: [] })),
+        api.gradeGroups.list().catch(() => ({ groups: [] })),
+        api.auth.me().catch(() => null),
+      ]);
+      managedClasses = (classData.classes || []).filter((c) => c.canManage);
+      const role = me?.tenants?.find((t) => t.id === App.state.tenant?.id)?.role;
+      canCreateGrade =
+        role === 'owner' || role === 'admin' || (groupData.groups || []).some((g) => g.leader_user_id === me?.user?.id);
+    } catch (e) {
+      /* 权限信息加载失败不阻塞弹窗，后端 403 兜底 */
+    }
+
     App.modal(
       isEdit ? '编辑考试' : '新建考试',
       `
       <div class="ex-form">
         <label>考试名称 <span class="ex-weak">*</span></label>
         <input class="form-input" id="exf-name" value="${esc(exam?.name || '')}" placeholder="如：高三上期中考试">
+        <label>考试范围</label>
+        ${
+          isEdit
+            ? `<div class="muted" style="margin:4px 0">${exam.scope === 'class' ? `班级考试（${esc(exam.class_name || '')}）` : '全年段考试'}</div>`
+            : `<div class="ex-scope-row" id="exf-scope-row">
+            <label><input type="radio" name="exf-scope" value="class" checked> 班级考试</label>
+            <label><input type="radio" name="exf-scope" value="grade" ${!canCreateGrade ? 'disabled' : ''}> 全年段考试${
+                canCreateGrade ? '' : '（仅年级组长/管理员）'
+              }</label>
+          </div>
+          <div id="exf-class-wrap">
+            <label>所属班级 <span class="ex-weak">*</span></label>
+            <select class="form-input" id="exf-class">
+              <option value="">请选择班级</option>
+              ${managedClasses.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
+            </select>
+          </div>`
+        }
         <label>科目</label>
         <input class="form-input" id="exf-subject" value="${esc(exam?.subject || '')}" placeholder="英语">
         <label>考试日期</label>
@@ -444,6 +501,16 @@
         <button class="btn btn-primary" id="exf-ok" type="button">保存</button>
       </div>`,
       () => {
+        const scopeInputs = Array.from(document.querySelectorAll('input[name="exf-scope"]'));
+        const classWrap = document.getElementById('exf-class-wrap');
+        const syncScope = () => {
+          if (!classWrap) return;
+          const scope = scopeInputs.find((i) => i.checked)?.value || 'class';
+          classWrap.classList.toggle('hidden', scope !== 'class');
+        };
+        scopeInputs.forEach((i) => i.addEventListener('change', syncScope));
+        syncScope();
+
         document.getElementById('exf-cancel').onclick = () => App.closeModal();
         document.getElementById('exf-ok').onclick = async () => {
           const body = {
@@ -452,6 +519,14 @@
             exam_date: document.getElementById('exf-date').value,
           };
           if (!body.name) return App.toast('考试名称不能为空');
+          if (!isEdit) {
+            const scope = scopeInputs.find((i) => i.checked)?.value || 'class';
+            body.scope = scope;
+            if (scope === 'class') {
+              body.class_id = document.getElementById('exf-class').value;
+              if (!body.class_id) return App.toast('请选择所属班级');
+            }
+          }
           try {
             if (isEdit) await api.exams.update(exam.id, body);
             else await api.exams.create(body);
@@ -614,6 +689,16 @@
 
   // ============================== 查看分析 ==============================
 
+  /** 可管理班级 id 集合；拿不到（请求失败）时返回 null → 前端不隐藏改成绩入口，后端 403 兜底 */
+  async function loadManageableClassIds() {
+    try {
+      const data = await api.classes.list();
+      return new Set((data.classes || []).filter((c) => c.canManage).map((c) => c.id));
+    } catch (e) {
+      return null;
+    }
+  }
+
   async function openAnalysis(examId, examName) {
     App.modal(
       `成绩分析 · ${examName}`,
@@ -621,14 +706,10 @@
       (modalEl) => {
         modalEl.classList.add('ex-modal-wide');
         const body = modalEl.querySelector('.modal-body');
-        (async () => {
-          let data;
-          try {
-            data = await api.exams.analysis(examId);
-          } catch (err) {
-            body.innerHTML = `<div class="muted">分析加载失败：${esc((err && err.message) || '未知错误')}</div>`;
-            return;
-          }
+        let analysisClassId = ''; // '' = 全校
+        let canManageIds = null;
+
+        function render(data) {
           const { overview, classCompare, questionTypes, rankings } = data;
           const kpi = (num, label) => `<div class="ex-kpi"><div class="ex-kpi-num">${num}</div><div class="ex-kpi-label">${label}</div></div>`;
 
@@ -649,14 +730,20 @@
             <div class="card ex-class-block">
               <div class="card-title">${esc(g.className)} · 班内排名（点击行查看个性化报告）</div>
               <table class="table">
-                <thead><tr><th>名次</th><th>学号</th><th>姓名</th><th>总分</th></tr></thead>
+                <thead><tr><th>名次</th><th>学号</th><th>姓名</th><th>总分</th><th></th></tr></thead>
                 <tbody>
                   ${g.list
-                    .map(
-                      (s) => `<tr class="ex-rank-row" data-sid="${esc(s.studentId)}">
+                    .map((s) => {
+                      const editable = canManageIds === null || canManageIds.has(s.classId);
+                      return `<tr class="ex-rank-row" data-sid="${esc(s.studentId)}">
                         <td>${s.rank}</td><td>${esc(s.studentNo || '—')}</td><td>${esc(s.studentName)}</td><td>${fmtScore(s.score)}</td>
-                      </tr>`
-                    )
+                        <td>${
+                          editable
+                            ? `<button class="btn btn-sm ex-score-btn" data-act="edit-score" data-sid="${esc(s.studentId)}" data-sname="${esc(s.studentName)}" data-score="${s.score === null || s.score === undefined ? '' : esc(s.score)}" type="button">改成绩</button>`
+                            : ''
+                        }</td>
+                      </tr>`;
+                    })
                     .join('')}
                 </tbody>
               </table>
@@ -671,6 +758,16 @@
               ${kpi(fmtScore(overview.max), '最高分')}
               ${kpi(fmtScore(overview.min), '最低分')}
             </div>
+            <div class="ex-analysis-bar">
+              <label for="exa-class" style="margin:0">班级</label>
+              <select class="form-input" id="exa-class">
+                <option value="">全部班级</option>
+                ${(classCompare || [])
+                  .map((c) => `<option value="${esc(c.classId)}" ${c.classId === analysisClassId ? 'selected' : ''}>${esc(c.className)}</option>`)
+                  .join('')}
+              </select>
+              ${analysisClassId ? '<span class="muted">以下统计仅含所选班级，排名在班内计算；「各班均分对比」始终为全校。</span>' : ''}
+            </div>
             <div class="ex-sec-title">分数段分布</div>
             <div class="ex-chart-wrap">${exBarChart((overview.bands || []).map((b) => ({ label: b.label, value: b.count })), { color: '#4f8ef7' })}</div>
             <div class="ex-sec-title">各班均分对比</div>
@@ -681,12 +778,161 @@
                 ? `<table class="table"><thead><tr><th>题型</th><th>人数</th><th>均分</th><th>得分率</th></tr></thead><tbody>${qtRows}</tbody></table>`
                 : '<div class="muted">尚未导入小分，导入后可查看各题型分析。</div>'
             }
-            <div class="ex-sec-title">班内排名</div>
+            <div class="ex-sec-title">${analysisClassId ? '班内排名（所选班级）' : '班内排名'}</div>
             ${rankBlocks || '<div class="muted">暂无成绩数据。</div>'}`;
 
+          body.querySelector('#exa-class').addEventListener('change', (ev) => {
+            analysisClassId = ev.target.value;
+            reload();
+          });
           body.querySelectorAll('.ex-rank-row').forEach((tr) => {
             tr.addEventListener('click', () => openReport(examId, examName, tr.dataset.sid));
           });
+          body.querySelectorAll('button[data-act="edit-score"]').forEach((btn) => {
+            btn.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              openEditScore(examId, examName, btn.dataset.sid, btn.dataset.sname, btn.dataset.score, reload);
+            });
+          });
+        }
+
+        async function reload() {
+          body.innerHTML = '<div class="muted">加载中…</div>';
+          let data;
+          try {
+            [data, canManageIds] = await Promise.all([
+              api.exams.analysis(examId, analysisClassId || undefined),
+              canManageIds === null ? loadManageableClassIds() : Promise.resolve(canManageIds),
+            ]);
+          } catch (err) {
+            body.innerHTML = `<div class="muted">分析加载失败：${esc((err && err.message) || '未知错误')}</div>`;
+            return;
+          }
+          render(data);
+        }
+
+        reload();
+      }
+    );
+  }
+
+  /** 单独修改某生总分（保存成功后回调 refresh 刷新分析） */
+  function openEditScore(examId, examName, studentId, studentName, currentScore, refresh) {
+    App.modal(
+      `修改成绩 · ${examName}`,
+      `
+      <div class="ex-form">
+        <div style="margin:8px 0">学生：<b>${esc(studentName)}</b></div>
+        <label>总分</label>
+        <input class="form-input" id="exs-score" type="number" step="any" value="${esc(currentScore)}">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="exs-cancel" type="button">取消</button>
+        <button class="btn btn-primary" id="exs-ok" type="button">保存</button>
+      </div>`,
+      () => {
+        document.getElementById('exs-cancel').onclick = () => App.closeModal();
+        document.getElementById('exs-ok').onclick = async () => {
+          const raw = document.getElementById('exs-score').value.trim();
+          const score = Number(raw);
+          if (raw === '' || !Number.isFinite(score)) return App.toast('请输入有效分数');
+          const btn = document.getElementById('exs-ok');
+          btn.disabled = true;
+          try {
+            await api.exams.setScore(examId, studentId, score);
+            App.closeModal();
+            App.toast('成绩已保存');
+            refresh();
+          } catch (err) {
+            reportErr(err);
+            btn.disabled = false;
+          }
+        };
+      }
+    );
+  }
+
+  // ============================== 学生成绩（跨考试总览） ==============================
+
+  function openStudentScores() {
+    App.modal(
+      '学生成绩',
+      `
+      <div class="ex-form">
+        <label>选择学生</label>
+        <select class="form-input ex-stu-select" id="exst-student"><option value="">加载中…</option></select>
+      </div>
+      <div id="exst-body" style="margin-top:12px"><div class="muted">选择学生后展示其当前学年全部考试成绩。</div></div>`,
+      (modalEl) => {
+        modalEl.classList.add('ex-modal-wide');
+        const select = modalEl.querySelector('#exst-student');
+        const body = modalEl.querySelector('#exst-body');
+
+        async function loadScores(studentId) {
+          body.innerHTML = '<div class="muted">加载中…</div>';
+          let data;
+          try {
+            data = await api.students.examScores(studentId);
+          } catch (err) {
+            body.innerHTML = `<div class="muted">成绩加载失败：${esc((err && err.message) || '未知错误')}</div>`;
+            return;
+          }
+          const exams = data.exams || [];
+          if (!exams.length) {
+            body.innerHTML = '<div class="muted">该学生当前学年还没有考试成绩。</div>';
+            return;
+          }
+          body.innerHTML = `
+            <div class="ex-hint muted">共 ${exams.length} 场考试（当前学年）</div>
+            <div class="ex-preview-table"><table class="table ex-stu-table">
+              <thead><tr><th>考试名称</th><th>日期</th><th>范围</th><th>总分</th><th>班内名次</th><th>小分（题型 得分/满分）</th></tr></thead>
+              <tbody>
+                ${exams
+                  .map((e) => {
+                    const subs = (e.subscores || [])
+                      .map((s) => `<span class="badge ex-subscore">${esc(s.questionType)} ${fmtScore(s.score)}/${fmtScore(s.maxScore)}</span>`)
+                      .join('');
+                    return `<tr>
+                      <td>${esc(e.name)}</td>
+                      <td>${esc(e.examDate || '—')}</td>
+                      <td>${e.scope === 'class' ? '班级' : '全年段'}</td>
+                      <td>${fmtScore(e.score)}</td>
+                      <td>${e.classRank === null || e.classRank === undefined ? '—' : e.classRank}</td>
+                      <td>${subs || '<span class="muted">—</span>'}</td>
+                    </tr>`;
+                  })
+                  .join('')}
+              </tbody>
+            </table></div>`;
+        }
+
+        select.addEventListener('change', () => {
+          if (select.value) loadScores(select.value);
+          else body.innerHTML = '<div class="muted">选择学生后展示其当前学年全部考试成绩。</div>';
+        });
+
+        (async () => {
+          let students;
+          try {
+            const data = await api.students.list();
+            students = data.students || [];
+          } catch (err) {
+            select.innerHTML = '<option value="">（学生列表加载失败）</option>';
+            return;
+          }
+          if (!students.length) {
+            select.innerHTML = '<option value="">（暂无学生）</option>';
+            body.innerHTML = '<div class="muted">当前学年还没有学生，请先在「学生管理」中创建。</div>';
+            return;
+          }
+          select.innerHTML =
+            '<option value="">请选择学生</option>' +
+            students
+              .map(
+                (s) =>
+                  `<option value="${esc(s.id)}">${esc(s.class_name || '未分班')} · ${esc(s.name)}（${esc(s.student_no || '无学号')}）</option>`
+              )
+              .join('');
         })();
       }
     );
@@ -808,6 +1054,11 @@
         } catch (e) {
           /* 深链参数异常则忽略，正常展示列表 */
         }
+      }
+      // 深链：学生管理 → 学生成绩，直接打开跨考试总览
+      if (sessionStorage.getItem('wb.exams.studentScores')) {
+        sessionStorage.removeItem('wb.exams.studentScores');
+        openStudentScores();
       }
     },
   });
