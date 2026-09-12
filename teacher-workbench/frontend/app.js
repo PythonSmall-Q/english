@@ -512,22 +512,21 @@ window.App = {
 
   /**
    * 3 天试用：落地页点了「免费试用」后（localStorage 'wb_trial_intent'），
-   * 在注册/登录进入工作台时自动创建试用空间。标记先清除，保证只触发一次；
-   * 网络错误也 toast。成功：刷新租户列表并自动切换到新试用空间（切不过去就只刷新）。
+   * 在注册/登录进入工作台时自动创建试用空间（只有这条路径会创建试用空间）。
+   * 标记先清除，保证只触发一次；成功返回 true 并弹出试用注意事项，失败返回 false。
    */
   async startTrialIfIntent() {
-    if (localStorage.getItem('wb_trial_intent') !== '1') return;
+    if (localStorage.getItem('wb_trial_intent') !== '1') return false;
     // 先清除标记：无论成败，本次登录只触发一次
     localStorage.removeItem('wb_trial_intent');
     let tenant;
     try {
       const data = await api.trials.start();
       tenant = data && data.tenant;
-      App.toast('试用空间已创建，3 天后到期，到期后数据将被删除');
     } catch (e) {
       // 409「每个账号只能试用一次」与网络错误都透传后端/客户端 message
       App.toast((e && e.message) || '试用空间创建失败，请稍后再试');
-      return;
+      return false;
     }
     // 刷新租户列表：auth/me 带配额，GET /tenants 带 plan/expires_at，二者合并（保留 quota）
     try {
@@ -553,16 +552,39 @@ window.App = {
     const inApp = !document.getElementById('app-frame').classList.contains('hidden');
     if (!inApp) {
       await App.boot();
-      return;
-    }
-    App.updateTenantSwitcher();
-    if (tenant && tenant.id && App.state.tenants.some((t) => t.id === tenant.id)) {
-      try {
-        await App.setTenant(tenant.id);
-      } catch (e) {
-        /* 切换失败：列表已刷新，停留在当前空间 */
+    } else {
+      App.updateTenantSwitcher();
+      if (tenant && tenant.id && App.state.tenants.some((t) => t.id === tenant.id)) {
+        try {
+          await App.setTenant(tenant.id);
+        } catch (e) {
+          /* 切换失败：列表已刷新，停留在当前空间 */
+        }
       }
     }
+    // 进入工作台后弹出试用注意事项（延迟让视图先渲染出来）
+    setTimeout(() => App.showTrialNotice(), 300);
+    return true;
+  },
+
+  /** 试用空间注意事项弹窗（试用创建成功后弹一次） */
+  showTrialNotice() {
+    App.modal(
+      '试用空间注意事项',
+      `<div style="line-height:1.9">
+        🎉 试用空间已创建，<b>3 天后到期</b>，请注意以下事项：<br>
+        · 到期后空间内<b>全部数据将被物理删除</b>，无法恢复；<br>
+        · 各项限额均为 1（1 个班级、1 名学生，教案/作业/默写/考试各 1 条）；<br>
+        · AI 助手 0 次额度，<b>不能上传文件</b>；<br>
+        · 每个账号仅可试用一次；如需正式使用，请联系微信开通版本。
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="trial-notice-ok" type="button">我知道了</button>
+      </div>`,
+      () => {
+        document.getElementById('trial-notice-ok').onclick = () => App.closeModal();
+      }
+    );
   },
 
   /**
@@ -663,11 +685,17 @@ window.App = {
       const data = await api.auth.me();
       App.state.user = data.user;
       App.state.tenants = data.tenants || [];
-      // 无空间账号（平台关闭自动个人空间后注册）：提示联系学校管理员加入
+      // 无空间账号（平台关闭自动个人空间后注册）
       if (App.state.tenants.length === 0) {
+        // 试用流程：只从「立即试用」入口创建试用空间，不显示「联系学校」引导页；
+        // 创建失败（如已试用过）再回退到引导页
+        if (localStorage.getItem('wb_trial_intent') === '1') {
+          const ok = await App.startTrialIfIntent();
+          if (!ok) App.showNoWorkspace(App.state.user);
+          return;
+        }
+        // 正常注册：提示联系学校管理员加入
         App.showNoWorkspace(App.state.user);
-        // 试用意图：为无空间账号直接创建试用空间，成功后重新进入工作台
-        App.startTrialIfIntent();
         return;
       }
       // 默认选中 personal 空间，否则第一个（§22）
