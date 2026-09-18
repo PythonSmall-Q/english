@@ -30,9 +30,11 @@ import dashboardRoutes from './routes/dashboard.js';
 import gradeGroupRoutes from './routes/grade-groups.js';
 import archiveRoutes from './routes/archive.js';
 import graduatedRoutes from './routes/graduated.js';
+import recycleRoutes from './routes/recycle.js';
 import { archiveAllTenants } from './archive.js';
 import { rolloverTenants } from './rollover.js';
 import { purgeExpiredTrials } from './trial.js';
+import { purgeRecycleBin } from './recycle.js';
 import trialRoutes from './routes/trial.js';
 
 const app = new Hono();
@@ -73,6 +75,7 @@ app.route('/api/v1/grade-groups', gradeGroupRoutes);
 app.route('/api/v1/archive', archiveRoutes);
 app.route('/api/v1/graduated', graduatedRoutes);
 app.route('/api/v1/trials', trialRoutes);
+app.route('/api/v1/recycle', recycleRoutes);
 
 app.onError(onError);
 app.notFound(notFoundHandler);
@@ -103,6 +106,12 @@ export default {
       await purgeExpiredTrials(env);
     } catch (err) {
       console.error('[scheduled] 试用空间清理失败:', err);
+    }
+    try {
+      const purged = await purgeRecycleBin(env);
+      if (purged > 0) console.log(`[scheduled] 回收站清理 ${purged} 条过期数据`);
+    } catch (err) {
+      console.error('[scheduled] 回收站清理失败:', err);
     }
   },
 };

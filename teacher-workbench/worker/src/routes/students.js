@@ -15,6 +15,7 @@ import { Hono } from 'hono';
 import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
 import { requireAuth, requireTenant, requireClassManager, requireRole, audit, requireTeacherPerm, assertCurrentYear } from '../middleware.js';
 import { checkQuota } from '../quota.js';
+import { captureRecycle } from '../recycle.js';
 
 const app = new Hono();
 
@@ -294,6 +295,11 @@ app.delete('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id'
   // 学年归档保护：非当前学年 → 403
   await assertCurrentYear(db, tenantId, 'students', student.id);
 
+  // 回收站：先捕获全量行，再物理删除
+  await captureRecycle(db, tenantId, user.id, 'student', student.id, student.name, {
+    students: [student],
+  });
+
   await db.prepare('DELETE FROM students WHERE id = ? AND tenant_id = ?').bind(student.id, tenantId).run();
   await audit(db, tenantId, user.id, '删除学生', 'student', student.id, { name: student.name });
   return c.json({ success: true, data: { deleted: true } });
@@ -405,6 +411,140 @@ app.get('/:id/exam-scores', requireAuth, requireTenant, requireRole(['viewer']),
       exams,
     },
   });
+});
+
+/**
+ * GET /api/v1/students/:id/overview — 学生个性化汇总分析（requireTenant，任何成员可读）
+ * 返回：
+ * - exams：该生当前学年有成绩的考试（日期倒序），含 score / 班内 class_avg（2 位小数）/ rank / class_size
+ *   （班级 = 该生当前 class_id，同班有成绩学生口径，同分同名次）
+ * - assignments：本班当前学年作业 total + 该生 submitted / missing（按 submission status 计数）
+ * - dictations：本班 + 全年段默写 total + 该生 passed / failed / retest_pending
+ *   （retest_pending = retest_required=1 且 retest_completed=0）
+ */
+app.get('/:id/overview', requireAuth, requireTenant, async (c) => {
+  const db = c.get('tenantDb') || c.env.DB;
+  const tenantId = c.get('tenantId');
+  const student = await getStudentOr404(db, tenantId, c.req.param('id'));
+  const classId = student.class_id;
+  const academicYear = currentAcademicYear();
+
+  // —— 考试：当前学年全部考试 + 该生成绩；同班成绩一次性取出后内存聚合 ——
+  const examRes = await db
+    .prepare(
+      `SELECT e.id, e.name, e.exam_date, s.score
+         FROM exams e
+         LEFT JOIN exam_scores s ON s.exam_id = e.id AND s.student_id = ?
+        WHERE e.tenant_id = ? AND e.academic_year = ?
+        ORDER BY e.exam_date IS NULL, e.exam_date DESC, e.created_at DESC`
+    )
+    .bind(student.id, tenantId, academicYear)
+    .all();
+  const examList = examRes.results;
+
+  const scoresByExam = new Map();
+  if (classId && examList.length) {
+    const ph = examList.map(() => '?').join(',');
+    const rows = await db
+      .prepare(
+        `SELECT s.exam_id, s.student_id, s.score
+           FROM exam_scores s
+           JOIN students st ON st.id = s.student_id
+          WHERE s.tenant_id = ? AND st.tenant_id = ? AND st.class_id = ? AND s.exam_id IN (${ph})`
+      )
+      .bind(tenantId, tenantId, classId, ...examList.map((e) => e.id))
+      .all();
+    for (const r of rows.results) {
+      if (r.score === null || r.score === undefined) continue;
+      if (!scoresByExam.has(r.exam_id)) scoresByExam.set(r.exam_id, []);
+      scoresByExam.get(r.exam_id).push(r);
+    }
+  }
+
+  const round2 = (n) => (n === null || n === undefined ? null : Math.round(n * 100) / 100);
+  const exams = [];
+  for (const e of examList) {
+    if (e.score === null || e.score === undefined) continue;
+    const mates = scoresByExam.get(e.id) || [];
+    const sorted = [...mates].sort((a, b) => b.score - a.score);
+    let rank = null;
+    let prevScore = null;
+    let prevRank = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      const r = sorted[i].score === prevScore ? prevRank : i + 1;
+      prevScore = sorted[i].score;
+      prevRank = r;
+      if (sorted[i].student_id === student.id) {
+        rank = r;
+        break;
+      }
+    }
+    exams.push({
+      exam_id: e.id,
+      name: e.name,
+      exam_date: e.exam_date,
+      score: e.score,
+      class_avg: mates.length ? round2(mates.reduce((a, r) => a + r.score, 0) / mates.length) : null,
+      rank,
+      class_size: mates.length,
+    });
+  }
+
+  // —— 作业：本班当前学年作业 total；该生 submitted / missing ——
+  let assignments = { total: 0, submitted: 0, missing: 0 };
+  if (classId) {
+    const totalRow = await db
+      .prepare(
+        'SELECT COUNT(*) AS n FROM assignments WHERE tenant_id = ? AND class_id = ? AND academic_year = ?'
+      )
+      .bind(tenantId, classId, academicYear)
+      .first();
+    const subRows = await db
+      .prepare(
+        `SELECT sub.status, COUNT(*) AS n
+           FROM assignment_submissions sub
+           JOIN assignments a ON a.id = sub.assignment_id AND a.tenant_id = sub.tenant_id
+          WHERE sub.tenant_id = ? AND sub.student_id = ? AND a.class_id = ? AND a.academic_year = ?
+          GROUP BY sub.status`
+      )
+      .bind(tenantId, student.id, classId, academicYear)
+      .all();
+    let submitted = 0;
+    let missing = 0;
+    for (const r of subRows.results) {
+      if (r.status === 'submitted') submitted = r.n;
+      else if (r.status === 'missing') missing = r.n;
+    }
+    assignments = { total: totalRow?.n || 0, submitted, missing };
+  }
+
+  // —— 默写：本班 + 全年段；该生 passed / failed / retest_pending ——
+  const dictWhere = `d.tenant_id = ? AND d.academic_year = ? AND (d.scope = 'grade' OR (d.scope = 'class' AND d.class_id = ?))`;
+  const dictParams = classId ? [tenantId, academicYear, classId] : [tenantId, academicYear, ''];
+  const dictTotalRow = await db
+    .prepare(`SELECT COUNT(*) AS n FROM dictations d WHERE ${dictWhere}`)
+    .bind(...dictParams)
+    .first();
+  const myDictRows = await db
+    .prepare(
+      `SELECT r.passed, r.retest_required, r.retest_completed
+         FROM dictation_results r
+         JOIN dictations d ON d.id = r.dictation_id
+        WHERE r.tenant_id = ? AND r.student_id = ? AND ${dictWhere}`
+    )
+    .bind(tenantId, student.id, ...dictParams)
+    .all();
+  let passed = 0;
+  let failed = 0;
+  let retestPending = 0;
+  for (const r of myDictRows.results) {
+    if (r.passed) passed++;
+    else failed++;
+    if (r.retest_required === 1 && r.retest_completed === 0) retestPending++;
+  }
+  const dictations = { total: dictTotalRow?.n || 0, passed, failed, retest_pending: retestPending };
+
+  return c.json({ success: true, data: { exams, assignments, dictations } });
 });
 
 export default app;

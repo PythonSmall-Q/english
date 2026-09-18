@@ -13,6 +13,7 @@ import { Hono } from 'hono';
 import { requireAuth, requireTenant, requireRole, canManageClass, audit, assertCurrentYear, isGradePublisher } from '../middleware.js';
 import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
 import { checkQuota } from '../quota.js';
+import { captureRecycle } from '../recycle.js';
 
 const app = new Hono();
 
@@ -366,6 +367,18 @@ app.delete('/:id', requireAuth, requireTenant, async (c) => {
 
   // 学年归档保护：非当前学年 → 403
   await assertCurrentYear(db, tenantId, 'dictations', dictation.id);
+
+  // 回收站：先捕获全量行（默写 + 全部结果记录），再物理删除
+  const results = (
+    await db
+      .prepare('SELECT * FROM dictation_results WHERE dictation_id = ?')
+      .bind(dictation.id)
+      .all()
+  ).results;
+  await captureRecycle(db, tenantId, user.id, 'dictation', dictation.id, dictation.title, {
+    dictations: [dictation],
+    dictation_results: results,
+  });
 
   await db.batch([
     db

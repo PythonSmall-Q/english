@@ -168,6 +168,8 @@
     search: (q, query) => request('/students/search', { query: { q, ...query } }),
     /** 该生当前学年全部考试成绩（viewer 起）：总分 + 班内名次 + 各题型小分 */
     examScores: (studentId) => request(`/students/${studentId}/exam-scores`),
+    /** 个性化汇总分析（任何成员）：考试成绩(班均/名次) + 作业提交 + 默写重默 */
+    overview: (studentId) => request(`/students/${studentId}/overview`),
   };
 
   // —— Lessons 备课中心（§56）——
@@ -231,6 +233,16 @@
     setScore: (examId, studentId, score) =>
       request(`/exams/${examId}/students/${studentId}`, { method: 'PUT', body: { score } }),
     studentReport: (id, studentId) => request(`/exams/${id}/students/${studentId}`),
+    /** 「📥 导出成绩」：该学年学生 × 历次考试总分矩阵（任何成员可读） */
+    exportTotals: (query) => request('/exams/export-totals', { query }),
+  };
+
+  // —— 回收站：删除的教案/学生/作业/默写/考试保留 30 天，可恢复 ——
+  const recycle = {
+    /** 回收站列表（任何成员可读）：{ list: [{id,item_type,item_id,title,deleted_by_name,deleted_at}] } */
+    list: () => request('/recycle'),
+    /** 恢复某条回收条目：成功 {restored:true,tables:{表名:行数}}；409=原条目已存在 */
+    restore: (id) => request(`/recycle/${id}/restore`, { method: 'POST', body: {} }),
   };
 
   // —— Dashboard（§40）——
@@ -347,5 +359,5 @@
     migrate: (body) => request('/admin/migrate', { method: 'POST', body }),
   };
 
-  window.api = { auth, tenants, gradeGroups, classes, students, lessons, schedules, assignments, dictations, exams, dashboard, ai, files, import: imp, export: exp, archive, graduated, trials, admin };
+  window.api = { auth, tenants, gradeGroups, classes, students, lessons, schedules, assignments, dictations, exams, recycle, dashboard, ai, files, import: imp, export: exp, archive, graduated, trials, admin };
 })();

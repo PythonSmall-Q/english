@@ -12,6 +12,7 @@ import { Hono } from 'hono';
 import { requireAuth, requireTenant, requireRole, requireClassManager, audit, assertCurrentYear } from '../middleware.js';
 import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
 import { checkQuota } from '../quota.js';
+import { captureRecycle } from '../recycle.js';
 
 const app = new Hono();
 
@@ -78,6 +79,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
       deadline: r.deadline,
       status: r.status,
       academicYear: r.academic_year,
+      pinned: !!r.pinned,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       stats: {
@@ -97,7 +99,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
 
 /**
  * POST /assignments — 新建作业
- * body: { class_id, title, content?, deadline? }
+ * body: { class_id, title, content?, deadline?, pinned? }
  */
 app.post('/', requireAuth, requireTenant, requireClassManager(), async (c) => {
   const db = c.get('tenantDb') || c.env.DB;
@@ -113,14 +115,15 @@ app.post('/', requireAuth, requireTenant, requireClassManager(), async (c) => {
   await getClassOr404(db, tenantId, classId);
   await checkQuota(db, tenantId, 'assignments', user.id);
 
+  const pinned = body.pinned ? 1 : 0;
   const ts = now();
   const id = newId();
   await db
     .prepare(
-      `INSERT INTO assignments (id, tenant_id, teacher_id, class_id, title, content, deadline, status, academic_year, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`
+      `INSERT INTO assignments (id, tenant_id, teacher_id, class_id, title, content, deadline, status, academic_year, pinned, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`
     )
-    .bind(id, tenantId, user.id, classId, title, body.content ?? null, body.deadline ?? null, currentAcademicYear(), ts, ts)
+    .bind(id, tenantId, user.id, classId, title, body.content ?? null, body.deadline ?? null, currentAcademicYear(), pinned, ts, ts)
     .run();
   await audit(db, tenantId, user.id, '创建作业', 'assignment', id, { title });
 
@@ -129,7 +132,7 @@ app.post('/', requireAuth, requireTenant, requireClassManager(), async (c) => {
 
 /**
  * PUT /assignments/:id — 更新作业
- * body: { title?, content?, deadline?, status? }
+ * body: { title?, content?, deadline?, status?, pinned? }
  */
 app.put('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', table: 'assignments' }), async (c) => {
   const db = c.get('tenantDb') || c.env.DB;
@@ -146,10 +149,11 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', t
   const content = body.content !== undefined ? body.content : assignment.content;
   const deadline = body.deadline !== undefined ? body.deadline : assignment.deadline;
   const status = body.status !== undefined ? String(body.status) : assignment.status;
+  const pinned = body.pinned !== undefined ? (body.pinned ? 1 : 0) : assignment.pinned;
 
   await db
-    .prepare('UPDATE assignments SET title = ?, content = ?, deadline = ?, status = ?, updated_at = ? WHERE tenant_id = ? AND id = ?')
-    .bind(title, content, deadline, status, now(), tenantId, assignment.id)
+    .prepare('UPDATE assignments SET title = ?, content = ?, deadline = ?, status = ?, pinned = ?, updated_at = ? WHERE tenant_id = ? AND id = ?')
+    .bind(title, content, deadline, status, pinned, now(), tenantId, assignment.id)
     .run();
   await audit(db, tenantId, user.id, '更新作业', 'assignment', assignment.id, { title });
 
@@ -167,6 +171,18 @@ app.delete('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id'
 
   // 学年归档保护：非当前学年 → 403
   await assertCurrentYear(db, tenantId, 'assignments', assignment.id);
+
+  // 回收站：先捕获全量行（作业 + 全部提交记录），再物理删除
+  const submissions = (
+    await db
+      .prepare('SELECT * FROM assignment_submissions WHERE assignment_id = ?')
+      .bind(assignment.id)
+      .all()
+  ).results;
+  await captureRecycle(db, tenantId, user.id, 'assignment', assignment.id, assignment.title, {
+    assignments: [assignment],
+    assignment_submissions: submissions,
+  });
 
   await db.batch([
     db

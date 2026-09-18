@@ -25,6 +25,14 @@
     .stu-detail-grid dd { margin: 0; }
     .stu-alert-box { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #fffbeb; border: 1px solid #fde68a; }
     .stu-alert-box .badge { margin-right: 4px; }
+    .stu-ov-sec { margin-top: 16px; }
+    .stu-ov-sec-title { font-weight: 600; margin-bottom: 8px; }
+    .stu-ov-kpis { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+    .stu-ov-kpi { background: #f6f8fb; border-radius: 8px; padding: 8px 12px; min-width: 84px; }
+    .stu-ov-kpi b { display: block; font-size: 18px; }
+    .stu-ov-kpi span { font-size: 12px; color: var(--text-muted); }
+    .stu-ov-suggest { margin: 6px 0 6px 18px; padding: 0; }
+    .stu-ov-suggest li { margin: 6px 0; line-height: 1.7; }
   `;
 
   function injectStyle() {
@@ -332,18 +340,142 @@
         document.getElementById('stu-d-close').onclick = App.closeModal;
         document.getElementById('stu-d-analysis').onclick = () => {
           App.closeModal();
-          openAnalysis(id, s.name);
+          openOverview(id, s.name);
         };
       }
     );
   }
 
-  // ===== 个性化成绩分析入口 =====
-  // 深链：预选学生写入 sessionStorage，exams.js 渲染时读取并直接打开其最近一场考试的个性化报告
-  function openAnalysis(studentId, name) {
-    sessionStorage.setItem('wb.exams.report', JSON.stringify({ studentId, studentName: name || '' }));
-    App.showView('exams');
-    App.toast(`正在打开${name ? ` ${name} ` : ''}的个性化成绩分析…`);
+  // ===== 个性化汇总分析弹窗（api.students.overview，替代原 exams.js 深链） =====
+
+  const fmtNum = (n) => (n === null || n === undefined ? '—' : n);
+
+  /** 按汇总数据拼装 3-5 条跟进建议 */
+  function buildSuggestions(data) {
+    const out = [];
+    const { exams, assignments, dictations } = data;
+    if (assignments.missing > 0) {
+      out.push(`近期有 ${assignments.missing} 次作业未交，请提醒补交并关注日常作业习惯。`);
+    }
+    if (dictations.retest_pending > 0) {
+      out.push(`有 ${dictations.retest_pending} 次默写待重默，请尽快安排重默并督促订正。`);
+    }
+    if (exams.length >= 2) {
+      const [latest, prev] = exams;
+      if (latest.rank !== null && prev.rank !== null) {
+        if (latest.rank < prev.rank) {
+          out.push(`最近考试班内名次上升至第 ${latest.rank} 名（上次第 ${prev.rank} 名），保持当前学习势头。`);
+        } else if (latest.rank > prev.rank) {
+          out.push(`最近考试班内名次降至第 ${latest.rank} 名（上次第 ${prev.rank} 名），建议一起分析失分原因。`);
+        }
+      }
+    }
+    const weak = exams.find((e) => e.class_avg !== null && e.score < e.class_avg);
+    if (weak) {
+      out.push(`「${weak.name}」得分 ${weak.score} 低于班均 ${weak.class_avg}，建议针对本次薄弱点专项复习。`);
+    }
+    if (!out.length && exams.length) {
+      const latest = exams[0];
+      out.push(`最近考试表现稳定（${latest.score} 分，班内第 ${latest.rank ?? '—'} 名），建议保持现有学习节奏。`);
+    }
+    return out.slice(0, 5);
+  }
+
+  async function openOverview(id, name) {
+    App.modal(`个性化成绩分析 — ${name || ''}`, '<div class="muted">加载中…</div>');
+    let data;
+    try {
+      data = await api.students.overview(id);
+    } catch (err) {
+      App.closeModal();
+      App.toast(errMsg(err, '加载失败'));
+      return;
+    }
+    const { exams, assignments, dictations } = data;
+
+    // 📈 考试成绩
+    let examsHtml;
+    if (exams && exams.length) {
+      const latest = exams[0];
+      const rows = exams
+        .map(
+          (e) => `<tr>
+            <td>${App.esc(e.name || '—')}</td>
+            <td>${App.esc(e.exam_date || '—')}</td>
+            <td>${fmtNum(e.score)}</td>
+            <td>${fmtNum(e.class_avg)}</td>
+            <td>${e.rank === null || e.rank === undefined ? '—' : `${e.rank} / ${e.class_size}`}</td>
+          </tr>`
+        )
+        .join('');
+      examsHtml = `
+        <div class="stu-ov-kpis">
+          <div class="stu-ov-kpi"><b>${exams.length}</b><span>考试次数</span></div>
+          <div class="stu-ov-kpi"><b>${fmtNum(latest.score)}</b><span>最近得分</span></div>
+          <div class="stu-ov-kpi"><b>${latest.rank === null || latest.rank === undefined ? '—' : latest.rank}</b><span>班内名次</span></div>
+        </div>
+        <table class="table"><thead><tr><th>考试</th><th>日期</th><th>得分</th><th>班均</th><th>班内名次</th></tr></thead><tbody>${rows}</tbody></table>`;
+    } else {
+      examsHtml = '<div class="muted">尚未导入</div>';
+    }
+
+    // 📚 作业
+    const asgHtml =
+      assignments && assignments.total > 0
+        ? `<div class="stu-ov-kpis">
+            <div class="stu-ov-kpi"><b>${assignments.submitted}</b><span>已交</span></div>
+            <div class="stu-ov-kpi"><b>${assignments.missing}</b><span>未交</span></div>
+            <div class="stu-ov-kpi"><b>${assignments.total}</b><span>总数</span></div>
+            <div class="stu-ov-kpi"><b>${Math.round((assignments.submitted / assignments.total) * 100)}%</b><span>提交率</span></div>
+          </div>`
+        : '<div class="muted">尚未导入</div>';
+
+    // 📝 默写·重默
+    let dictHtml;
+    if (dictations && dictations.total > 0) {
+      const passRate = dictations.passed + dictations.failed > 0 ? Math.round((dictations.passed / (dictations.passed + dictations.failed)) * 100) : 0;
+      dictHtml = `<div class="stu-ov-kpis">
+          <div class="stu-ov-kpi"><b>${dictations.passed}</b><span>通过</span></div>
+          <div class="stu-ov-kpi"><b>${dictations.failed}</b><span>未过</span></div>
+          <div class="stu-ov-kpi"><b>${dictations.retest_pending}</b><span>待重默</span></div>
+          <div class="stu-ov-kpi"><b>${passRate}%</b><span>通过率</span></div>
+        </div>`;
+    } else {
+      dictHtml = '<div class="muted">尚未导入</div>';
+    }
+
+    // 🎯 跟进建议
+    const suggestions = buildSuggestions({ exams: exams || [], assignments: assignments || {}, dictations: dictations || {} });
+    const suggestHtml = suggestions.length
+      ? `<ol class="stu-ov-suggest">${suggestions.map((s) => `<li>${App.esc(s)}</li>`).join('')}</ol>`
+      : '<div class="muted">暂无足够数据生成建议</div>';
+
+    App.modal(
+      `个性化成绩分析 — ${name || ''}`,
+      `
+        <div class="stu-ov-sec">
+          <div class="stu-ov-sec-title">📈 考试成绩</div>
+          ${examsHtml}
+        </div>
+        <div class="stu-ov-sec">
+          <div class="stu-ov-sec-title">📚 作业</div>
+          ${asgHtml}
+        </div>
+        <div class="stu-ov-sec">
+          <div class="stu-ov-sec-title">📝 默写·重默</div>
+          ${dictHtml}
+        </div>
+        <div class="stu-ov-sec">
+          <div class="stu-ov-sec-title">🎯 跟进建议</div>
+          ${suggestHtml}
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-primary" id="stu-ov-close" type="button">关闭</button>
+        </div>`,
+      () => {
+        document.getElementById('stu-ov-close').onclick = App.closeModal;
+      }
+    );
   }
 
   // ===== 删除 =====
@@ -594,7 +726,7 @@
         else if (act === 'del') removeStudent(id);
         else if (act === 'analysis') {
           const s = students.find((x) => x.id === id);
-          openAnalysis(id, s && s.name);
+          openOverview(id, s && s.name);
         }
       });
 

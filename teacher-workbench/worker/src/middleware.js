@@ -83,6 +83,18 @@ export async function requireTenant(c, next) {
     if (membership && tenant) db = trialDb;
   }
 
+  // 第三跳：平台管理员可查看并管理所有空间——非成员也放行（合成 admin 成员身份）
+  if ((!membership || !tenant) && user.platform_role === 'platform_admin') {
+    tenant = await c.env.DB.prepare('SELECT * FROM tenants WHERE id = ?').bind(tenantId).first();
+    if (!tenant && c.env.TRIAL_DB) {
+      tenant = await c.env.TRIAL_DB.prepare('SELECT * FROM tenants WHERE id = ?').bind(tenantId).first();
+      if (tenant) db = c.env.TRIAL_DB;
+    }
+    if (tenant) {
+      membership = { id: null, tenant_id: tenantId, user_id: user.id, role: 'admin', status: 'active' };
+    }
+  }
+
   if (!membership) {
     throw new ApiError('FORBIDDEN', '你不属于该空间或成员状态异常');
   }

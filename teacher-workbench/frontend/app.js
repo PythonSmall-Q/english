@@ -247,7 +247,25 @@ window.App = {
 
   /** 切换当前租户（§22）：切换后刷新顶部并重新渲染当前页 */
   async setTenant(id) {
-    const tenant = App.state.tenants.find((t) => t.id === id);
+    // 成员空间直接用；平台管理员的「管理」空间（非成员）构造临时上下文（后端放行）
+    let tenant = App.state.tenants.find((t) => t.id === id);
+    if (!tenant) {
+      const managed = (App.state.adminTenants || []).find((t) => t.id === id);
+      if (managed) {
+        tenant = {
+          id: managed.id,
+          name: managed.name,
+          slug: managed.slug,
+          type: managed.type,
+          role: 'admin',
+          managed: true,
+          plan: managed.plan,
+          expires_at: managed.expires_at,
+          expired: !!managed.expired,
+          quota: managed.usage || null,
+        };
+      }
+    }
     if (!tenant) return;
     App.state.tenant = tenant;
     App.state.quota = tenant.quota || null;
@@ -376,14 +394,31 @@ window.App = {
   updateTenantSwitcher() {
     const wrap = document.getElementById('tenant-switcher');
     if (!wrap) return;
-    const tenants = App.state.tenants;
+    const tenants = App.state.tenants || [];
     const current = App.state.tenant || tenants[0];
-    // 试用空间徽标需要挂在切换器按钮上，单空间试用也保持显示
-    if ((!tenants || tenants.length <= 1) && current?.plan !== 'trial') {
+    // 顶栏空间切换器常显（单空间也显示当前空间名；无空间时才隐藏）
+    if (!current) {
       wrap.classList.add('hidden');
       return;
     }
     wrap.classList.remove('hidden');
+    // 平台管理员：预取全部空间列表（下拉可进入任意空间管理）
+    const isPlatformAdmin = App.state.user?.platformRole === 'platform_admin';
+    if (isPlatformAdmin && !App._adminTenantsLoading && !App.state.adminTenants) {
+      App._adminTenantsLoading = true;
+      api.admin
+        .tenants()
+        .then((d) => {
+          App.state.adminTenants = d.tenants || [];
+          App.updateTenantSwitcher();
+        })
+        .catch(() => {
+          /* 静默降级：只显示自己所在的空间 */
+        })
+        .finally(() => {
+          App._adminTenantsLoading = false;
+        });
+    }
     // 按钮显示当前空间
     document.getElementById('ts-icon').textContent = current.type === 'personal' ? '🏠' : '🏫';
     document.getElementById('ts-name').textContent = current.name;
@@ -391,22 +426,28 @@ window.App = {
     // 试用空间徽标：plan='trial' 时显示在名称旁，含剩余天数（ceil）
     const tsBtn = document.getElementById('ts-btn');
     let badge = document.getElementById('ts-trial-badge');
-    if (current.plan === 'trial' && current.expires_at) {
+    const expAt = current.expires_at || current.expiresAt;
+    if (current.plan === 'trial' && expAt) {
       if (!badge) {
         badge = document.createElement('span');
         badge.id = 'ts-trial-badge';
         badge.className = 'ts-badge';
         tsBtn.insertBefore(badge, tsBtn.querySelector('.ts-caret'));
       }
-      const days = Math.max(0, Math.ceil((new Date(current.expires_at).getTime() - Date.now()) / 86400000));
+      const days = Math.max(0, Math.ceil((new Date(expAt).getTime() - Date.now()) / 86400000));
       badge.textContent = `试用 · 剩 ${days} 天`;
-      badge.title = `试用空间将于 ${String(current.expires_at).slice(0, 10)} 到期，到期后数据将被删除`;
+      badge.title = `试用空间将于 ${String(expAt).slice(0, 10)} 到期，到期后数据将被删除`;
     } else if (badge) {
       badge.remove();
     }
-    // 下拉项
+    // 下拉项：成员空间在前；平台管理员追加全部空间（非成员标注「管理」）
+    let menuTenants = tenants.slice();
+    if (isPlatformAdmin) {
+      const extra = (App.state.adminTenants || []).filter((t) => !tenants.some((x) => x.id === t.id));
+      menuTenants = menuTenants.concat(extra.map((t) => ({ ...t, managed: true })));
+    }
     const menu = document.getElementById('ts-menu');
-    menu.innerHTML = tenants
+    menu.innerHTML = menuTenants
       .map((t) => {
         const active = current.id === t.id;
         return `
@@ -415,6 +456,7 @@ window.App = {
             <span class="ts-item-name" title="${App.esc(t.name)}">${App.esc(t.name)}</span>
             ${t.plan === 'trial' ? '<span class="ts-badge">试用</span>' : ''}
             ${t.expired ? '<span class="ts-badge">已到期</span>' : ''}
+            ${t.managed ? '<span class="ts-badge">管理</span>' : ''}
             ${active ? '<span class="ts-check">✓</span>' : ''}
           </button>`;
       })

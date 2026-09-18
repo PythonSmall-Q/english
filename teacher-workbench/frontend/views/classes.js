@@ -36,6 +36,9 @@ function clsInjectStyles() {
     .cls-card-meta { color: var(--text-muted); font-size: 13px; }
     .cls-card-count { font-size: 13px; }
     .cls-card-count strong { font-size: 20px; font-weight: 600; margin-right: 4px; }
+    .cls-trend { margin-top: 2px; min-height: 0; }
+    .cls-trend svg { display: block; }
+    .cls-trend-label { font-size: 12px; color: var(--text-muted); margin-bottom: 2px; }
     .cls-card-actions { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
     .cls-empty { padding: 32px 10px; text-align: center; color: var(--text-muted); }
     .cls-sec { margin-bottom: 16px; }
@@ -79,6 +82,68 @@ let clsGradFailed = false; // 毕业归档加载失败（渲染失败占位提�
 /** 成员 id → 成员对象（班主任/任课老师/组长 patch 展示名用） */
 function clsMember(uid) {
   return clsMembers.find((m) => m.user_id === uid) || null;
+}
+
+// ===== 班级卡片成绩趋势（迷你 SVG 折线；异步补取，失败静默）=====
+const clsTrendCache = new Map(); // class_id → number[]（各次考试班均分，时间升序）| null（无数据/失败不再重试）
+
+/** 迷你折线 SVG：宽 160 高 40，含首末值标注；无有效点返回空串 */
+function clsTrendSvg(values) {
+  const pts = values.filter((v) => v !== null && v !== undefined);
+  if (pts.length < 2) return '';
+  const w = 160;
+  const h = 40;
+  const padL = 22;
+  const padR = 22;
+  const padT = 6;
+  const padB = 6;
+  const min = Math.min(...pts);
+  const max = Math.max(...pts);
+  const span = max - min || 1;
+  const x = (i) => padL + (pts.length === 1 ? 0 : (i / (pts.length - 1)) * (w - padL - padR));
+  const y = (v) => padT + (1 - (v - min) / span) * (h - padT - padB);
+  const line = pts.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const dots = pts
+    .map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.2" fill="var(--primary)"/>`)
+    .join('');
+  const fmt = (v) => (Math.round(v * 10) / 10).toFixed(1);
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="班均分趋势">
+    <path d="${line}" fill="none" stroke="var(--primary)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dots}
+    <text x="0" y="${y(pts[0]).toFixed(1)}" font-size="9" fill="var(--text-muted)" dominant-baseline="middle">${fmt(pts[0])}</text>
+    <text x="${w}" y="${y(pts[pts.length - 1]).toFixed(1)}" font-size="9" fill="var(--text-muted)" text-anchor="end" dominant-baseline="middle">${fmt(pts[pts.length - 1])}</text>
+  </svg>`;
+}
+
+/** 把缓存的趋势画进卡片占位（rerender 后 DOM 重建需重画） */
+function clsPaintTrend(classId) {
+  const host = clsEl && clsEl.querySelector(`[data-cls-trend="${classId}"]`);
+  if (!host) return;
+  const values = clsTrendCache.get(classId);
+  if (!values) return;
+  const svg = clsTrendSvg(values);
+  if (!svg) return;
+  host.innerHTML = `<div class="cls-trend-label">班均分趋势</div>${svg}`;
+}
+
+/** 异步补取该班 class-stats（exams.scores → 班均分序列），不阻塞整页；失败静默 */
+async function clsLoadTrend(cls) {
+  if (!cls || clsTrendCache.has(cls.id)) {
+    if (cls) clsPaintTrend(cls.id);
+    return;
+  }
+  try {
+    const year = App.state.academicYear || App.state.currentAcademicYear;
+    const data = await api.export.classStats(cls.id, year);
+    const values = (data.exams || []).map((e) => {
+      const vals = Object.values(e.scores || {}).filter((v) => v !== null && v !== undefined);
+      return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+    });
+    clsTrendCache.set(cls.id, values.some((v) => v !== null) ? values : null);
+  } catch (e) {
+    clsTrendCache.set(cls.id, null); // 失败静默，不画
+  }
+  clsPaintTrend(cls.id);
 }
 
 function clsMemberName(uid) {
@@ -355,6 +420,7 @@ App.registerView('classes', {
           <div class="cls-card-meta">班主任：${App.esc(c.teacher_name || '未分配')} ｜ 年级组：${App.esc(c.grade_group_name || '未分组')}</div>
           ${subLine}
           <div class="cls-card-count"><strong>${Number(c.student_count) || 0}</strong>名学生</div>
+          <div class="cls-trend" data-cls-trend="${App.esc(c.id)}"></div>
           ${ggSelect}
           ${tSelect}
           <div class="cls-card-actions">
@@ -416,6 +482,9 @@ App.registerView('classes', {
       : '';
 
     el.innerHTML = groupsHtml + headHtml + bodyHtml + gradHtml;
+
+    // 班级卡片成绩趋势：异步补取后局部插入（不阻塞整页；失败静默不画）
+    for (const c of classes) clsLoadTrend(c);
 
     // —— 事件绑定 ——
     const clsNewBtn = document.getElementById('cls-new');

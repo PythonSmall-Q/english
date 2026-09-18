@@ -29,6 +29,7 @@
         <a class="nav-item" data-view="dictations">✏️ 默写管理</a>
         <a class="nav-item" data-view="exams">📊 考试成绩</a>
         <a class="nav-item" data-view="ai">🤖 AI 教学助手</a>
+        <a class="nav-item" data-view="recycle">🗑 回收站</a>
         <a class="nav-item" data-view="settings">⚙️ 设置</a>
         <!-- 仅 platform_admin 可见（§72），默认隐藏，App.enterApp 控制 -->
         <a class="nav-item hidden" data-view="admin" id="nav-admin">🛡️ 平台管理</a>
@@ -79,7 +80,7 @@
   <!-- SheetJS（xlsx 解析）不全局加载：约 950KB 会阻塞首屏；
        各视图在真正需要导入/导出 xlsx 时才懒加载 vendor/xlsx.full.min.js -->
 
-  <!-- 12 个视图（settings/admin 由骨架完整实现，其余为 stub，由后续 agent 补全） -->
+  <!-- 13 个视图（settings/admin 由骨架完整实现，其余为 stub，由后续 agent 补全） -->
   <script src="views/dashboard.js"></script>
   <script src="views/classes.js"></script>
   <script src="views/lessons.js"></script>
@@ -91,6 +92,7 @@
   <script src="views/ai.js"></script>
   <script src="views/settings.js"></script>
   <script src="views/quota.js"></script>
+  <script src="views/recycle.js"></script>
   <script src="views/admin.js"></script>
 </body>
 </html>

@@ -13,6 +13,7 @@ import { Hono } from 'hono';
 import { requireAuth, requireTenant, requireRole, audit, requireTeacherPerm, assertCurrentYear, canManageClass, isGradePublisher } from '../middleware.js';
 import { ApiError, newId, now, currentAcademicYear, resolveAcademicYear } from '../db.js';
 import { checkQuota } from '../quota.js';
+import { captureRecycle } from '../recycle.js';
 
 const app = new Hono();
 
@@ -154,6 +155,83 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeach
 });
 
 /**
+ * GET /api/v1/exams/export-totals?academic_year= — 导出历次考试总分（§3.5.1「📥 导出成绩」）
+ * 任何成员可读。返回：
+ * - students：该学年全部学生（含班级名，按班级/学号排序）
+ * - exams：该学年全部考试（班级考试 + 全年段考试，按考试日期升序）
+ * - scores：<examId> → <studentId> → 分数（无成绩 null；班级考试只含本班学生）
+ */
+app.get('/export-totals', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
+  const db = c.get('tenantDb') || c.env.DB;
+  const tenantId = c.get('tenantId');
+  const academicYear = resolveAcademicYear(c.req.query('academic_year'));
+
+  const stuRows = await db
+    .prepare(
+      `SELECT s.id, s.student_no, s.name, s.class_id, c.name AS class_name
+         FROM students s
+         LEFT JOIN classes c ON c.id = s.class_id AND c.tenant_id = s.tenant_id
+        WHERE s.tenant_id = ? AND s.academic_year = ?
+        ORDER BY c.name, s.student_no IS NULL, s.student_no, s.name`
+    )
+    .bind(tenantId, academicYear)
+    .all();
+  const students = stuRows.results;
+
+  const examRows = await db
+    .prepare(
+      `SELECT id, name, exam_date, scope, class_id
+         FROM exams
+        WHERE tenant_id = ? AND academic_year = ?
+        ORDER BY exam_date IS NULL, exam_date, created_at`
+    )
+    .bind(tenantId, academicYear)
+    .all();
+  const exams = examRows.results;
+
+  const scores = {};
+  for (const e of exams) {
+    // 班级考试只取本班学生的成绩；全年段考试全取
+    const scoreRows =
+      (e.scope || 'grade') === 'class' && e.class_id
+        ? await db
+            .prepare(
+              `SELECT s.student_id AS sid, s.score
+                 FROM exam_scores s
+                 JOIN students st ON st.id = s.student_id
+                WHERE s.tenant_id = ? AND s.exam_id = ? AND st.tenant_id = ? AND st.class_id = ?`
+            )
+            .bind(tenantId, e.id, tenantId, e.class_id)
+            .all()
+        : await db
+            .prepare('SELECT student_id AS sid, score FROM exam_scores WHERE tenant_id = ? AND exam_id = ?')
+            .bind(tenantId, e.id)
+            .all();
+    const map = {};
+    for (const s of students) map[s.id] = null;
+    for (const r of scoreRows.results) {
+      if (r.sid in map) map[r.sid] = r.score;
+    }
+    scores[e.id] = map;
+  }
+
+  return c.json({
+    success: true,
+    data: {
+      students: students.map((s) => ({
+        id: s.id,
+        student_no: s.student_no,
+        name: s.name,
+        class_id: s.class_id,
+        class_name: s.class_name,
+      })),
+      exams: exams.map((e) => ({ id: e.id, name: e.name, exam_date: e.exam_date })),
+      scores,
+    },
+  });
+});
+
+/**
  * GET /api/v1/exams/:id — 考试详情 + 分数名单
  */
 app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
@@ -212,6 +290,20 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
 
   // 学年归档保护：非当前学年 → 403
   await assertCurrentYear(db, tenantId, 'exams', exam.id);
+
+  // 回收站：先捕获全量行（考试 + 总分 + 小分），再物理删除
+  const scores = (
+    await db.prepare('SELECT * FROM exam_scores WHERE exam_id = ?').bind(exam.id).all()
+  ).results;
+  const subscores = (
+    await db.prepare('SELECT * FROM exam_subscores WHERE exam_id = ?').bind(exam.id).all()
+  ).results;
+  await captureRecycle(db, tenantId, user.id, 'exam', exam.id, exam.name, {
+    // getExam 附带 JOIN 的 class_name 展示列，非 exams 表字段，剔除后再入库
+    exams: [(({ class_name, ...row }) => row)(exam)],
+    exam_scores: scores,
+    exam_subscores: subscores,
+  });
 
   await db.batch([
     db

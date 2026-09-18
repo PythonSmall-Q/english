@@ -346,12 +346,14 @@
         <span class="muted">共 ${exams.length} 场考试</span>
         <span style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn" id="ex-download-archive" type="button" style="display:${showDownload ? '' : 'none'}">下载归档</button>
+          <button class="btn" id="ex-export-totals" type="button">导出成绩</button>
           <button class="btn" id="ex-stu-scores" type="button">学生成绩</button>
           ${canCreateExams && !archivedView ? '<button class="btn btn-primary" id="ex-new" type="button">＋ 新建考试</button>' : ''}
         </span>
       </div>
       <div id="ex-list"></div>`;
     wrap.querySelector('#ex-stu-scores').addEventListener('click', openStudentScores);
+    wrap.querySelector('#ex-export-totals').addEventListener('click', (e) => exportTotals(e.currentTarget));
     wrap.querySelector('#ex-download-archive').addEventListener('click', (e) => downloadArchive(e.currentTarget));
     const listEl = wrap.querySelector('#ex-list');
     if (!exams.length) {
@@ -414,6 +416,74 @@
       App.toast('归档文件已开始下载');
     } catch (err) {
       reportErr(err, '下载归档失败');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
+  // ============================== 导出成绩（📥 学生 × 历次考试总分，§3.5.1） ==============================
+
+  /**
+   * 产出 `学生成绩_历次总分_<日期>.xlsx`：
+   * 工作表「全部学生」+ 每班一个（班级名）；列 = 学号|姓名|班级（仅全部学生表）|按考试日期升序的 <考试名>；
+   * 无成绩写 '—'。数据来自 GET /exams/export-totals（当前选中学年）。
+   */
+  async function exportTotals(btn) {
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = '导出中…';
+    try {
+      const XLSX = await loadXLSX();
+      const year = App.state.academicYear || App.state.currentAcademicYear;
+      const data = await api.exams.exportTotals({ academic_year: year });
+      const students = data.students || [];
+      if (!students.length) {
+        App.toast('当前学年暂无学生，无法导出成绩');
+        return;
+      }
+      // 考试按日期升序（后端已排序，这里兜底）
+      const exams = (data.exams || []).slice().sort((a, b) => {
+        const da = a.exam_date || '￿';
+        const db = b.exam_date || '￿';
+        return da < db ? -1 : da > db ? 1 : 0;
+      });
+      const scores = data.scores || {};
+      const cell = (examId, sid) => {
+        const v = scores[examId] ? scores[examId][sid] : null;
+        return v === null || v === undefined ? '—' : v;
+      };
+      const buildSheet = (list, withClass) => {
+        const header = ['学号', '姓名', ...(withClass ? ['班级'] : []), ...exams.map((e) => e.name || '考试')];
+        const rows = [header];
+        for (const s of list) {
+          rows.push([s.student_no || '', s.name || '', ...(withClass ? [s.class_name || ''] : []), ...exams.map((e) => cell(e.id, s.id))]);
+        }
+        const ws = XLSX.utils.aoa_to_sheet(rows);
+        ws['!cols'] = header.map((_, i) => ({ wch: i < 2 ? 12 : i === 2 && withClass ? 14 : 18 }));
+        return ws;
+      };
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, buildSheet(students, true), '全部学生');
+      // 每班一个工作表：按学生列表中班级首次出现顺序
+      const classOrder = [];
+      const byClass = new Map();
+      for (const s of students) {
+        const key = s.class_id || '';
+        if (!byClass.has(key)) {
+          byClass.set(key, []);
+          classOrder.push({ key, name: s.class_name || '未分班' });
+        }
+        byClass.get(key).push(s);
+      }
+      for (const c of classOrder) {
+        XLSX.utils.book_append_sheet(wb, buildSheet(byClass.get(c.key), false), (c.name || '班级').slice(0, 31));
+      }
+      XLSX.writeFile(wb, `学生成绩_历次总分_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      App.toast('已导出成绩');
+    } catch (err) {
+      reportErr(err, '导出失败');
     } finally {
       btn.disabled = false;
       btn.textContent = label;

@@ -15,6 +15,7 @@ import { Hono } from 'hono';
 import { ApiError, newId, now, currentAcademicYear, getUserInfos } from '../db.js';
 import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
 import { checkQuota } from '../quota.js';
+import { captureRecycle } from '../recycle.js';
 
 const app = new Hono();
 
@@ -262,6 +263,15 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
   if (lesson.teacher_id !== user.id && !['owner', 'admin'].includes(membership?.role)) {
     throw new ApiError('FORBIDDEN', '仅创建者或管理员可删除教案');
   }
+
+  // 回收站：先捕获全量行（教案 + 附件关联），再物理删除
+  const lessonFiles = (
+    await db.prepare('SELECT * FROM lesson_files WHERE lesson_id = ?').bind(lesson.id).all()
+  ).results;
+  await captureRecycle(db, tenantId, user.id, 'lesson', lesson.id, lesson.title, {
+    lessons: [lesson],
+    lesson_files: lessonFiles,
+  });
 
   await db.prepare('DELETE FROM lessons WHERE id = ? AND tenant_id = ?').bind(lesson.id, tenantId).run();
   await audit(db, tenantId, user.id, '删除教案', 'lesson', lesson.id, { title: lesson.title });

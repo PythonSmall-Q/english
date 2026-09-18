@@ -4,8 +4,8 @@
  * 网格视图：
  *  - 行 = 时段：早自习 07:00-07:50、第一节~第十节（40 分钟/节，课间 10 分钟）、晚自习 19:00-21:00
  *  - 列 = 周一~周日（weekday 1-7，与后端口径一致）；高亮今天列
- *  - 有课格子：浅粉底 #ffe0e6 + 黑字；scope=grade 的全年段活动（晚自习/英语拓展/导师组活动）不显示班级
- *  - 空格子显示「＋」，点击弹新增 modal；点击已有课程弹编辑/删除 modal
+ *  - 有课格子：班级课按班分配柔和浅色底（色板按班级序号循环）+ 黑字；scope=grade 的全年段活动（晚自习/英语拓展/导师组活动）浅灰 #f1f5f9、不显示班级
+ *  - 空格子显示「＋」，教师点击弹新增 modal（预选 weekday/period）；viewer（非 teacher）不可点击
  * 数据来自 api.schedules.list（一次拉全部）；课表不占配额。
  */
 
@@ -29,6 +29,16 @@ const SCH_SLOTS = [
 function schTodayWeekday() {
   const d = new Date().getDay();
   return d === 0 ? 7 : d;
+}
+
+/** 班级课配色：按班级在列表中的序号从柔和色板循环取色；全年段固定浅灰 */
+const SCH_CLASS_COLORS = ['#ffe0e6', '#dbeafe', '#dcfce7', '#fef9c3', '#f3e8ff', '#ffedd5', '#e0f2fe', '#fce7f3'];
+const SCH_GRADE_COLOR = '#f1f5f9';
+
+/** 班级课底色（scope=grade → 全年段浅灰；无班级信息的班级课兜底取色板首色） */
+function schClassColor(classes, classId) {
+  const idx = classes.findIndex((c) => c.id === classId);
+  return idx < 0 ? SCH_CLASS_COLORS[0] : SCH_CLASS_COLORS[idx % SCH_CLASS_COLORS.length];
 }
 
 /** 注入本模块专属样式（幂等，类名带 sch- 前缀） */
@@ -55,7 +65,7 @@ function schInjectStyles() {
     .sch-cell-slot .sch-slot-label { font-weight: 600; }
     .sch-cell-slot .sch-slot-time { color: var(--text-muted); font-size: 12px; }
     .sch-cell-filled {
-      background: #ffe0e6; color: #000; cursor: pointer;
+      color: #000; cursor: pointer;
       display: flex; flex-direction: column; gap: 2px; justify-content: center;
     }
     .sch-cell-filled:hover { filter: brightness(0.96); }
@@ -66,6 +76,8 @@ function schInjectStyles() {
       color: #d1d5db; cursor: pointer; font-size: 18px; min-height: 52px;
     }
     .sch-cell-add:hover { color: var(--primary); border-color: var(--primary); }
+    .sch-cell-add.sch-cell-add-disabled { cursor: default; }
+    .sch-cell-add.sch-cell-add-disabled:hover { color: #d1d5db; border-color: var(--border); }
     .sch-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; color: var(--text-muted); font-size: 13px; }
     .sch-legend-item { display: flex; align-items: center; gap: 6px; }
     .sch-swatch { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
@@ -107,6 +119,17 @@ App.registerView('schedule', {
 
     const today = schTodayWeekday();
     const weekNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    // 新增课程权限：viewer（非 teacher）不可点击空格快速新增（服务端 403 兜底）
+    const role = App.state.tenant?.role;
+    const canAddSchedule = role === 'owner' || role === 'admin' || role === 'teacher';
+
+    // 图例：各班级配色 + 全年段浅灰 + 今天
+    const legendClasses = classes
+      .map(
+        (c, i) =>
+          `<span class="sch-legend-item"><span class="sch-swatch" style="background:${SCH_CLASS_COLORS[i % SCH_CLASS_COLORS.length]}"></span>${App.esc(c.name)}</span>`
+      )
+      .join('');
 
     // —— 拼装网格：表头 + 每个时段一行 ——
     let gridHtml = `<div class="sch-grid">
@@ -128,20 +151,23 @@ App.registerView('schedule', {
         const items = bySlot[key] || [];
         const todayCls = weekday === today ? ' sch-cell-today' : '';
         if (items.length) {
-          // 有课格子：浅粉底黑字；scope=grade 全年段活动不显示班级
+          // 有课格子：班级课按班配色（黑字）；scope=grade 全年段活动固定浅灰、不显示班级
           gridHtml += items
             .map((s) => {
-              const clsName = s.scope === 'grade' ? '' : s.class_name || '';
+              const isGrade = s.scope === 'grade';
+              const color = isGrade ? SCH_GRADE_COLOR : schClassColor(classes, s.class_id);
+              const clsName = isGrade ? '' : s.class_name || '';
               const sub = [clsName, s.classroom].filter(Boolean).join(' · ');
-              return `<div class="sch-cell sch-cell-filled${todayCls}" data-sch-id="${App.esc(s.id)}" title="点击编辑/删除">
+              return `<div class="sch-cell sch-cell-filled${todayCls}" style="background:${color}" data-sch-id="${App.esc(s.id)}" title="点击编辑/删除">
                 <span class="sch-filled-title">${App.esc(s.title || '课程')}</span>
                 ${sub ? `<span class="sch-filled-sub">${App.esc(sub)}</span>` : ''}
               </div>`;
             })
             .join('');
         } else {
-          // 空格子：「＋」点击新增（预填星期与时段）
-          gridHtml += `<div class="sch-cell sch-cell-add${todayCls}" data-sch-add="1" data-sch-weekday="${weekday}" data-sch-period="${slot.period == null ? '' : slot.period}" title="新增课程">＋</div>`;
+          // 空格子：「＋」点击新增（预填星期与时段）；viewer（非 teacher）不可点
+          const addCls = canAddSchedule ? '' : ' sch-cell-add-disabled';
+          gridHtml += `<div class="sch-cell sch-cell-add${addCls}${todayCls}" data-sch-add="1" data-sch-weekday="${weekday}" data-sch-period="${slot.period == null ? '' : slot.period}" title="${canAddSchedule ? '新增课程' : '仅教师可新增'}">＋</div>`;
         }
       }
     }
@@ -152,22 +178,25 @@ App.registerView('schedule', {
         <div class="card-title">教学课表（本周）</div>
         <div class="sch-wrap">${gridHtml}</div>
         <div class="sch-legend">
-          <span class="sch-legend-item"><span class="sch-swatch" style="background:#ffe0e6"></span>有课</span>
+          ${legendClasses}
+          <span class="sch-legend-item"><span class="sch-swatch" style="background:${SCH_GRADE_COLOR}"></span>全年段</span>
           <span class="sch-legend-item"><span class="sch-swatch" style="background:#eff6ff;border:1px solid var(--primary)"></span>今天</span>
           <span class="sch-legend-item">点击空格子「＋」新增课程；点击课程格编辑或删除</span>
         </div>
       </div>`;
 
     // —— 事件绑定 ——
-    // 空格子 → 新增
-    el.querySelectorAll('[data-sch-add]').forEach((cell) => {
-      cell.addEventListener('click', () => {
-        this.openForm({
-          weekday: Number(cell.dataset.schWeekday),
-          period: cell.dataset.schPeriod === '' ? null : Number(cell.dataset.schPeriod),
+    // 空格子 → 新增（viewer 无点击：绑定阶段跳过 + 样式已置灰）
+    if (canAddSchedule) {
+      el.querySelectorAll('[data-sch-add]').forEach((cell) => {
+        cell.addEventListener('click', () => {
+          this.openForm({
+            weekday: Number(cell.dataset.schWeekday),
+            period: cell.dataset.schPeriod === '' ? null : Number(cell.dataset.schPeriod),
+          });
         });
       });
-    });
+    }
     // 有课格子 → 编辑/删除
     el.querySelectorAll('[data-sch-id]').forEach((cell) => {
       cell.addEventListener('click', () => {

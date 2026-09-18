@@ -17,6 +17,8 @@
     .asg-class-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
     .asg-class-count { color: var(--text-muted); font-size: 12px; }
     .asg-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+    .asg-item.pinned { border-color: var(--primary); border-width: 1.5px; }
+    .asg-pin-badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; background: #fff7ed; border: 1px solid #fdba74; color: #c2410c; white-space: nowrap; }
     .asg-item-head { display: flex; align-items: center; gap: 8px; }
     .asg-item-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .asg-item-meta { color: var(--text-muted); font-size: 12px; margin: 6px 0; }
@@ -116,16 +118,18 @@
         : `<span class="badge badge-leave">${App.esc(a.status || '未知')}</span>`;
     // 已归档（§63）：明细已删，隐藏写操作与详情入口（详情 404），仅展示提交统计与「已归档」徽标
     const archived = !!a.archived;
-    // 登记上交/删除仅该班可管理时显示；详情始终可见（已归档除外）
+    // 登记上交/删除/置顶仅该班可管理时显示；详情始终可见（已归档除外）
     const canManage = !archived && canManageMap.get(a.classId);
     const writeBtns = canManage
-      ? `<button class="btn btn-sm btn-primary" data-act="register" type="button">登记上交</button>
+      ? `<button class="btn btn-sm" data-act="pin" type="button">${a.pinned ? '📌 取消置顶' : '📌 置顶'}</button>
+         <button class="btn btn-sm btn-primary" data-act="register" type="button">登记上交</button>
          <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>`
       : '';
     return `
-      <div class="asg-item" data-id="${App.esc(a.id)}">
+      <div class="asg-item${a.pinned ? ' pinned' : ''}" data-id="${App.esc(a.id)}">
         <div class="asg-item-head">
           <span class="asg-item-title" title="${App.esc(a.title)}">${App.esc(a.title)}</span>
+          ${a.pinned && !archived ? '<span class="asg-pin-badge">📌 置顶</span>' : ''}
           ${archived ? '<span class="badge badge-archived">已归档</span>' : ''}
           ${statusBadge}
         </div>
@@ -160,12 +164,16 @@
     }
     const cols = classes
       .map((c) => {
-        const list = assignments.filter((a) => a.classId === c.id);
+        // 置顶优先，其余保持原顺序（Array.sort 稳定）
+        const list = assignments
+          .filter((a) => a.classId === c.id)
+          .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
+        const pinnedCount = list.filter((a) => a.pinned).length;
         return `
           <div class="card">
             <div class="asg-class-head">
               <span class="card-title" style="margin:0">${App.esc(c.name)}</span>
-              <span class="asg-class-count">${list.length} 项作业</span>
+              <span class="asg-class-count">${list.length} 项作业${pinnedCount ? ` · 已置顶 ${pinnedCount} 项` : ''}</span>
             </div>
             ${list.length ? list.map(assignmentCard).join('') : '<div class="muted">暂无作业</div>'}
           </div>`;
@@ -219,6 +227,7 @@
               content: body.content,
               deadline: body.deadline,
               status: 'active',
+              pinned: 0,
               academicYear: App.state?.academicYear || null,
               stats: { total: null, submitted: 0, missing: 0, submitRate: 0 },
             });
@@ -354,6 +363,22 @@
     );
   }
 
+  // ===== 置顶 / 取消置顶（本地 patch，不重拉） =====
+
+  async function togglePin(id) {
+    const a = assignments.find((x) => x.id === id);
+    if (!a) return;
+    const next = a.pinned ? 0 : 1;
+    try {
+      await api.assignments.update(id, { pinned: next });
+      a.pinned = next;
+      App.toast(next ? '已置顶' : '已取消置顶');
+      renderContent();
+    } catch (err) {
+      App.toast(errMsg(err));
+    }
+  }
+
   // ===== 删除 =====
 
   async function removeAssignment(id) {
@@ -486,6 +511,7 @@
         const act = btn.dataset.act;
         if (act === 'register') openRegister(id);
         else if (act === 'detail') openDetail(id);
+        else if (act === 'pin') togglePin(id);
         else if (act === 'del') removeAssignment(id);
       });
 
