@@ -118,6 +118,20 @@ App.registerView('settings', {
             <input class="form-input" id="pref-textbook" value="${App.esc(prefs.textbook || '')}" placeholder="如：人教版必修三">
           </div>
         </div>
+        <div class="form-row" style="margin-top:4px">
+          <div>
+            <label class="form-label">当前密码（改密码时必填）</label>
+            <input class="form-input" id="pref-cur-pwd" type="password" placeholder="不改密码可留空" autocomplete="current-password">
+          </div>
+          <div>
+            <label class="form-label">新密码（至少 8 位）</label>
+            <input class="form-input" id="pref-new-pwd" type="password" placeholder="不改密码可留空" autocomplete="new-password">
+          </div>
+          <div>
+            <label class="form-label">确认新密码</label>
+            <input class="form-input" id="pref-new-pwd2" type="password" placeholder="再次输入新密码" autocomplete="new-password">
+          </div>
+        </div>
         <div class="modal-actions">
           <button class="btn btn-primary" id="save-prefs" type="button">保存</button>
         </div>
@@ -259,7 +273,7 @@ async function bindAiSettings() {
   });
 }
 
-/** 个人资料保存（姓名存服务端，偏好存 localStorage，§52 允许 UI 偏好） */
+/** 个人资料保存（姓名/密码存服务端，偏好存 localStorage，§52 允许 UI 偏好） */
 function bindProfile() {
   document.getElementById('save-prefs').addEventListener('click', async () => {
     const displayName = document.getElementById('pref-name').value.trim();
@@ -267,17 +281,46 @@ function bindProfile() {
       App.toast('姓名不能为空');
       return;
     }
+    // 改密码：三项都要填且两次一致
+    const curPwd = document.getElementById('pref-cur-pwd').value;
+    const newPwd = document.getElementById('pref-new-pwd').value;
+    const newPwd2 = document.getElementById('pref-new-pwd2').value;
+    const body = { displayName };
+    if (curPwd || newPwd || newPwd2) {
+      if (!curPwd || !newPwd) {
+        App.toast('修改密码需要填写当前密码和新密码');
+        return;
+      }
+      if (newPwd.length < 8) {
+        App.toast('新密码至少 8 位');
+        return;
+      }
+      if (newPwd !== newPwd2) {
+        App.toast('两次输入的新密码不一致');
+        return;
+      }
+      body.currentPassword = curPwd;
+      body.newPassword = newPwd;
+    }
+    const btn = document.getElementById('save-prefs');
+    btn.disabled = true;
     try {
-      const data = await api.auth.updateMe({ displayName });
+      const data = await api.auth.updateMe(body);
       if (data.user) App.state.user = { ...App.state.user, ...data.user };
       // 同步刷新侧边栏显示名与头像首字
       const avatar = document.querySelector('.sidebar-user .avatar');
       const nameEl = document.querySelector('.sidebar-user-name');
       if (nameEl) nameEl.textContent = displayName;
       if (avatar) avatar.textContent = displayName.charAt(0).toUpperCase();
+      // 清空密码框
+      document.getElementById('pref-cur-pwd').value = '';
+      document.getElementById('pref-new-pwd').value = '';
+      document.getElementById('pref-new-pwd2').value = '';
+      App.toast(data.passwordChanged ? '已保存，密码已更新' : '已保存');
     } catch (err) {
       App.toast((err && err.message) || '保存失败');
-      return;
+    } finally {
+      btn.disabled = false;
     }
     localStorage.setItem(
       'profile_prefs',
@@ -287,7 +330,6 @@ function bindProfile() {
         textbook: document.getElementById('pref-textbook').value.trim(),
       })
     );
-    App.toast('已保存');
   });
 }
 

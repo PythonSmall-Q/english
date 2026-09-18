@@ -244,17 +244,47 @@ app.post('/logout', async (c) => {
  */
 app.put('/me', requireAuth, async (c) => {
   const user = c.get('user');
-  const body = await c.req.json().catch(() => ({}));
-  const displayName = String(body.displayName || '').trim();
-  if (!displayName || displayName.length > 30) {
-    throw new ApiError('VALIDATION_ERROR', '姓名需为 1-30 个字符');
+  const body = await c.req.json().catch(() => {});
+
+  // 可选：修改昵称
+  let displayName = user.display_name;
+  if (body.displayName !== undefined) {
+    displayName = String(body.displayName || '').trim();
+    if (!displayName || displayName.length > 30) {
+      throw new ApiError('VALIDATION_ERROR', '姓名需为 1-30 个字符');
+    }
   }
-  await c.env.DB.prepare('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?')
-    .bind(displayName, now(), user.id)
-    .run();
+
+  // 可选：修改密码（需验证当前密码；≥8 位）
+  let newHash = null;
+  if (body.newPassword !== undefined && body.newPassword !== null && body.newPassword !== '') {
+    const currentPassword = String(body.currentPassword || '');
+    const newPassword = String(body.newPassword || '');
+    if (!(await verifyPassword(currentPassword, user.password_hash))) {
+      throw new ApiError('VALIDATION_ERROR', '当前密码不正确');
+    }
+    if (newPassword.length < 8) {
+      throw new ApiError('VALIDATION_ERROR', '新密码至少 8 位');
+    }
+    if (newPassword === currentPassword) {
+      throw new ApiError('VALIDATION_ERROR', '新密码不能与当前密码相同');
+    }
+    newHash = await hashPassword(newPassword);
+  }
+
+  if (newHash) {
+    await c.env.DB
+      .prepare('UPDATE users SET display_name = ?, password_hash = ?, updated_at = ? WHERE id = ?')
+      .bind(displayName, newHash, now(), user.id)
+      .run();
+  } else if (displayName !== user.display_name) {
+    await c.env.DB.prepare('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?')
+      .bind(displayName, now(), user.id)
+      .run();
+  }
   return c.json({
     success: true,
-    data: { user: { id: user.id, email: user.email, displayName, platformRole: user.platform_role } },
+    data: { user: { id: user.id, email: user.email, displayName, platformRole: user.platform_role }, passwordChanged: !!newHash },
   });
 });
 

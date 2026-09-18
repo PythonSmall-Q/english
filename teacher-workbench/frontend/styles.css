@@ -158,6 +158,16 @@ body {
   white-space: nowrap;
 }
 
+/* 导航图标统一尺寸（emoji 本身字形大小不一，用定宽容器对齐） */
+.nav-ico {
+  display: inline-block;
+  width: 22px;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1;
+  vertical-align: -1px;
+}
+
 .nav-item:hover {
   background: #f1f5f9;
 }
@@ -1106,7 +1116,13 @@ select.form-input {
   }
 
   .sidebar-footer {
-    display: none;
+    display: block;
+    padding: 6px 10px 10px;
+  }
+
+  .sidebar-footer .btn {
+    padding: 6px 10px;
+    font-size: 13px;
   }
 
   .card-grid {
