@@ -171,7 +171,7 @@ app.get('/export-totals', requireAuth, requireTenant, requireRole(['viewer']), a
       `SELECT s.id, s.student_no, s.name, s.class_id, c.name AS class_name
          FROM students s
          LEFT JOIN classes c ON c.id = s.class_id AND c.tenant_id = s.tenant_id
-        WHERE s.tenant_id = ? AND s.academic_year = ?
+        WHERE s.tenant_id = ? AND s.academic_year = ? AND s.exempt = 0
         ORDER BY c.name, s.student_no IS NULL, s.student_no, s.name`
     )
     .bind(tenantId, academicYear)
@@ -272,6 +272,91 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
     .run();
   await audit(db, tenantId, user.id, 'update_exam', '考试', exam.id, { name });
   return c.json({ success: true, data: await getExam(db, tenantId, exam.id) });
+});
+
+/**
+ * 推断考试满分（填写年级均分的 0–满分 校验用）：
+ * 取已录总分的最高分与小分满分按学生加总后的最高值；都没有则返回 null（不校验上限）。
+ */
+async function examFullScore(db, tenantId, examId) {
+  const r1 = await db
+    .prepare('SELECT MAX(score) AS m FROM exam_scores WHERE tenant_id = ? AND exam_id = ?')
+    .bind(tenantId, examId)
+    .first();
+  const r2 = await db
+    .prepare(
+      `SELECT MAX(s) AS m FROM (
+         SELECT SUM(max_score) AS s FROM exam_subscores
+          WHERE tenant_id = ? AND exam_id = ? GROUP BY student_id
+       )`
+    )
+    .bind(tenantId, examId)
+    .first();
+  const m = Math.max(r1?.m || 0, r2?.m || 0);
+  return m > 0 ? m : null;
+}
+
+/**
+ * PUT /api/v1/exams/:id/grade-avgs — 填写/清除年级均分（§三-8）
+ * body: { avgs: { 班级名: number|null } }，键必须对应当前学年存在的班级（否则 400），
+ * 值为 0–满分之间的数字或 null（清空该项）。权限同编辑该考试；受学年归档保护。
+ */
+app.put('/:id/grade-avgs', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+  const db = c.get('tenantDb') || c.env.DB;
+  const user = c.get('user');
+  const tenantId = c.get('tenantId');
+  const exam = await getExam(db, tenantId, c.req.param('id'));
+
+  // 考试级权限：owner/admin、班级考试→该班管理者、全年段考试→年级组组长/备课组长
+  if (!(await canManageExam(db, tenantId, user, exam))) {
+    throw new ApiError('FORBIDDEN', '你没有权限管理该考试');
+  }
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'exams', exam.id);
+
+  const body = await c.req.json().catch(() => ({}));
+  const avgs = body.avgs;
+  if (!avgs || typeof avgs !== 'object' || Array.isArray(avgs)) {
+    throw new ApiError('VALIDATION_ERROR', 'avgs 必须是 {班级名: 分数|null} 对象');
+  }
+
+  const clsRows = await db
+    .prepare('SELECT name FROM classes WHERE tenant_id = ? AND academic_year = ?')
+    .bind(tenantId, currentAcademicYear())
+    .all();
+  const classNames = new Set(clsRows.results.map((r) => r.name));
+  const fullScore = await examFullScore(db, tenantId, exam.id);
+
+  const cleaned = {};
+  for (const [key, value] of Object.entries(avgs)) {
+    const name = String(key).trim();
+    if (!classNames.has(name)) {
+      throw new ApiError('VALIDATION_ERROR', `班级「${name}」在当前学年不存在`);
+    }
+    if (value === null || value === undefined || value === '') {
+      cleaned[name] = null; // 清空：回退自动计算/无数据
+      continue;
+    }
+    const num = Number(value);
+    if (!Number.isFinite(num) || num < 0) {
+      throw new ApiError('VALIDATION_ERROR', `班级「${name}」的均分必须是非负数字`);
+    }
+    if (fullScore !== null && num > fullScore) {
+      throw new ApiError('VALIDATION_ERROR', `班级「${name}」的均分不能超过满分 ${fullScore}`);
+    }
+    cleaned[name] = round2(num);
+  }
+
+  await db
+    .prepare('UPDATE exams SET grade_avgs = ? WHERE tenant_id = ? AND id = ?')
+    .bind(JSON.stringify(cleaned), tenantId, exam.id)
+    .run();
+  await audit(db, tenantId, user.id, 'set_exam_grade_avgs', '考试', exam.id, {
+    name: exam.name,
+    count: Object.keys(cleaned).length,
+  });
+  return c.json({ success: true, data: { avgs: cleaned } });
 });
 
 /**
@@ -552,6 +637,44 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
     }))
     .sort((a, b) => a.className.localeCompare(b.className, 'zh-Hans-CN'));
 
+  // 年级均分（§三-8，通用化：不硬编码班级）——当前学年全部班级，
+  // 优先取 grade_avgs 手工值（manual），否则该班有成绩则自动算 AVG(score)（auto），
+  // 都没有 avg=null（none）
+  const clsRows = await db
+    .prepare('SELECT id, name FROM classes WHERE tenant_id = ? AND academic_year = ?')
+    .bind(tenantId, currentAcademicYear())
+    .all();
+  let manualAvgs = {};
+  if (exam.grade_avgs) {
+    try {
+      const parsed = JSON.parse(exam.grade_avgs);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) manualAvgs = parsed;
+    } catch (e) {
+      /* 非法 JSON 视为无手工均分 */
+    }
+  }
+  const autoAvgMap = new Map();
+  for (const s of allValid) {
+    if (!s.class_name) continue;
+    if (!autoAvgMap.has(s.class_name)) autoAvgMap.set(s.class_name, { sum: 0, n: 0 });
+    const g = autoAvgMap.get(s.class_name);
+    g.sum += s.score;
+    g.n += 1;
+  }
+  const gradeAvgs = clsRows.results
+    .map((cl) => {
+      const manual = manualAvgs[cl.name];
+      if (manual !== undefined && manual !== null && Number.isFinite(Number(manual))) {
+        return { classId: cl.id, class_name: cl.name, avg: round2(Number(manual)), source: 'manual' };
+      }
+      const g = autoAvgMap.get(cl.name);
+      if (g && g.n) {
+        return { classId: cl.id, class_name: cl.name, avg: round2(g.sum / g.n), source: 'auto' };
+      }
+      return { classId: cl.id, class_name: cl.name, avg: null, source: 'none' };
+    })
+    .sort((a, b) => a.class_name.localeCompare(b.class_name, 'zh-Hans-CN'));
+
   // 各题型均分与得分率（得分率 = Σscore / Σmax_score）；传 class_id 时仅统计该班
   let subSql = `SELECT question_type, COUNT(*) AS count,
               AVG(score) AS avg_score,
@@ -602,7 +725,7 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
 
   return c.json({
     success: true,
-    data: { exam, overview, classCompare, questionTypes, rankings },
+    data: { exam, overview, classCompare, gradeAvgs, questionTypes, rankings },
   });
 });
 

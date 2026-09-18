@@ -270,6 +270,18 @@ body {
   transform: rotate(180deg);
 }
 
+/* 身份查看（平台管理员以成员身份查看） */
+.viewas-select {
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text);
+  font-size: 13px;
+  padding: 0 8px;
+  max-width: 210px;
+}
+
 .ts-menu {
   position: absolute;
   top: calc(100% + 6px);

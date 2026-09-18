@@ -109,6 +109,7 @@ app.get('/', requireAuth, requireTenant, async (c) => {
     const a = alertMap.get(s.id) || {};
     const missingHomeworkThisWeek = a.hw || 0;
     const failedDictationsNotRetested = a.dict || 0;
+    s.exempt = !!s.exempt;
     s.alert = {
       missing_homework_this_week: missingHomeworkThisWeek,
       failed_dictations_not_retested: failedDictationsNotRetested,
@@ -120,6 +121,16 @@ app.get('/', requireAuth, requireTenant, async (c) => {
 
   return c.json({ success: true, data: { students } });
 });
+
+/**
+ * 校验可选 exempt 字段：0/1，缺省 0，非法值 400
+ */
+function parseExempt(body) {
+  if (body.exempt === undefined || body.exempt === null) return 0;
+  const v = Number(body.exempt);
+  if (v !== 0 && v !== 1) throw new ApiError('VALIDATION_ERROR', 'exempt 只能为 0 或 1');
+  return v;
+}
 
 /** 校验 class 属于本 tenant */
 async function requireClassInTenant(db, tenantId, classId) {
@@ -150,10 +161,11 @@ app.post('/', requireAuth, requireTenant, requireClassManager(), requireTeacherP
 
   const id = newId();
   const ts = now();
+  const exempt = parseExempt(body);
   await db
     .prepare(
-      `INSERT INTO students (id, tenant_id, class_id, student_no, name, gender, status, notes, academic_year, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO students (id, tenant_id, class_id, student_no, name, gender, status, notes, exempt, academic_year, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       id,
@@ -164,6 +176,7 @@ app.post('/', requireAuth, requireTenant, requireClassManager(), requireTeacherP
       body.gender != null ? String(body.gender) : null,
       body.status != null ? String(body.status) : 'normal',
       body.notes != null ? String(body.notes) : null,
+      exempt,
       currentAcademicYear(),
       ts,
       ts
@@ -240,7 +253,7 @@ app.get('/:id', requireAuth, requireTenant, async (c) => {
     ? await db.prepare('SELECT id, name FROM classes WHERE id = ? AND tenant_id = ?').bind(student.class_id, tenantId).first()
     : null;
   const stats = await getAlertStats(db, tenantId, student.id);
-  return c.json({ success: true, data: { ...student, class_name: cls?.name ?? null, alert: stats } });
+  return c.json({ success: true, data: { ...student, exempt: !!student.exempt, class_name: cls?.name ?? null, alert: stats } });
 });
 
 /** PUT /api/v1/students/:id — 更新学生（该班管理者） */
@@ -261,11 +274,12 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', t
   const name = body.name != null ? String(body.name).trim() : student.name;
   if (!name) throw new ApiError('VALIDATION_ERROR', '学生姓名不能为空');
   const pick = (key, old) => (body[key] !== undefined ? (body[key] != null ? String(body[key]) : null) : old);
+  const exempt = body.exempt !== undefined && body.exempt !== null ? parseExempt(body) : student.exempt;
 
   await db
     .prepare(
       `UPDATE students
-          SET class_id = ?, student_no = ?, name = ?, gender = ?, status = ?, notes = ?, updated_at = ?
+          SET class_id = ?, student_no = ?, name = ?, gender = ?, status = ?, notes = ?, exempt = ?, updated_at = ?
         WHERE id = ? AND tenant_id = ?`
     )
     .bind(
@@ -275,6 +289,7 @@ app.put('/:id', requireAuth, requireTenant, requireClassManager({ param: 'id', t
       pick('gender', student.gender),
       pick('status', student.status),
       pick('notes', student.notes),
+      exempt,
       now(),
       student.id,
       tenantId
@@ -426,6 +441,8 @@ app.get('/:id/overview', requireAuth, requireTenant, async (c) => {
   const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const student = await getStudentOr404(db, tenantId, c.req.param('id'));
+  // 豁免登记学生不参与统计（§3.5.4）
+  if (student.exempt === 1) return c.json({ success: true, data: { exempted: true } });
   const classId = student.class_id;
   const academicYear = currentAcademicYear();
 

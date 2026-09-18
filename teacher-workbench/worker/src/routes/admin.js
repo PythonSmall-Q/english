@@ -13,7 +13,7 @@ import { requireAuth, audit } from '../middleware.js';
 import { getQuotaUsage, PERSONAL_DEFAULTS } from '../quota.js';
 import { previousAcademicYear, archiveTenantYear, archiveAllTenants } from '../archive.js';
 import { rolloverTenants } from '../rollover.js';
-import { purgeExpiredTrials } from '../trial.js';
+import { purgeExpiredTrials, purgeTenantData } from '../trial.js';
 
 const app = new Hono();
 
@@ -575,6 +575,30 @@ app.post('/purge-trials', requireAuth, async (c) => {
   requirePlatformAdmin(c);
   const result = await purgeExpiredTrials(c.env);
   return c.json({ success: true, data: result });
+});
+
+/**
+ * DELETE /api/v1/admin/tenants/:id — 平台管理员物理删除任意空间（不可恢复）
+ * 先定位租户所在库（主库 → TRIAL_DB），再整体物理删除：全部业务数据、成员、配额、
+ * 邀请、文件（含 R2 对象）、回收站、归档记录与租户行本身。审计日志随租户一并删除。
+ * 毕业归档库（GRAD_DB）中该租户的历史毕业包保留不删。
+ */
+app.delete('/tenants/:id', requireAuth, async (c) => {
+  requirePlatformAdmin(c);
+  const tenantId = c.req.param('id');
+
+  // 主库 → TRIAL_DB 依次定位
+  let db = c.env.DB;
+  let tenant = await db.prepare('SELECT id, name FROM tenants WHERE id = ?').bind(tenantId).first();
+  if (!tenant && c.env.TRIAL_DB) {
+    tenant = await c.env.TRIAL_DB.prepare('SELECT id, name FROM tenants WHERE id = ?').bind(tenantId).first();
+    if (tenant) db = c.env.TRIAL_DB;
+  }
+  if (!tenant) throw new ApiError('NOT_FOUND', '空间不存在');
+
+  await purgeTenantData(c.env, db, tenantId);
+  console.log(`[admin] 平台管理员已删除空间: ${tenant.name} (${tenantId})`);
+  return c.json({ success: true, data: { deleted: true, id: tenantId, name: tenant.name } });
 });
 
 export default app;

@@ -96,8 +96,9 @@
     return na < nb ? -1 : na > nb ? 1 : 0;
   }
 
-  /** 学生预警徽标（§28 口径） */
+  /** 学生预警徽标（§28 口径）；豁免登记学生不参与预警 */
   function alertBadges(s) {
+    if (s.exempt) return '';
     const a = s.alert;
     if (!a) return '';
     let h = '';
@@ -111,8 +112,9 @@
     return h;
   }
 
-  /** 是否命中预警：本周有作业未交、默写需重默，或达到严重阈值（作业未交>3 / 默写未过>5 且未重默） */
+  /** 是否命中预警：本周有作业未交、默写需重默，或达到严重阈值（作业未交>3 / 默写未过>5 且未重默）；豁免生跳过 */
   function isAlerted(s) {
+    if (s.exempt) return false;
     const a = s.alert;
     return !!(a && (a.needs_retest || a.missing_homework_this_week > 0 || a.homework_alert || a.dictation_alert));
   }
@@ -182,7 +184,7 @@
         <span class="stu-no">${App.esc(s.student_no || '—')}</span>
         <span class="stu-name">${App.esc(s.name)}</span>
         <span class="stu-gender">${App.esc(genderText(s.gender))}</span>
-        <span class="stu-badges">${alertBadges(s)}</span>
+        <span class="stu-badges">${s.exempt ? '<span class="badge badge-archived">已豁免</span>' : ''}${alertBadges(s)}</span>
         <span class="stu-actions">
           <button class="btn btn-sm" data-act="detail" type="button">详情</button>
           <button class="btn btn-sm" data-act="analysis" type="button">成绩分析</button>
@@ -245,6 +247,17 @@
         </select>
         <label class="form-label">备注</label>
         <textarea id="stu-f-notes" class="form-input">${App.esc(student?.notes || '')}</textarea>
+        ${
+          isEdit
+            ? `<label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:14px">
+                 <input type="checkbox" id="stu-f-exempt"${student?.exempt ? ' checked' : ''}> 豁免登记
+               </label>
+               <div class="muted" style="margin-top:6px;line-height:1.7">
+                 豁免后不参与作业/默写登记、预警与导出；学生仍保留在本列表中，可随时取消豁免。
+                 ${student?.exempt ? '<br>当前状态：<b>已豁免</b>。' : ''}
+               </div>`
+            : ''
+        }
         <div class="modal-actions">
           <button class="btn" id="stu-f-cancel" type="button">取消</button>
           <button class="btn btn-primary" id="stu-f-save" type="button">保存</button>
@@ -269,6 +282,7 @@
           }
           try {
             if (isEdit) {
+              body.exempt = document.getElementById('stu-f-exempt').checked ? 1 : 0;
               await api.students.update(student.id, body);
               Object.assign(student, body); // 就地 patch，alert 统计保持原值
             } else {
@@ -310,8 +324,10 @@
     }
     const a = s.alert || {};
     const cls = classes.find((c) => c.id === s.class_id);
-    const alertHtml =
-      a.missing_homework_this_week > 0 || a.failed_dictations_not_retested > 0 || a.needs_retest
+    // 豁免生不参与预警明细
+    const alertHtml = s.exempt
+      ? '<div class="muted" style="margin-top:12px">该学生已豁免登记，不参与作业/默写登记、预警与导出。</div>'
+      : a.missing_homework_this_week > 0 || a.failed_dictations_not_retested > 0 || a.needs_retest
         ? `<div class="stu-alert-box">
              <div style="margin-bottom:6px;font-weight:600">预警明细</div>
              <div class="stu-badges">
@@ -330,6 +346,7 @@
           <dt>性别</dt><dd>${App.esc(genderText(s.gender))}</dd>
           <dt>班级</dt><dd>${App.esc(s.class_name || (cls && cls.name) || '—')}</dd>
           <dt>备注</dt><dd>${App.esc(s.notes || '—')}</dd>
+          <dt>豁免登记</dt><dd>${s.exempt ? '已豁免（不参与作业/默写登记、预警与导出）' : '否'}</dd>
         </dl>
         ${alertHtml}
         <div class="modal-actions">
@@ -339,6 +356,10 @@
       () => {
         document.getElementById('stu-d-close').onclick = App.closeModal;
         document.getElementById('stu-d-analysis').onclick = () => {
+          if (s.exempt) {
+            App.toast('该学生已豁免登记，不参与统计');
+            return;
+          }
           App.closeModal();
           openOverview(id, s.name);
         };
@@ -389,6 +410,12 @@
     } catch (err) {
       App.closeModal();
       App.toast(errMsg(err, '加载失败'));
+      return;
+    }
+    // 豁免生：后端返回 { exempted: true }，不进入统计展示
+    if (data && data.exempted) {
+      App.closeModal();
+      App.toast('该学生已豁免登记，不参与统计');
       return;
     }
     const { exams, assignments, dictations } = data;
@@ -726,6 +753,10 @@
         else if (act === 'del') removeStudent(id);
         else if (act === 'analysis') {
           const s = students.find((x) => x.id === id);
+          if (s && s.exempt) {
+            App.toast('该学生已豁免登记，不参与统计');
+            return;
+          }
           openOverview(id, s && s.name);
         }
       });

@@ -118,6 +118,28 @@ export async function requireTenant(c, next) {
   c.set('tenant', tenant);
   c.set('tenantDb', db);
   c.set('tenantReadOnly', tenant.status !== 'active' || expired);
+
+  // 「以成员身份查看」：平台管理员带 X-View-As: <userId> 头时，以目标成员的身份与权限执行
+  // （目标必须是本空间活跃成员；users 只在主库）。操作审计记录为目标用户。
+  const viewAsId = c.req.header('X-View-As');
+  if (viewAsId && viewAsId !== user.id) {
+    if (user.platform_role !== 'platform_admin') {
+      throw new ApiError('FORBIDDEN', '仅平台管理员可使用身份查看');
+    }
+    const target = await c.env.DB
+      .prepare("SELECT * FROM users WHERE id = ? AND status = 'active'")
+      .bind(viewAsId)
+      .first();
+    if (!target) throw new ApiError('VALIDATION_ERROR', '目标用户不存在或已停用');
+    const targetMembership = await db
+      .prepare("SELECT * FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
+      .bind(tenantId, viewAsId)
+      .first();
+    if (!targetMembership) throw new ApiError('VALIDATION_ERROR', '该用户不是此空间的成员');
+    console.log(`[view-as] 平台管理员 ${user.email} 以 ${target.email} 身份访问空间 ${tenantId}`);
+    c.set('user', target);
+    c.set('membership', targetMembership);
+  }
   await next();
 }
 

@@ -259,17 +259,17 @@
     return String(name || '').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 80) || '未重默名单';
   }
 
-  /** 该默写适用的学生名单：班级默写取本班；全年段只取当前用户可管理班级的学生 */
+  /** 该默写适用的学生名单：班级默写取本班；全年段只取当前用户可管理班级的学生；豁免生不参与登记 */
   async function rosterOf(d) {
     if (d.scope === 'class') {
       const data = await api.students.list({ class_id: d.classId });
-      return data.students || [];
+      return (data.students || []).filter((s) => !s.exempt);
     }
     const manageable = classes.filter((c) => canManageMap.get(c.id)).map((c) => c.id);
     if (!manageable.length) return []; // 无可管理班级：全年段默写仅该班老师可登记
     const set = new Set(manageable);
     const data = await api.students.list();
-    return (data.students || []).filter((s) => set.has(s.class_id));
+    return (data.students || []).filter((s) => set.has(s.class_id) && !s.exempt);
   }
 
   // ===== 数据加载 =====
@@ -642,7 +642,8 @@
       details.forEach((item) => {
         if (!item) return;
         item.list
-          .filter((r) => !r.passed && r.retestRequired && !r.retestCompleted && r.classId === classId)
+          // 豁免登记学生不参与重默
+          .filter((r) => !r.passed && r.retestRequired && !r.retestCompleted && r.classId === classId && !r.exempt)
           .forEach((r) => rows.push({ dictationId: item.d.id, dictationTitle: item.d.title, ...r }));
       });
     } catch (err) {
@@ -759,8 +760,8 @@
       App.toast(errMsg(err, '加载失败'));
       return;
     }
-    // 待重默：未通过且标记需重默、尚未完成重默；从某班栏点入时只显示该班（所有角色同口径）
-    let pending = (det.list || []).filter((r) => !r.passed && r.retestRequired && !r.retestCompleted);
+    // 待重默：未通过且标记需重默、尚未完成重默；豁免生不参与；从某班栏点入时只显示该班（所有角色同口径）
+    let pending = (det.list || []).filter((r) => !r.passed && r.retestRequired && !r.retestCompleted && !r.exempt);
     if (ctxClassId) pending = pending.filter((r) => r.classId === ctxClassId);
     if (!pending.length) {
       App.closeModal();
@@ -877,7 +878,8 @@
           related.map((d) => api.dictations.get(d.id).then((r) => ({ d, list: r.list || [] })).catch(() => null))
         );
         const rosterData = await api.students.list({ class_id: c.id }).catch(() => ({ students: [] }));
-        const roster = (rosterData.students || []).slice().sort((x, y) => {
+        // 豁免登记学生不进入导出行（「各类统计导出」口径）
+        const roster = (rosterData.students || []).filter((s) => !s.exempt).sort((x, y) => {
           const nx = x.student_no || '￿';
           const ny = y.student_no || '￿';
           return nx < ny ? -1 : nx > ny ? 1 : 0;

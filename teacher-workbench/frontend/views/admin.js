@@ -414,6 +414,7 @@ async function renderTenants() {
                   <button class="btn btn-sm ${t.status === 'active' ? 'btn-danger' : ''}" data-toggle-status="${t.id}" data-status="${t.status === 'active' ? 'disabled' : 'active'}" type="button">
                     ${t.status === 'active' ? '停用' : '启用'}
                   </button>
+                  <button class="btn btn-sm btn-danger" data-del-tenant="${t.id}" data-name="${App.esc(t.name)}" type="button">删除</button>
                 </td>
               </tr>`;
             })
@@ -436,6 +437,24 @@ async function renderTenants() {
     });
     box.querySelectorAll('[data-quota]').forEach((btn) => {
       btn.addEventListener('click', () => openQuotaModal(btn.dataset.quota, btn.dataset.name));
+    });
+    box.querySelectorAll('[data-del-tenant]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.name;
+        const ok = await App.confirmDialog(
+          `确定彻底删除空间「${name}」吗？\n空间内全部数据（班级/学生/作业/默写/考试/文件/成员/回收站）将被物理删除，无法恢复。建议先让该空间自行导出备份。`
+        );
+        if (!ok) return;
+        btn.disabled = true;
+        try {
+          await api.admin.deleteTenant(btn.dataset.delTenant);
+          App.toast(`空间「${name}」已删除`);
+          await renderTenants();
+        } catch (e) {
+          btn.disabled = false;
+          App.toast(e.message || '删除失败');
+        }
+      });
     });
   } catch (e) {
     box.innerHTML = `<div class="muted">加载失败：${App.esc(e.message || '未知错误')}</div>`;

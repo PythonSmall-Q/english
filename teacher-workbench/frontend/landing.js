@@ -19,13 +19,13 @@ const LANDING_FEATURES = [
   { icon: '🔐', title: '数据归档', desc: '学年自动压缩归档、毕业班级打包、分级权限' },
 ];
 
-/** 定价（占位，可按运营调整） */
-// 定价为占位，可按运营调整；付费版统一「联系我们」，微信号见 CONTACT_WECHAT
+/** 定价（元/月） */
+// 付费版仍通过微信联系开通，微信号见 CONTACT_WECHAT
 const CONTACT_WECHAT = '19512002721';
 const LANDING_PRICING = {
-  free: { contact: true },
-  pro: { contact: true },
-  school: { contact: true },
+  free: { amount: '¥5', contact: true },
+  pro: { amount: '¥30', contact: true },
+  school: { amount: '¥199', contact: true },
   custom: { contact: true },
 };
 
@@ -94,7 +94,7 @@ App.showLanding = function () {
         <div class="landing-pricing-grid">
           <div class="landing-price-card">
             <div class="landing-price-name">基础版</div>
-            <div class="landing-price-amount">联系我们</div>
+            <div class="landing-price-amount">${LANDING_PRICING.free.amount}<span class="landing-price-period">/月</span></div>
             <div class="landing-price-yearly muted">微信 ${CONTACT_WECHAT}（点击复制）</div>
             <ul class="landing-price-list">
               <li>1 个班级</li>
@@ -107,7 +107,7 @@ App.showLanding = function () {
           <div class="landing-price-card landing-price-card-featured">
             <span class="landing-price-badge">最受欢迎</span>
             <div class="landing-price-name">专业版</div>
-            <div class="landing-price-amount">联系我们</div>
+            <div class="landing-price-amount">${LANDING_PRICING.pro.amount}<span class="landing-price-period">/月</span></div>
             <div class="landing-price-yearly muted">微信 ${CONTACT_WECHAT}（点击复制）</div>
             <ul class="landing-price-list">
               <li>10 个班级</li>
@@ -120,7 +120,7 @@ App.showLanding = function () {
           </div>
           <div class="landing-price-card">
             <div class="landing-price-name">学校版</div>
-            <div class="landing-price-amount">联系我们</div>
+            <div class="landing-price-amount">${LANDING_PRICING.school.amount}<span class="landing-price-period">/月</span></div>
             <div class="landing-price-yearly muted">微信 ${CONTACT_WECHAT}（点击复制）</div>
             <ul class="landing-price-list">
               <li>不限班级与学生</li>

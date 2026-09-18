@@ -267,7 +267,7 @@ app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) =
 
   const rows = await db
     .prepare(
-      `SELECT r.student_id, s.student_no, s.name, s.class_id AS student_class_id, c.name AS class_name,
+      `SELECT r.student_id, s.student_no, s.name, s.class_id AS student_class_id, s.exempt, c.name AS class_name,
          r.passed, r.retest_required, r.retest_completed, r.created_at
        FROM dictation_results r
        JOIN students s ON s.id = r.student_id
@@ -287,6 +287,7 @@ app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) =
     passed: !!r.passed,
     retestRequired: !!r.retest_required,
     retestCompleted: !!r.retest_completed,
+    exempt: !!r.exempt,
   }));
 
   return c.json({

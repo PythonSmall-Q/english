@@ -96,7 +96,7 @@ app.get('/class-stats', requireAuth, requireTenant, async (c) => {
   const stuRows = await db
     .prepare(
       `SELECT id, student_no, name FROM students
-        WHERE tenant_id = ? AND class_id = ? AND academic_year = ?
+        WHERE tenant_id = ? AND class_id = ? AND academic_year = ? AND exempt = 0
         ORDER BY student_no IS NULL, student_no, name`
     )
     .bind(tenantId, classId, academicYear)

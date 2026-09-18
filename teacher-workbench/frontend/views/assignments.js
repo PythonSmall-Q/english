@@ -262,7 +262,8 @@
     let list;
     try {
       const data = await api.assignments.submissions(id);
-      list = data.list || [];
+      // 豁免登记学生不参与登记（后端已过滤，这里兜底）
+      list = (data.list || []).filter((r) => !r.exempt);
     } catch (err) {
       App.closeModal();
       App.toast(errMsg(err, '加载失败'));
@@ -413,7 +414,8 @@
           clsAsg.map((a) => api.assignments.submissions(a.id).then((r) => r.list || []).catch(() => []))
         );
         const rosterData = await api.students.list({ class_id: c.id }).catch(() => ({ students: [] }));
-        const roster = (rosterData.students || []).slice().sort((x, y) => {
+        // 豁免登记学生不进入导出行（「各类统计导出」口径）
+        const roster = (rosterData.students || []).filter((s) => !s.exempt).sort((x, y) => {
           const nx = x.student_no || '￿';
           const ny = y.student_no || '￿';
           return nx < ny ? -1 : nx > ny ? 1 : 0;

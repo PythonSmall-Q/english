@@ -51,7 +51,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
     .prepare(
       `SELECT a.*, a.archived_stats,
          (SELECT COUNT(*) FROM students s
-           WHERE s.tenant_id = a.tenant_id AND s.class_id = a.class_id) AS total_count,
+           WHERE s.tenant_id = a.tenant_id AND s.class_id = a.class_id AND s.exempt = 0) AS total_count,
          (SELECT COUNT(*) FROM assignment_submissions x
            WHERE x.assignment_id = a.id AND x.status = 'submitted') AS submitted_count,
          (SELECT COUNT(*) FROM assignment_submissions x
@@ -60,7 +60,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
            WHERE x.assignment_id = a.id AND x.status = 'pending') AS pending_count
        FROM assignments a
        WHERE a.tenant_id = ? AND a.academic_year = ? ${classId ? 'AND a.class_id = ?' : ''}
-       ORDER BY a.created_at DESC`
+       ORDER BY a.pinned DESC, a.created_at DESC`
     )
     .bind(...(classId ? [tenantId, academicYear, classId] : [tenantId, academicYear]))
     .all();
@@ -277,12 +277,12 @@ app.get('/:id/submissions', requireAuth, requireTenant, requireRole(['viewer']),
 
   const rows = await db
     .prepare(
-      `SELECT s.id AS student_id, s.student_no, s.name, s.status AS student_status,
+      `SELECT s.id AS student_id, s.student_no, s.name, s.status AS student_status, s.exempt,
          COALESCE(x.status, 'pending') AS submission_status, x.submitted_at
        FROM students s
        LEFT JOIN assignment_submissions x
          ON x.assignment_id = ? AND x.student_id = s.id
-       WHERE s.tenant_id = ? AND s.class_id = ?
+       WHERE s.tenant_id = ? AND s.class_id = ? AND s.exempt = 0
        ORDER BY s.student_no ASC`
     )
     .bind(assignment.id, tenantId, assignment.class_id)
@@ -294,6 +294,7 @@ app.get('/:id/submissions', requireAuth, requireTenant, requireRole(['viewer']),
     name: r.name,
     status: r.submission_status,
     submittedAt: r.submitted_at,
+    exempt: !!r.exempt,
   }));
 
   return c.json({ success: true, data: { assignmentId: assignment.id, list } });

@@ -80,7 +80,7 @@
 
 window.App = {
   /** §66 页面状态 */
-  state: { user: null, tenants: [], tenant: null, quota: null, view: null, academicYear: null, currentAcademicYear: null, academicYears: [] },
+  state: { user: null, tenants: [], tenant: null, quota: null, view: null, academicYear: null, currentAcademicYear: null, academicYears: [], viewAs: null },
 
   /** 视图注册表：name → { title, icon, render, init? } */
   _views: {},
@@ -268,8 +268,10 @@ window.App = {
     }
     if (!tenant) return;
     App.state.tenant = tenant;
+    App.state.viewAs = null; // 切换空间恢复本人身份
     App.state.quota = tenant.quota || null;
     App.updateTenantSwitcher();
+    App.updateViewAsSwitcher();
     App.closeTenantMenu();
     await App.loadAcademicYears();
     await App.showView(App.state.view || 'dashboard');
@@ -646,6 +648,88 @@ window.App = {
     }
   },
 
+  /**
+   * 平台管理员「以成员身份查看」：顶栏下拉选择本空间的任一成员，
+   * 之后所有请求带 X-View-As 头，以该成员的身份与权限查看与管理
+   * （操作审计记录为该成员）。切换空间时自动恢复本人身份。
+   */
+  async updateViewAsSwitcher() {
+    const wrap = document.getElementById('viewas-switcher');
+    const select = document.getElementById('viewas-select');
+    if (!wrap || !select) return;
+    const isPlatformAdmin = App.state.user?.platformRole === 'platform_admin';
+    if (!isPlatformAdmin || !App.state.tenant) {
+      wrap.classList.add('hidden');
+      App.state.viewAs = null;
+      App.updateViewAsBanner();
+      return;
+    }
+    wrap.classList.remove('hidden');
+    if (wrap._tenantId === App.state.tenant.id && wrap._loaded) {
+      App.updateViewAsBanner();
+      return;
+    }
+    wrap._tenantId = App.state.tenant.id;
+    try {
+      const data = await api.tenants.quotaDetail(App.state.tenant.id);
+      const members = (data.users || data.members || []).filter((m) => m.status === 'active');
+      const current = App.state.viewAs?.userId || '';
+      select.innerHTML =
+        '<option value="">本人身份</option>' +
+        members
+          .map(
+            (m) =>
+              `<option value="${App.esc(m.user_id)}"${m.user_id === current ? ' selected' : ''}>以 ${App.esc(m.display_name || m.email || m.user_id)} 查看</option>`
+          )
+          .join('');
+      wrap._loaded = true;
+    } catch (e) {
+      // 管理空间等非成员场景可能无 quotaDetail 权限：静默降级为空下拉
+      select.innerHTML = '<option value="">本人身份</option>';
+      wrap._loaded = true;
+    }
+    if (!select._bound) {
+      select._bound = true;
+      select.addEventListener('change', async () => {
+        const userId = select.value;
+        if (!userId) {
+          App.state.viewAs = null;
+        } else {
+          const text = select.options[select.selectedIndex]?.textContent || '';
+          App.state.viewAs = { userId, label: text.replace(/^以 | 查看$/g, '') };
+        }
+        App.updateViewAsBanner();
+        // 以新身份重新渲染当前视图（权限/数据随之变化）
+        try {
+          await App.showView(App.state.view || 'dashboard');
+        } catch (e) {
+          /* 视图重渲染失败保持现状 */
+        }
+        App.toast(App.state.viewAs ? `正在以 ${App.state.viewAs.label} 的身份查看` : '已恢复本人身份');
+      });
+    }
+  },
+
+  /** 身份查看提示条 */
+  updateViewAsBanner() {
+    const banner = document.getElementById('viewas-banner');
+    if (!banner) return;
+    if (App.state.viewAs) {
+      banner.classList.remove('hidden');
+      banner.innerHTML = `👁 正在以 <b>${App.esc(App.state.viewAs.label || '')}</b> 的身份查看与管理本空间（操作将记录为该成员）<button class="btn btn-sm" id="viewas-exit" type="button" style="margin-left:10px">退出身份</button>`;
+      document.getElementById('viewas-exit').onclick = () => {
+        App.state.viewAs = null;
+        const select = document.getElementById('viewas-select');
+        if (select) select.value = '';
+        App.updateViewAsBanner();
+        App.showView(App.state.view || 'dashboard').catch(() => {});
+      };
+    } else {
+      banner.classList.add('hidden');
+      banner.innerHTML = '';
+    }
+  },
+
   /** 进入应用主框架（认证成功后调用） */
   enterApp() {
     document.getElementById('auth-screen').classList.add('hidden');
@@ -662,6 +746,7 @@ window.App = {
     const isAdmin = App.state.user?.platformRole === 'platform_admin';
     document.getElementById('nav-admin')?.classList.toggle('hidden', !isAdmin);
     App.updateTenantSwitcher();
+    App.updateViewAsSwitcher();
     // 初始视图：登录前暂存的目标路由（wb.redirect）> hash 中的有效视图 > dashboard
     let initial = null;
     const redirect = sessionStorage.getItem('wb.redirect');

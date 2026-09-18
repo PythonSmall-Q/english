@@ -80,6 +80,7 @@ function schInjectStyles() {
     .sch-cell-add.sch-cell-add-disabled:hover { color: #d1d5db; border-color: var(--border); }
     .sch-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; color: var(--text-muted); font-size: 13px; }
     .sch-legend-item { display: flex; align-items: center; gap: 6px; }
+    .sch-onlymine { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); margin-bottom: 8px; cursor: pointer; }
     .sch-swatch { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
     .sch-empty { padding: 32px 10px; text-align: center; color: var(--text-muted); }
     .sch-detail-row { margin-bottom: 10px; }
@@ -110,9 +111,14 @@ App.registerView('schedule', {
     }
     this._classes = classes;
 
+    // 「只看我的课」筛选（默认关；身份查看时按被查看成员过滤）
+    if (this._onlyMine == null) this._onlyMine = false;
+    const myId = App.state.viewAs?.userId || App.state.user?.id;
+    const visible = this._onlyMine ? schedules.filter((s) => s.teacher_id === myId) : schedules;
+
     // 索引：weekday → period → [条目]
     const bySlot = {};
-    for (const s of schedules) {
+    for (const s of visible) {
       const key = `${s.weekday}|${s.period == null ? 'null' : s.period}`;
       (bySlot[key] = bySlot[key] || []).push(s);
     }
@@ -176,6 +182,7 @@ App.registerView('schedule', {
     el.innerHTML = `
       <div class="card">
         <div class="card-title">教学课表（本周）</div>
+        <label class="sch-onlymine"><input type="checkbox" id="sch-only-mine"${this._onlyMine ? ' checked' : ''}> 只看我的课</label>
         <div class="sch-wrap">${gridHtml}</div>
         <div class="sch-legend">
           ${legendClasses}
@@ -184,6 +191,12 @@ App.registerView('schedule', {
           <span class="sch-legend-item">点击空格子「＋」新增课程；点击课程格编辑或删除</span>
         </div>
       </div>`;
+
+    // 只看我的课：切换后重渲染
+    el.querySelector('#sch-only-mine').addEventListener('change', (e) => {
+      this._onlyMine = e.target.checked;
+      App.showView('schedule');
+    });
 
     // —— 事件绑定 ——
     // 空格子 → 新增（viewer 无点击：绑定阶段跳过 + 样式已置灰）

@@ -69,6 +69,9 @@
       if (qs) url += '?' + qs;
     }
     const headers = { 'Content-Type': 'application/json' };
+    // 平台管理员「以成员身份查看」：透传 X-View-As（后端校验权限）
+    const viewAs = window.App?.state?.viewAs;
+    if (viewAs && viewAs.userId) headers['X-View-As'] = viewAs.userId;
     const tenantId = window.App?.state?.tenant?.id;
     if (tenantId) headers['X-Tenant-Id'] = tenantId;
 
@@ -227,6 +230,8 @@
     update: (id, body) => request(`/exams/${id}`, { method: 'PUT', body }),
     remove: (id) => request(`/exams/${id}`, { method: 'DELETE' }),
     import: (id, body) => request(`/exams/${id}/import`, { method: 'POST', body }),
+    /** 填写/清除年级均分（可管理该考试者）；avgs: {班级名: number|null}，null/空串=清空该项 */
+    setGradeAvgs: (id, avgs) => request(`/exams/${id}/grade-avgs`, { method: 'PUT', body: { avgs } }),
     /** 成绩分析；传 classId 时 overview/分数段/题型/班内排名仅统计该班（各班均分对比始终为全校） */
     analysis: (id, classId) => request(`/exams/${id}/analysis`, { query: classId ? { class_id: classId } : {} }),
     /** 单独登记/修改某生总分（班主任/任课老师可登记本班，年段考可登记本班学生） */
@@ -270,6 +275,9 @@
      */
     upload(file, onProgress) {
       const headers = { 'X-File-Name': encodeURIComponent(file.name || 'file') };
+    // 上传同样遵循「以成员身份查看」
+    const viewAsUp = window.App?.state?.viewAs;
+    if (viewAsUp && viewAsUp.userId) headers['X-View-As'] = viewAsUp.userId;
       const tenantId = window.App?.state?.tenant?.id;
       if (tenantId) headers['X-Tenant-Id'] = tenantId;
       return new Promise((resolve, reject) => {
@@ -357,6 +365,8 @@
     updateSettings: (body) => request('/admin/settings', { method: 'PUT', body }),
     /** 跨租户数据迁入（§迁移指南）：body { target_tenant_id? | new_tenant_name?, backup } */
     migrate: (body) => request('/admin/migrate', { method: 'POST', body }),
+    /** 平台管理员物理删除任意空间（不可恢复，含全部数据与文件） */
+    deleteTenant: (id) => request(`/admin/tenants/${id}`, { method: 'DELETE' }),
   };
 
   window.api = { auth, tenants, gradeGroups, classes, students, lessons, schedules, assignments, dictations, exams, recycle, dashboard, ai, files, import: imp, export: exp, archive, graduated, trials, admin };

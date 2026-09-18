@@ -17,7 +17,7 @@
 
 import { now } from './db.js';
 
-/** TRIAL_DB 内按 tenant_id 删除的表，顺序先子后父（业务表逆序 + 归属/扩展表） */
+/** 按 tenant_id 删除的表，顺序先子后父（业务表逆序 + 归属/扩展表） */
 const PURGE_TABLES = [
   'exam_subscores',
   'exam_scores',
@@ -42,18 +42,22 @@ const PURGE_TABLES = [
   'ai_generations',
   'audit_logs',
   'year_archives',
+  'recycle_bin',
 ];
 
 /** R2 list 单次上限；delete 单次最多 1000 个 key */
 const R2_PAGE = 1000;
 
 /**
- * 删除单个 trial 租户的全部数据（files 需先查 key 再删 R2 再删元数据；tenants 最后删）。
- * 全部操作只在 TRIAL_DB 内进行。
+ * 物理删除单个租户的全部数据（files 需先查 key 再删 R2 再删元数据；tenants 最后删）。
+ * 通用：trial 到期清理（TRIAL_DB）与平台管理员手动删除空间（主库/TRIAL_DB）共用。
+ * @param {object} env Worker env（FILES 可选）
+ * @param {object} db 租户所在库句柄
+ * @param {string} tenantId 租户 id
  */
-async function purgeTrialTenant(env, trialDb, tenantId) {
+export async function purgeTenantData(env, db, tenantId) {
   // files：先查 file_key 列表
-  const fileRows = await trialDb
+  const fileRows = await db
     .prepare('SELECT file_key FROM files WHERE tenant_id = ?')
     .bind(tenantId)
     .all();
@@ -63,7 +67,7 @@ async function purgeTrialTenant(env, trialDb, tenantId) {
     const keys = fileRows.results.map((r) => r.file_key).filter(Boolean);
     for (let i = 0; i < keys.length; i += R2_PAGE) {
       await env.FILES.delete(keys.slice(i, i + R2_PAGE)).catch((err) => {
-        console.warn(`[purge-trials] 删除 R2 对象失败（tenant=${tenantId}）:`, err);
+        console.warn(`[purge-tenant] 删除 R2 对象失败（tenant=${tenantId}）:`, err);
       });
     }
     // 兜底：按前缀清理 list 到的残余对象（如元数据缺失的行）
@@ -74,7 +78,7 @@ async function purgeTrialTenant(env, trialDb, tenantId) {
       const objs = listed.objects.map((o) => o.key);
       if (objs.length > 0) {
         await env.FILES.delete(objs).catch((err) => {
-          console.warn(`[purge-trials] 按前缀删除 R2 对象失败（tenant=${tenantId}）:`, err);
+          console.warn(`[purge-tenant] 按前缀删除 R2 对象失败（tenant=${tenantId}）:`, err);
         });
       }
       cursor = listed.truncated ? listed.cursor : undefined;
@@ -82,11 +86,11 @@ async function purgeTrialTenant(env, trialDb, tenantId) {
   }
 
   const statements = PURGE_TABLES.map((table) =>
-    trialDb.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).bind(tenantId)
+    db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).bind(tenantId)
   );
-  statements.push(trialDb.prepare('DELETE FROM files WHERE tenant_id = ?').bind(tenantId));
-  statements.push(trialDb.prepare('DELETE FROM tenants WHERE id = ?').bind(tenantId));
-  await trialDb.batch(statements);
+  statements.push(db.prepare('DELETE FROM files WHERE tenant_id = ?').bind(tenantId));
+  statements.push(db.prepare('DELETE FROM tenants WHERE id = ?').bind(tenantId));
+  await db.batch(statements);
 }
 
 /**
@@ -110,7 +114,7 @@ export async function purgeExpiredTrials(env) {
   const failed = [];
   for (const tenant of expired.results) {
     try {
-      await purgeTrialTenant(env, trialDb, tenant.id);
+      await purgeTenantData(env, trialDb, tenant.id);
       purged.push(tenant.name);
       console.log(`[purge-trials] 已删除试用空间: ${tenant.name} (${tenant.id})`);
     } catch (err) {
