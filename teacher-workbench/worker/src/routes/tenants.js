@@ -106,31 +106,32 @@ async function requireMembership(db, userId, tenantId) {
 app.get('/', requireAuth, async (c) => {
   const user = c.get('user');
   const dbs = c.env.TRIAL_DB ? [c.env.DB, c.env.TRIAL_DB] : [c.env.DB];
-  const tenants = [];
-  for (const db of dbs) {
-    const rows = await db
-      .prepare(
-        `SELECT t.id, t.name, t.slug, t.type, t.status, t.plan, t.expires_at, m.role
-           FROM memberships m JOIN tenants t ON t.id = m.tenant_id
-          WHERE m.user_id = ? AND m.status = 'active'
-          ORDER BY m.created_at`
-      )
-      .bind(user.id)
-      .all();
-    for (const r of rows.results) {
-      tenants.push({
-        id: r.id,
-        name: r.name,
-        slug: r.slug,
-        type: r.type,
-        role: r.role,
-        plan: r.plan,
-        expiresAt: r.expires_at,
-        expired: !!r.expires_at && r.expires_at <= now(),
-        quota: await getQuotaUsage(db, r.id), // 用量按所在库统计
-      });
-    }
-  }
+  // 轻量列表：不带 quota（设置页另有 GET /:id 返回 usage；切换器/徽标只需元信息）
+  const perDb = await Promise.all(
+    dbs.map((db) =>
+      db
+        .prepare(
+          `SELECT t.id, t.name, t.slug, t.type, t.status, t.plan, t.expires_at, m.role
+             FROM memberships m JOIN tenants t ON t.id = m.tenant_id
+            WHERE m.user_id = ? AND m.status = 'active'
+            ORDER BY m.created_at`
+        )
+        .bind(user.id)
+        .all()
+    )
+  );
+  const tenants = perDb.flatMap((r) =>
+    r.results.map((row) => ({
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      type: row.type,
+      role: row.role,
+      plan: row.plan,
+      expiresAt: row.expires_at,
+      expired: !!row.expires_at && row.expires_at <= now(),
+    }))
+  );
   return c.json({ success: true, data: { tenants } });
 });
 

@@ -10,7 +10,7 @@
 import { Hono } from 'hono';
 import { ApiError, newId, now } from '../db.js';
 import { requireAuth, audit } from '../middleware.js';
-import { getQuotaUsage, PERSONAL_DEFAULTS } from '../quota.js';
+import { PERSONAL_DEFAULTS } from '../quota.js';
 import { previousAcademicYear, archiveTenantYear, archiveAllTenants } from '../archive.js';
 import { rolloverTenants } from '../rollover.js';
 import { purgeExpiredTrials, purgeTenantData } from '../trial.js';
@@ -37,11 +37,8 @@ app.get('/tenants', requireAuth, async (c) => {
          FROM tenants t ORDER BY t.created_at`
     )
     .all();
-  const tenants = [];
-  for (const row of rows.results) {
-    tenants.push({ ...row, expired: !!row.expires_at && row.expires_at <= now(), usage: await getQuotaUsage(db, row.id) });
-  }
-  return c.json({ success: true, data: { tenants, operator: user.email } });
+  // 轻量列表：不带各租户 usage（全库逐租户算用量是登录慢的主因之一；配额在「配额/到期」弹窗按需单查）
+  return c.json({ success: true, data: { tenants: rows.results.map((row) => ({ ...row, expired: !!row.expires_at && row.expires_at <= now() })), operator: user.email } });
 });
 
 /**
@@ -499,6 +496,20 @@ app.post('/migrate', requireAuth, async (c) => {
     const tenant = await db.prepare('SELECT id, name FROM tenants WHERE id = ?').bind(tenantId).first();
     if (!tenant) throw new ApiError('NOT_FOUND', '目标租户不存在');
     tenantName = tenant.name;
+    // 迁入者可能不是该空间成员（平台管理员往他人空间迁入）：补 admin 成员身份，
+    // 避免「导入成功但进入空间每个页面都 403」
+    const existing = await db
+      .prepare("SELECT id FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
+      .bind(tenantId, user.id)
+      .first();
+    if (!existing) {
+      await db
+        .prepare(
+          "INSERT INTO memberships (id, tenant_id, user_id, role, status, created_at) VALUES (?, ?, ?, 'admin', 'active', ?)"
+        )
+        .bind(newId(), tenantId, user.id, ts)
+        .run();
+    }
   }
 
   // 表顺序：与导出一致（§51，与 import/restore 的 TABLES 相同）；删除时逆序执行（子表 → 父表）

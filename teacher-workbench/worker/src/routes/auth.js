@@ -192,35 +192,37 @@ app.post('/logout', async (c) => {
  * （试用租户整体在 TRIAL_DB；users/sessions 等全局表只在主库）。
  * 响应 data: { user, tenants: [{ id, name, type, role, plan, expiresAt, expired, quota: {...} }] }
  */
-app.get('/me', requireAuth, async (c) => {
+  app.get('/me', requireAuth, async (c) => {
   const user = c.get('user');
   const dbs = c.env.TRIAL_DB ? [c.env.DB, c.env.TRIAL_DB] : [c.env.DB];
-  const tenants = [];
-  for (const db of dbs) {
-    const rows = await db
-      .prepare(
-        `SELECT t.id, t.name, t.slug, t.type, t.status, t.plan, t.expires_at, m.role, m.status AS membership_status
-           FROM memberships m JOIN tenants t ON t.id = m.tenant_id
-          WHERE m.user_id = ? AND m.status = 'active' AND t.status = 'active'
-          ORDER BY m.created_at`
-      )
-      .bind(user.id)
-      .all();
-
-    for (const row of rows.results) {
-      tenants.push({
-        id: row.id,
-        name: row.name,
-        slug: row.slug,
-        type: row.type,
-        role: row.role,
-        plan: row.plan,
-        expiresAt: row.expires_at,
-        expired: !!row.expires_at && row.expires_at <= now(),
-        quota: await getQuotaUsage(db, row.id), // 用量按所在库统计
-      });
-    }
-  }
+  // 先并行收集各库成员行，再并行计算各租户用量（登录路径性能关键，避免串行 await）
+  const perDb = await Promise.all(
+    dbs.map(async (db) => {
+      const rows = await db
+        .prepare(
+          `SELECT t.id, t.name, t.slug, t.type, t.status, t.plan, t.expires_at, m.role, m.status AS membership_status
+             FROM memberships m JOIN tenants t ON t.id = m.tenant_id
+            WHERE m.user_id = ? AND m.status = 'active' AND t.status = 'active'
+            ORDER BY m.created_at`
+        )
+        .bind(user.id)
+        .all();
+      return rows.results.map((row) => ({ row, db }));
+    })
+  );
+  const tenants = await Promise.all(
+    perDb.flat().map(async ({ row, db }) => ({
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      type: row.type,
+      role: row.role,
+      plan: row.plan,
+      expiresAt: row.expires_at,
+      expired: !!row.expires_at && row.expires_at <= now(),
+      quota: await getQuotaUsage(db, row.id), // 用量按所在库统计
+    }))
+  );
 
   return c.json({
     success: true,

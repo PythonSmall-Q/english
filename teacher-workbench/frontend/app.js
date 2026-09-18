@@ -829,9 +829,8 @@ window.App = {
       const personal = App.state.tenants.find((t) => t.type === 'personal');
       App.state.tenant = personal || App.state.tenants[0] || null;
       App.state.quota = App.state.tenant?.quota || null;
-      await App.loadAcademicYears();
-      // 合并 plan/expires_at（试用徽标用；auth/me 不返回 plan），失败静默
-      await App.syncTenantPlans();
+      // 学年列表与空间元信息并行加载，缩短登录路径
+      await Promise.all([App.loadAcademicYears(), App.syncTenantPlans()]);
       App.enterApp();
       // 学年归档提醒（§63）：进入工作台后异步检查，9/15–9/30 每日一次
       App.checkArchiveReminder();

@@ -207,29 +207,26 @@ export async function getQuotaUsage(db, tenantId) {
     .prepare('SELECT * FROM tenant_quotas WHERE tenant_id = ?')
     .bind(tenantId)
     .first();
+  // 所有 COUNT 一次 batch 发出（D1 单次往返），避免逐资源串行查询拖慢登录
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  const entries = Object.entries(RESOURCE_MAP);
+  const counted = await db.batch(
+    entries.map(([resource, mapping]) =>
+      resource === 'ai'
+        ? db
+            .prepare(
+              'SELECT COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ?'
+            )
+            .bind(tenantId, monthPrefix)
+        : db.prepare(`SELECT COUNT(*) AS n FROM ${mapping.table} WHERE tenant_id = ?`).bind(tenantId)
+    )
+  );
   const result = {};
-  for (const [resource, mapping] of Object.entries(RESOURCE_MAP)) {
+  entries.forEach(([resource, mapping], i) => {
     const quota = quotaRow ? quotaRow[mapping.quotaColumn] ?? null : null;
-    let used = 0;
-    if (resource === 'ai') {
-      const monthPrefix = new Date().toISOString().slice(0, 7);
-      used = (
-        await db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ?"
-          )
-          .bind(tenantId, monthPrefix)
-          .first()
-      ).n;
-    } else {
-      used = (
-        await db
-          .prepare(`SELECT COUNT(*) AS n FROM ${mapping.table} WHERE tenant_id = ?`)
-          .bind(tenantId)
-          .first()
-      ).n;
-    }
+    const rows = counted[i] && counted[i].results;
+    const used = rows && rows.length ? rows[0].n : 0;
     result[resource] = { quota, used };
-  }
+  });
   return result;
 }

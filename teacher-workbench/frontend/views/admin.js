@@ -314,6 +314,12 @@ function bindMigrate(el) {
         </div>`;
       App.toast(`迁入完成，共 ${total} 条`);
       await renderTenants();
+      // 若迁入的是已有空间且操作人被补为成员：刷新顶栏空间缓存，避免切换器仍按「管理」空间处理
+      if (window.App?.state) {
+        App.state.adminTenants = null;
+        App._adminTenantsLoading = false;
+        App.updateTenantSwitcher?.();
+      }
     } catch (e) {
       App.toast(e.message || '迁入失败');
     } finally {
