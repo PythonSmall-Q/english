@@ -612,4 +612,67 @@ app.delete('/tenants/:id', requireAuth, async (c) => {
   return c.json({ success: true, data: { deleted: true, id: tenantId, name: tenant.name } });
 });
 
+/**
+ * GET /api/v1/admin/ai-settings — 平台 AI 接口配置（平台管理员；密钥只回掩码）
+ */
+app.get('/ai-settings', requireAuth, async (c) => {
+  requirePlatformAdmin(c);
+  const row = await c.env.DB.prepare("SELECT value FROM platform_settings WHERE key = 'ai_provider'").first();
+  let cfg = null;
+  try {
+    cfg = row && row.value ? JSON.parse(row.value) : null;
+  } catch {
+    cfg = null;
+  }
+  return c.json({
+    success: true,
+    data: {
+      configured: !!(cfg && cfg.apiKey),
+      baseUrl: cfg?.baseUrl || '',
+      model: cfg?.model || '',
+      apiKeyMasked: cfg?.apiKey ? maskKey(cfg.apiKey) : '',
+    },
+  });
+});
+
+/**
+ * PUT /api/v1/admin/ai-settings — 设置/清除平台 AI 接口（平台管理员）
+ * body: { baseUrl?, apiKey?, model? }；apiKey 传空字符串 = 清除平台配置
+ * 语义：未自配接口的成员走平台接口并占用其 AI 配额；自配接口的成员不计配额。
+ */
+app.put('/ai-settings', requireAuth, async (c) => {
+  const user = requirePlatformAdmin(c);
+  const body = await c.req.json().catch(() => ({}));
+  const baseUrl = String(body.baseUrl || '').trim().replace(/\/$/, '');
+  const model = String(body.model || '').trim();
+  const apiKey = String(body.apiKey || '').trim();
+
+  if (apiKey) {
+    if (baseUrl && !/^https?:\/\//.test(baseUrl)) {
+      throw new ApiError('VALIDATION_ERROR', '接口地址必须是 http(s) URL');
+    }
+    const value = JSON.stringify({ baseUrl: baseUrl || 'https://api.openai.com/v1', apiKey, model: model || 'gpt-4o-mini' });
+    await c.env.DB
+      .prepare(
+        `INSERT INTO platform_settings (key, value, updated_at) VALUES ('ai_provider', ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+      )
+      .bind(value, now())
+      .run();
+  } else {
+    await c.env.DB.prepare("DELETE FROM platform_settings WHERE key = 'ai_provider'").run();
+  }
+  console.log(`[admin] 平台 AI 接口已${apiKey ? '更新' : '清除'}（操作者 ${user.email}）`);
+  return c.json({
+    success: true,
+    data: { configured: !!apiKey, baseUrl, model, apiKeyMasked: apiKey ? maskKey(apiKey) : '' },
+  });
+});
+
+/** 密钥掩码：只暴露末 4 位 */
+function maskKey(key) {
+  const k = String(key || '');
+  return k ? `****${k.slice(-4)}` : '';
+}
+
 export default app;

@@ -181,6 +181,9 @@ App.registerView('settings', {
       <div class="card">
         <div class="card-title">AI 助手设置</div>
         <div id="ai-settings-status" class="muted" style="margin-bottom:10px">加载中…</div>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">
+          不配置时自动使用<b>平台接口</b>（调用计入本空间 AI 月度配额）；配置自己的接口后调用<b>不计配额</b>。
+        </div>
         <div class="form-row">
           <div>
             <label class="form-label">API 端点</label>
@@ -225,9 +228,10 @@ async function bindAiSettings() {
     return;
   }
   const statusText = {
-    user: `当前使用自定义模型（密钥 ${current.keyMasked}）`,
-    env: '当前使用平台预置模型',
-    mock: '当前使用内置演示回复（未配置密钥）',
+    user: `当前使用自定义模型（密钥 ${current.keyMasked}，不计入空间配额）`,
+    platform: '当前使用平台接口（计入空间 AI 配额）',
+    env: '当前使用平台预置模型（计入空间 AI 配额）',
+    mock: '当前使用内置演示回复（未配置密钥，计入配额）',
   };
   statusEl.textContent = statusText[current.source] || statusText.mock;
   document.getElementById('ai-base-url').value = current.baseUrl || '';
@@ -249,7 +253,12 @@ async function bindAiSettings() {
       const data = await api.ai.updateSettings({ baseUrl, model, apiKey });
       App.toast('AI 配置已保存');
       current = data;
-      statusEl.textContent = (data.source === 'user' ? `当前使用自定义模型（密钥 ${data.keyMasked}）` : '当前使用内置演示回复（未配置密钥）');
+      statusEl.textContent =
+        data.source === 'user'
+          ? `当前使用自定义模型（密钥 ${data.keyMasked}，不计入空间配额）`
+          : data.source === 'platform'
+            ? '当前使用平台接口（计入空间 AI 配额）'
+            : '当前使用内置演示回复（未配置密钥，计入配额）';
       document.getElementById('ai-api-key').value = '';
       document.getElementById('ai-api-key').placeholder = `已保存（${data.keyMasked}），留空则保持不变`;
     } catch (err) {

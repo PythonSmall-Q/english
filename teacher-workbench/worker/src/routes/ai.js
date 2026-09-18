@@ -44,6 +44,21 @@ async function getUserAiSettings(db, userId) {
     .first();
 }
 
+/**
+ * 读取平台级 AI 接口配置（platform_settings.ai_provider，JSON {baseUrl, apiKey, model}）
+ * 未配置返回 null
+ */
+async function getPlatformAiConfig(mainDb) {
+  const row = await mainDb.prepare("SELECT value FROM platform_settings WHERE key = 'ai_provider'").first();
+  if (!row || !row.value) return null;
+  try {
+    const cfg = JSON.parse(row.value);
+    return cfg && cfg.apiKey ? cfg : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 密钥掩码：只暴露末 4 位 */
 function maskKey(key) {
   const k = String(key || '');
@@ -60,29 +75,29 @@ function mockGenerate(type, prompt) {
         `一、选择题\n1. He suggested that we ___ the meeting to Friday. (A. put off  B. put on  C. put up)\n` +
         `二、填空题\n1. She is looking forward to ___ (hear) from her pen pal.\n` +
         `三、翻译题\n1. 只有通过不断练习，我们才能提高英语口语。\n\n参考答案：一、1.A  二、1.hearing  三、1. Only by practicing constantly can we improve our spoken English.\n` +
-        `（当前为本地模拟生成，配置 AI_API_KEY 后将调用真实模型）`
+        `（当前为本地模拟生成，配置平台或个人的 AI 接口后将调用真实模型）`
       );
     case 'lesson_plan':
       return (
         `【教案 · Mock】课题：${key}\n\n一、教学目标\n1. 知识目标：掌握本课核心词汇与句型。\n2. 能力目标：提升阅读理解与口头表达能力。\n` +
         `二、教学重难点\n重点：核心词汇运用；难点：长难句理解。\n三、教学过程\n1. 导入（5 分钟）2. 新授（20 分钟）3. 操练（15 分钟）4. 总结与作业（5 分钟）\n` +
-        `四、作业布置\n完成课后练习并背诵重点段落。\n（当前为本地模拟生成，配置 AI_API_KEY 后将调用真实模型）`
+        `四、作业布置\n完成课后练习并背诵重点段落。\n（当前为本地模拟生成，配置平台或个人的 AI 接口后将调用真实模型）`
       );
     case 'essay_feedback':
       return (
         `【作文批改 · Mock】\n\n原文要点：${key}\n\n一、主要问题\n1. 时态不一致：叙事部分应统一使用过去时。\n2. 中式表达：注意主谓一致与冠词使用。\n` +
         `二、修改建议\n建议多用连接词（however / therefore / in addition）增强连贯性。\n三、评定等级：B（良好）\n总评：结构完整、内容充实，注意语法细节即可更上一层楼。\n` +
-        `（当前为本地模拟生成，配置 AI_API_KEY 后将调用真实模型）`
+        `（当前为本地模拟生成，配置平台或个人的 AI 接口后将调用真实模型）`
       );
     case 'analysis':
       return (
         `【学情解读 · Mock】\n\n数据：${key}\n\n一、整体情况\n班级均分稳定，及格率良好。\n二、优势题型\n阅读与听力整体表现较好。\n` +
         `三、薄弱题型\n完形填空与书面表达失分集中，需专项训练。\n四、教学建议\n1. 对薄弱学生分层布置基础巩固任务；2. 每周安排一次限时完形训练。\n` +
-        `（当前为本地模拟生成，配置 AI_API_KEY 后将调用真实模型）`
+        `（当前为本地模拟生成，配置平台或个人的 AI 接口后将调用真实模型）`
       );
     case 'translate':
       return (
-        `【中英互译 · Mock】\n\n原文：${key}\n\n译文：这是一条本地模拟的翻译结果。配置 AI_API_KEY 后将调用真实模型提供准确译文。\n` +
+        `【中英互译 · Mock】\n\n原文：${key}\n\n译文：这是一条本地模拟的翻译结果。配置平台或个人的 AI 接口后将调用真实模型提供准确译文。\n` +
         `参考：Knowledge is power. 知识就是力量。`
       );
     default:
@@ -109,18 +124,30 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
   }
   if (!prompt) throw new ApiError('VALIDATION_ERROR', 'prompt 不能为空');
 
-  // §43：写操作前先校验 AI 月度配额（租户级，按所在库统计）
-  await checkQuota(db, tenantId, 'ai', user.id);
+  // Provider 优先级：用户自配（主库 user_ai_settings 表，不计配额）>
+  //   平台接口（platform_settings，平台管理员配置，计配额）> 环境变量 AI_API_KEY（计配额）> 内置 mock（计配额）
+  const userSettings = await getUserAiSettings(mainDb, user.id);
+  const platformCfg = userSettings?.api_key ? null : await getPlatformAiConfig(mainDb);
+  const apiKey = userSettings?.api_key || platformCfg?.apiKey || c.env.AI_API_KEY || '';
+  // billed=1：走平台侧（平台接口/环境变量/mock），计入 AI 月度配额；billed=0：用户自配接口，不计配额
+  const billed = userSettings?.api_key ? 0 : 1;
+
+  // §43：只有走平台侧的调用才校验/占用 AI 月度配额（租户级，按所在库统计）
+  if (billed) {
+    await checkQuota(db, tenantId, 'ai', user.id);
+  }
 
   let result;
   let mock = false;
-  // Provider 优先级：用户自配（主库 user_ai_settings 表）> 环境变量 > 内置 mock
-  const userSettings = await getUserAiSettings(mainDb, user.id);
-  const apiKey = userSettings?.api_key || c.env.AI_API_KEY || '';
   if (apiKey) {
     // 真实 Provider：Workers 代理调用（§42），30 秒超时，非 2xx 视为内部错误
-    const baseUrl = (userSettings?.base_url || c.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
-    const model = userSettings?.model || c.env.AI_MODEL || 'gpt-4o-mini';
+    const baseUrl = (
+      userSettings?.base_url ||
+      platformCfg?.baseUrl ||
+      c.env.AI_BASE_URL ||
+      'https://api.openai.com/v1'
+    ).replace(/\/$/, '');
+    const model = userSettings?.model || platformCfg?.model || c.env.AI_MODEL || 'gpt-4o-mini';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
     try {
@@ -157,10 +184,10 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
   const id = newId();
   await db
     .prepare(
-      `INSERT INTO ai_generations (id, tenant_id, user_id, type, prompt, result, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO ai_generations (id, tenant_id, user_id, type, prompt, result, billed, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(id, tenantId, user.id, type, prompt, result, now())
+    .bind(id, tenantId, user.id, type, prompt, result, billed, now())
     .run();
 
   return c.json({ success: true, data: { id, type, result, mock } }, 201);
@@ -191,6 +218,8 @@ app.get('/settings', requireAuth, async (c) => {
   const db = c.env.DB;
   const user = c.get('user');
   const row = await getUserAiSettings(db, user.id);
+  // 平台接口（platform_settings.ai_provider）也视为平台侧来源
+  const platformCfg = await getPlatformAiConfig(db);
   return c.json({
     success: true,
     data: {
@@ -198,7 +227,7 @@ app.get('/settings', requireAuth, async (c) => {
       model: row?.model || '',
       hasKey: !!row?.api_key,
       keyMasked: maskKey(row?.api_key),
-      source: row?.api_key ? 'user' : c.env.AI_API_KEY ? 'env' : 'mock',
+      source: row?.api_key ? 'user' : platformCfg || c.env.AI_API_KEY ? 'platform' : 'mock',
     },
   });
 });

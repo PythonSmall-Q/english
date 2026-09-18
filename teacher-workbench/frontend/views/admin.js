@@ -123,6 +123,33 @@ App.registerView('admin', {
         </div>
       </div>
 
+      <!-- 平台 AI 接口：未自配接口的成员默认走平台接口并计配额 -->
+      <div class="card">
+        <div class="card-title">平台 AI 接口</div>
+        <div class="muted" style="font-size:12.5px;margin-bottom:10px">
+          为全平台配置默认 AI 接口：成员未在「设置 → AI 助手设置」配置自己的接口时，调用本平台接口并<b>计入其空间 AI 月度配额</b>；自配接口的成员<b>不计配额</b>。留空密钥并保存 = 清除平台配置（回退到内置演示）。
+        </div>
+        <div class="form-row">
+          <div>
+            <label class="form-label">API 端点</label>
+            <input class="form-input" id="pai-base-url" placeholder="https://api.openai.com/v1">
+          </div>
+          <div>
+            <label class="form-label">模型</label>
+            <input class="form-input" id="pai-model" placeholder="gpt-4o-mini">
+          </div>
+          <div>
+            <label class="form-label">API 密钥</label>
+            <input class="form-input" id="pai-api-key" type="password" placeholder="未配置">
+          </div>
+        </div>
+        <div id="pai-status" class="muted" style="font-size:12.5px;margin:6px 0 10px">加载中…</div>
+        <div class="modal-actions">
+          <button class="btn" id="pai-clear" type="button">清除平台配置</button>
+          <button class="btn btn-primary" id="pai-save" type="button">保存</button>
+        </div>
+      </div>
+
       <!-- 租户列表 -->
       <div class="card">
         <div class="card-title">租户列表</div>
@@ -138,9 +165,72 @@ App.registerView('admin', {
     bindCreate(el);
     bindMigrate(el);
     await renderPlatformSettings();
+    await bindPlatformAi();
     await Promise.all([renderTenants(), renderUsers()]);
   },
 });
+
+/** 平台 AI 接口：加载/保存/清除（未自配接口的成员走平台接口并计配额） */
+async function bindPlatformAi() {
+  const statusEl = document.getElementById('pai-status');
+  const keyInput = document.getElementById('pai-api-key');
+  let current = null;
+  try {
+    current = await api.admin.getAiSettings();
+  } catch (err) {
+    statusEl.textContent = `加载失败：${(err && err.message) || '未知错误'}`;
+    return;
+  }
+  document.getElementById('pai-base-url').value = current.baseUrl || '';
+  document.getElementById('pai-model').value = current.model || '';
+  statusEl.textContent = current.configured
+    ? `已配置（密钥 ${current.apiKeyMasked}），重新输入可更换；留空保持不变`
+    : '未配置：成员将使用内置演示回复（或环境变量 AI_API_KEY）';
+  if (current.configured) keyInput.placeholder = `已配置（${current.apiKeyMasked}），留空保持不变`;
+
+  document.getElementById('pai-save').addEventListener('click', async () => {
+    const baseUrl = document.getElementById('pai-base-url').value.trim();
+    const model = document.getElementById('pai-model').value.trim();
+    const apiKey = keyInput.value.trim();
+    if (!apiKey && !(current && current.configured)) {
+      App.toast('请填写 API 密钥（或点「清除平台配置」）');
+      return;
+    }
+    const btn = document.getElementById('pai-save');
+    btn.disabled = true;
+    try {
+      const data = await api.admin.updateAiSettings({ baseUrl, model, apiKey });
+      current = { configured: data.configured, baseUrl: data.baseUrl, model: data.model, apiKeyMasked: data.apiKeyMasked };
+      statusEl.textContent = data.configured
+        ? `已配置（密钥 ${data.apiKeyMasked}），重新输入可更换；留空保持不变`
+        : '已清除平台配置';
+      keyInput.value = '';
+      keyInput.placeholder = data.configured ? `已配置（${data.apiKeyMasked}），留空保持不变` : '未配置';
+      App.toast(data.configured ? '平台 AI 接口已保存' : '已清除');
+    } catch (err) {
+      App.toast((err && err.message) || '保存失败');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('pai-clear').addEventListener('click', async () => {
+    const ok = await App.confirmDialog('清除平台 AI 接口配置？未自配接口的成员将回退到内置演示回复。');
+    if (!ok) return;
+    try {
+      await api.admin.updateAiSettings({ baseUrl: '', model: '', apiKey: '' });
+      current = { configured: false };
+      document.getElementById('pai-base-url').value = '';
+      document.getElementById('pai-model').value = '';
+      keyInput.value = '';
+      keyInput.placeholder = '未配置';
+      statusEl.textContent = '未配置：成员将使用内置演示回复（或环境变量 AI_API_KEY）';
+      App.toast('已清除平台配置');
+    } catch (err) {
+      App.toast((err && err.message) || '清除失败');
+    }
+  });
+}
 
 /** 平台设置：新建账户是否自动创建个人空间 */
 async function renderPlatformSettings() {

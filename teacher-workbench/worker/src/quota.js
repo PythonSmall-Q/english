@@ -107,7 +107,7 @@ async function countUserUsage(db, tenantId, userId, resource) {
       await db
         .prepare(
           `SELECT COUNT(*) AS n FROM ${mapping.table}
-             WHERE tenant_id = ? AND ${mapping.column} = ? AND substr(created_at, 1, 7) = ?`
+             WHERE tenant_id = ? AND ${mapping.column} = ? AND substr(created_at, 1, 7) = ? AND billed = 1`
         )
         .bind(tenantId, userId, monthPrefix)
         .first()
@@ -173,12 +173,12 @@ export async function checkQuota(db, tenantId, resource, userId = null) {
 
   let used;
   if (resource === 'ai') {
-    // 自然月统计（ISO 时间串前 7 位即 YYYY-MM，可正确比较）
+    // 自然月统计（ISO 时间串前 7 位即 YYYY-MM，可正确比较）；billed=1 才计入（自配接口不计）
     const monthPrefix = new Date().toISOString().slice(0, 7);
     used = (
       await db
         .prepare(
-          "SELECT COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ?"
+          "SELECT COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ? AND billed = 1"
         )
         .bind(tenantId, monthPrefix)
         .first()
@@ -215,7 +215,7 @@ export async function getQuotaUsage(db, tenantId) {
       resource === 'ai'
         ? db
             .prepare(
-              'SELECT COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ?'
+              'SELECT COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ? AND billed = 1'
             )
             .bind(tenantId, monthPrefix)
         : db.prepare(`SELECT COUNT(*) AS n FROM ${mapping.table} WHERE tenant_id = ?`).bind(tenantId)

@@ -365,6 +365,9 @@
     updateSettings: (body) => request('/admin/settings', { method: 'PUT', body }),
     /** 跨租户数据迁入（§迁移指南）：body { target_tenant_id? | new_tenant_name?, backup } */
     migrate: (body) => request('/admin/migrate', { method: 'POST', body }),
+    /** 平台 AI 接口配置（GET 密钥仅掩码；PUT body {baseUrl?, apiKey?, model?}，apiKey 空=清除） */
+    getAiSettings: () => request('/admin/ai-settings'),
+    updateAiSettings: (body) => request('/admin/ai-settings', { method: 'PUT', body }),
     /** 平台管理员物理删除任意空间（不可恢复，含全部数据与文件） */
     deleteTenant: (id) => request(`/admin/tenants/${id}`, { method: 'DELETE' }),
   };
