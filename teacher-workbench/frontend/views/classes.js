@@ -508,11 +508,13 @@ App.registerView('classes', {
       });
     });
 
-    // 备课组长 chips 的 ×：直接移除（无需确认）
+    // 备课组长 chips 的 ×：移除前确认
     el.querySelectorAll('[data-grp-rmpl]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const g = groups.find((x) => x.id === btn.dataset.grpRmpl);
         if (!g) return;
+        const leader = (g.prepLeaders || []).find((p) => p.userId === btn.dataset.uid);
+        if (!(await App.confirmDialog(`确定移除备课组长「${leader?.displayName || leader?.email || '该成员'}」吗？`))) return;
         try {
           await api.gradeGroups.removePrepLeader(g.id, btn.dataset.uid);
           g.prepLeaders = (g.prepLeaders || []).filter((p) => p.userId !== btn.dataset.uid);
@@ -595,11 +597,13 @@ App.registerView('classes', {
       });
     });
 
-    // 任课老师 chips 的 ×：直接移除（无需确认）
+    // 任课老师 chips 的 ×：移除前确认
     el.querySelectorAll('[data-cls-rmt]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const cls = classes.find((c) => c.id === btn.dataset.clsRmt);
         if (!cls) return;
+        const teacher = (cls.subjectTeachers || []).find((t) => t.userId === btn.dataset.uid);
+        if (!(await App.confirmDialog(`确定移除任课老师「${teacher?.displayName || teacher?.email || '该成员'}」吗？`))) return;
         try {
           await api.classes.removeTeacher(cls.id, btn.dataset.uid);
           cls.subjectTeachers = (cls.subjectTeachers || []).filter((t) => t.userId !== btn.dataset.uid);
@@ -1022,6 +1026,8 @@ App.registerView('classes', {
           };
           modal.querySelectorAll('[data-rmt]').forEach((btn) => {
             btn.onclick = async () => {
+              const teacher = (cls.subjectTeachers || []).find((t) => t.userId === btn.dataset.rmt);
+              if (!(await App.confirmDialog(`确定移除任课老师「${teacher?.displayName || teacher?.email || '该成员'}」吗？`))) return;
               try {
                 await api.classes.removeTeacher(cls.id, btn.dataset.rmt);
                 cls.subjectTeachers = (cls.subjectTeachers || []).filter((t) => t.userId !== btn.dataset.rmt);
