@@ -151,7 +151,7 @@ for (const row of source.wb_dictations) {
   for (const name of names) {
     const studentId = studentIdFor(name);
     if (!studentId) continue;
-    const retest = Object.prototype.hasOwnProperty.call(row.redict || {}, name);
+    const retest = row.marks?.[name] !== true || Object.prototype.hasOwnProperty.call(row.redict || {}, name);
     dictationResults.push({
       id: `${row.id}-${studentId}`,
       tenant_id: tenantId,

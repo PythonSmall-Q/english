@@ -13,7 +13,7 @@
 (function () {
   // ===== 模块内样式（自包含，类名前缀 asg-）=====
   const CSS = `
-    .asg-cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+    .asg-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 620px), 1fr)); gap: 16px; align-items: start; }
     .asg-class-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
     .asg-class-count { color: var(--text-muted); font-size: 12px; }
     .asg-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
@@ -184,8 +184,20 @@
 
   // ===== 弹窗：新建作业 =====
 
-  function openCreate() {
+  async function openCreate() {
     const classOptions = classes.map((c) => `<option value="${App.esc(c.id)}">${App.esc(c.name)}</option>`).join('');
+    let students = [];
+    try {
+      students = (await api.students.list()).students || [];
+    } catch (err) {
+      App.toast(errMsg(err, '学生名单加载失败'));
+      return;
+    }
+    const studentsByClass = new Map();
+    students.filter((s) => !s.exempt).forEach((s) => {
+      if (!studentsByClass.has(s.class_id)) studentsByClass.set(s.class_id, []);
+      studentsByClass.get(s.class_id).push(s);
+    });
     App.modal(
       '新建作业',
       `
@@ -197,18 +209,46 @@
         <textarea id="asg-c-content" class="form-input" placeholder="作业内容（可选）"></textarea>
         <label class="form-label">截止时间</label>
         <input id="asg-c-deadline" class="form-input" type="datetime-local">
+        <label class="form-label">提交范围</label>
+        <label><input type="radio" name="asg-c-target-mode" value="all" checked> 全班学生</label>
+        <label style="display:block;margin-top:6px"><input type="radio" name="asg-c-target-mode" value="selected"> 指定部分学生</label>
+        <div id="asg-c-target-list" class="asg-check-list" style="display:none;margin-top:8px;max-height:220px"></div>
         <div class="modal-actions">
           <button class="btn" id="asg-c-cancel" type="button">取消</button>
           <button class="btn btn-primary" id="asg-c-save" type="button">创建</button>
         </div>`,
       () => {
+        const classSelect = document.getElementById('asg-c-class');
+        const targetList = document.getElementById('asg-c-target-list');
+        const renderTargetList = () => {
+          const list = (studentsByClass.get(classSelect.value) || []).slice().sort((a, b) => String(a.student_no || '').localeCompare(String(b.student_no || '')));
+          targetList.innerHTML = list.length
+            ? checkListHtml(list.map((s) => ({ studentId: s.id, studentNo: s.student_no, name: s.name })), () => true)
+            : '<div class="muted">该班暂无可选学生</div>';
+        };
+        renderTargetList();
+        classSelect.onchange = renderTargetList;
+        document.querySelectorAll('input[name=asg-c-target-mode]').forEach((radio) => {
+          radio.onchange = () => {
+            targetList.style.display = radio.checked && radio.value === 'selected' ? '' : 'none';
+          };
+        });
         document.getElementById('asg-c-cancel').onclick = App.closeModal;
         document.getElementById('asg-c-save').onclick = async () => {
+          const selectedMode = document.querySelector('input[name=asg-c-target-mode]:checked').value;
+          const targetIds = selectedMode === 'selected'
+            ? [...targetList.querySelectorAll('input[data-sid]:checked')].map((cb) => cb.dataset.sid)
+            : null;
+          if (selectedMode === 'selected' && !targetIds.length) {
+            App.toast('请至少选择一名学生');
+            return;
+          }
           const body = {
             class_id: document.getElementById('asg-c-class').value,
             title: document.getElementById('asg-c-title').value.trim(),
             content: document.getElementById('asg-c-content').value.trim(),
             deadline: document.getElementById('asg-c-deadline').value || null,
+            targetIds,
           };
           if (!body.title) {
             App.toast('请填写作业标题');
@@ -230,6 +270,7 @@
               pinned: 0,
               academicYear: App.state?.academicYear || null,
               stats: { total: null, submitted: 0, missing: 0, submitRate: 0 },
+              targetIds,
             });
             renderContent();
           } catch (err) {
@@ -429,10 +470,13 @@
             const rec = (subsList[i] || []).find((r) => r.studentId === s.id);
             const submitted = rec && rec.status === 'submitted';
             if (submitted) submittedCnt += 1;
-            cells.push(rec ? (submitted ? '已交' : '未交') : '未交');
+            const applicable = !a.targetIds || a.targetIds.includes(s.id);
+            if (!applicable) cells.push('不适用');
+            else cells.push(rec ? (submitted ? '已交' : '未交') : '未交');
           });
+          const applicableCount = clsAsg.filter((a) => !a.targetIds || a.targetIds.includes(s.id)).length;
           cells.push(submittedCnt);
-          cells.push(clsAsg.length ? `${Math.round((submittedCnt / clsAsg.length) * 100)}%` : '—');
+          cells.push(applicableCount ? `${Math.round((submittedCnt / applicableCount) * 100)}%` : '—');
           rows.push(cells);
         });
         if (!roster.length) rows.push(['（该班暂无学生）', '', ...clsAsg.map(() => ''), '', '']);

@@ -15,7 +15,7 @@
 (function () {
   // ===== 模块内样式（自包含，类名前缀 dct-）=====
   const CSS = `
-    .dct-cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+    .dct-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 620px), 1fr)); gap: 16px; align-items: start; }
     .dct-class-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
     .dct-class-count { color: var(--text-muted); font-size: 12px; flex: 1; }
     .dct-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }

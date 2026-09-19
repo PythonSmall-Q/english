@@ -10,7 +10,7 @@
 (function () {
   // ===== 模块内样式（自包含，类名前缀 stu-）=====
   const CSS = `
-    .stu-cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+    .stu-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 620px), 1fr)); gap: 16px; align-items: start; }
     .stu-class-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
     .stu-class-count { color: var(--text-muted); font-size: 12px; }
     .stu-row { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }

@@ -36,6 +36,14 @@ const SYSTEM_PROMPTS = {
 
 const AI_TIMEOUT_MS = 30000;
 
+/** 将基础端点或完整聊天端点统一为 OpenAI 兼容的基础端点。 */
+function normalizeAiBaseUrl(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/chat\/completions$/, '');
+}
+
 /** 读取用户自配 AI Provider（无则返回 null） */
 async function getUserAiSettings(db, userId) {
   return db
@@ -141,12 +149,12 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
   let mock = false;
   if (apiKey) {
     // 真实 Provider：Workers 代理调用（§42），30 秒超时，非 2xx 视为内部错误
-    const baseUrl = (
+    const baseUrl = normalizeAiBaseUrl(
       userSettings?.base_url ||
       platformCfg?.baseUrl ||
       c.env.AI_BASE_URL ||
       'https://api.openai.com/v1'
-    ).replace(/\/$/, '');
+    );
     const model = userSettings?.model || platformCfg?.model || c.env.AI_MODEL || 'gpt-4o-mini';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
@@ -167,7 +175,26 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
         signal: controller.signal,
       });
       if (!resp.ok) {
-        throw new ApiError('INTERNAL_ERROR', `AI 服务返回异常状态 ${resp.status}`);
+        const upstream = await resp.text().catch(() => '');
+        let detail = '';
+        try {
+          const parsed = JSON.parse(upstream);
+          detail = parsed?.error?.message || parsed?.message || '';
+        } catch {
+          detail = upstream.trim().slice(0, 180);
+        }
+        const hint =
+          resp.status === 401
+            ? '请检查平台 API 密钥是否有效，以及该端点是否要求 Bearer 鉴权'
+            : resp.status === 403
+              ? '请检查 API 密钥权限、账户余额或模型访问权限'
+              : resp.status === 404
+                ? '请检查 API 端点是否为 OpenAI 兼容接口，以及模型名称是否正确'
+                : '';
+        throw new ApiError(
+          'INTERNAL_ERROR',
+          `AI 服务返回异常状态 ${resp.status}${hint ? `：${hint}` : ''}${detail ? `（${detail}）` : ''}`
+        );
       }
       const data = await resp.json();
       result = data?.choices?.[0]?.message?.content ?? '';

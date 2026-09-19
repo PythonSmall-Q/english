@@ -103,32 +103,46 @@ app.get('/class-stats', requireAuth, requireTenant, async (c) => {
     .all();
   const students = stuRows.results.map((s) => ({ id: s.id, studentNo: s.student_no, name: s.name }));
 
-  // 作业：本班当前学年作业数 total；每生 assignment_submissions 中 status='submitted' 的数量
+  // 作业：每生 total 为「适用作业数」（target_ids 为 NULL 对全班生效；非空只对该生生效时被计入）
+  // submitted / missing 按适用集合计算（JS 内存聚合，不用 SQL json_each）；豁免生 exempt=1 已在上文排除
   const assignRows = await db
     .prepare(
-      `SELECT id FROM assignments
+      `SELECT id, target_ids FROM assignments
         WHERE tenant_id = ? AND class_id = ? AND academic_year = ?`
     )
     .bind(tenantId, classId, academicYear)
     .all();
-  const homeworkTotal = assignRows.results.length;
-  const submittedRows = await db
+  const assignmentList = assignRows.results.map((a) => ({
+    id: a.id,
+    target: a.target_ids ? new Set(JSON.parse(a.target_ids).map(String)) : null,
+  }));
+  const homeworkTotal = assignmentList.length;
+  const subRows = await db
     .prepare(
-      `SELECT sub.student_id AS sid, COUNT(*) AS cnt
+      `SELECT sub.assignment_id AS aid, sub.student_id AS sid, sub.status
          FROM assignment_submissions sub
          JOIN assignments a ON a.id = sub.assignment_id
         WHERE sub.tenant_id = ? AND a.tenant_id = ? AND a.class_id = ? AND a.academic_year = ?
-          AND sub.status = 'submitted'
-          AND sub.student_id IN (SELECT id FROM students WHERE tenant_id = ? AND class_id = ? AND academic_year = ?)
-        GROUP BY sub.student_id`
+          AND sub.status IN ('submitted', 'missing')
+          AND sub.student_id IN (SELECT id FROM students WHERE tenant_id = ? AND class_id = ? AND academic_year = ?)`
     )
     .bind(tenantId, tenantId, classId, academicYear, tenantId, classId, academicYear)
     .all();
-  const submittedMap = new Map(submittedRows.results.map((r) => [r.sid, r.cnt]));
+  const submittedByStudent = new Map();
+  for (const s of students) {
+    const applicable = assignmentList.filter((a) => !a.target || a.target.has(s.id));
+    let submitted = 0;
+    for (const r of subRows.results) {
+      if (r.sid !== s.id || r.status !== 'submitted') continue;
+      const a = assignmentList.find((x) => x.id === r.aid);
+      if (a && (!a.target || a.target.has(s.id))) submitted++;
+    }
+    submittedByStudent.set(s.id, { total: applicable.length, submitted });
+  }
   const homeworkByStudent = {};
   for (const s of students) {
-    const submitted = submittedMap.get(s.id) || 0;
-    homeworkByStudent[s.id] = { submitted, missing: Math.max(0, homeworkTotal - submitted) };
+    const { total, submitted } = submittedByStudent.get(s.id) || { total: 0, submitted: 0 };
+    homeworkByStudent[s.id] = { total, submitted, missing: Math.max(0, total - submitted) };
   }
 
   // 默写：该生当前学年 dictation_results，dictation 为 本班班级默写 或 全年段默写

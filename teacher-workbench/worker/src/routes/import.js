@@ -234,10 +234,13 @@ app.post('/restore', requireAuth, requireTenant, requireRole(['admin']), async (
       if (!row || typeof row !== 'object') {
         throw new ApiError('VALIDATION_ERROR', `备份数据损坏：${key} 存在非法行`);
       }
-      const cols = Object.keys(row);
+      const normalizedRow = table === 'dictation_results' && Number(row.passed) === 0 && Number(row.retest_completed) !== 1
+        ? { ...row, retest_required: 1 }
+        : row;
+      const cols = Object.keys(normalizedRow);
       const tenantIdx = cols.indexOf('tenant_id');
       if (tenantIdx >= 0) cols.splice(tenantIdx, 1);
-      const values = cols.map((col) => row[col]);
+      const values = cols.map((col) => normalizedRow[col]);
       // 统一表头带 tenant_id，强制绑定当前租户，防止备份行携带异值
       const allCols = ['tenant_id', ...cols];
       const placeholders = allCols.map(() => '?').join(',');
