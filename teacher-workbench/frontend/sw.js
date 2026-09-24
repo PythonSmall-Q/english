@@ -10,7 +10,7 @@
  *
  * 缓存名带版本号；sw.js 内容变更即触发 activate 清理旧版缓存。
  */
-const CACHE = 'wb-static-v3';
+const CACHE = 'wb-static-v4';
 
 const STATIC_PREFIXES = ['/assets/', '/vendor/', '/views/'];
 const STATIC_EXT = /\.(js|css|svg|png|jpe?g|gif|webp|ico|json|woff2?)(\?.*)?$/i;
@@ -50,7 +50,8 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // 同源静态资源：network-first（更新即时生效），失败回缓存
+  // 同源静态资源：stale-while-revalidate——缓存立即返回（秒开），后台向网络校验，
+  // 有更新才替换缓存（「修改了才更新，否则保留缓存」）；缓存未命中时等网络。
   if (url.origin === self.location.origin && !url.pathname.startsWith('/api/')) {
     const isStatic =
       STATIC_PREFIXES.some((p) => url.pathname.startsWith(p)) ||
@@ -59,19 +60,23 @@ self.addEventListener('fetch', (e) => {
       url.pathname === '/index.html';
     if (!isStatic) return;
     e.respondWith(
-      fetch(e.request)
-        .then((resp) => {
-          if (resp.ok) {
-            const copy = resp.clone();
-            caches.open(CACHE).then((cache) => cache.put(e.request, copy));
-          }
-          return resp;
-        })
-        .catch(async () => {
-          const hit = await caches.match(e.request);
-          if (hit) return hit;
-          throw new Error('offline and no cache');
-        })
+      caches.open(CACHE).then(async (cache) => {
+        const hit = await cache.match(e.request);
+        const refresh = fetch(e.request)
+          .then((resp) => {
+            if (resp.ok) cache.put(e.request, resp.clone());
+            return resp;
+          })
+          .catch(() => null);
+        // 命中缓存：先返回本地，后台静默更新（下次访问即新版）
+        if (hit) {
+          refresh.catch(() => {});
+          return hit;
+        }
+        const resp = await refresh;
+        if (resp) return resp;
+        throw new Error('offline and no cache');
+      })
     );
     return;
   }

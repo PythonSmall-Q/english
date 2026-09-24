@@ -93,19 +93,6 @@
   <!-- SheetJS（xlsx 解析）不全局加载：约 950KB 会阻塞首屏；
        各视图在真正需要导入/导出 xlsx 时才懒加载 vendor/xlsx.full.min.js -->
 
-  <!-- 13 个视图（settings/admin 由骨架完整实现，其余为 stub，由后续 agent 补全） -->
-  <script src="views/dashboard.js"></script>
-  <script src="views/classes.js"></script>
-  <script src="views/lessons.js"></script>
-  <script src="views/schedule.js"></script>
-  <script src="views/students.js"></script>
-  <script src="views/assignments.js"></script>
-  <script src="views/dictations.js"></script>
-  <script src="views/exams.js"></script>
-  <script src="views/ai.js"></script>
-  <script src="views/settings.js"></script>
-  <script src="views/quota.js"></script>
-  <script src="views/recycle.js"></script>
-  <script src="views/admin.js"></script>
+  <!-- 13 个视图全部按需懒加载（App.ensureView），首屏只带框架脚本 -->
 </body>
 </html>

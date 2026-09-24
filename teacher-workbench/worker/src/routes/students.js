@@ -42,7 +42,8 @@ app.get('/', requireAuth, requireTenant, async (c) => {
   const academicYear = resolveAcademicYear(c.req.query('academic_year'));
 
   let sql =
-    `SELECT s.*, c.name AS class_name
+    `SELECT s.id, s.class_id, s.student_no, s.name, s.gender, s.status, s.notes, s.exempt,
+            c.name AS class_name
        FROM students s LEFT JOIN classes c ON c.id = s.class_id AND c.tenant_id = s.tenant_id
       WHERE s.tenant_id = ? AND s.academic_year = ?`;
   const params = [tenantId, academicYear];

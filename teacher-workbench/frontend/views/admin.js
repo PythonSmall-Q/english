@@ -295,6 +295,9 @@ async function uploadBrandImage(inputId, uploadBtn) {
     inp.click();
   });
   if (!file) return;
+  // 确认后才推送到 GitHub
+  const ok = await App.confirmDialog(`上传「${file.name}」到 GitHub 品牌图床？\n上传后图片经平台代理下发并缓存到下次更新。`);
+  if (!ok) return;
   if (file.size > 5 * 1024 * 1024) {
     App.toast('图片超过 5MB 上限');
     return;

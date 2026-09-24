@@ -202,11 +202,57 @@ window.App = {
     App._views[name] = def;
   },
 
+  /** 视图脚本按需懒加载：首次进入某模块时才下载对应 views/*.js，缩小首屏体积 */
+  _lazyViews: {},
+  _LAZY_VIEW_SCRIPTS: {
+    dashboard: 'views/dashboard.js',
+    classes: 'views/classes.js',
+    lessons: 'views/lessons.js',
+    schedule: 'views/schedule.js',
+    students: 'views/students.js',
+    assignments: 'views/assignments.js',
+    dictations: 'views/dictations.js',
+    exams: 'views/exams.js',
+    ai: 'views/ai.js',
+    recycle: 'views/recycle.js',
+    settings: 'views/settings.js',
+    quota: 'views/quota.js',
+    admin: 'views/admin.js',
+  },
+  /** 确保视图脚本已加载（幂等，重复调用复用同一 Promise） */
+  ensureView(name) {
+    if (App._views[name]) return Promise.resolve(true);
+    const url = App._LAZY_VIEW_SCRIPTS[name];
+    if (!url) return Promise.resolve(false);
+    if (!App._lazyViews[name]) {
+      App._lazyViews[name] = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = url;
+        s.onload = () => resolve(true);
+        s.onerror = () => {
+          App._lazyViews[name] = null; // 允许失败后重试
+          reject(new Error('视图加载失败，请检查网络后重试'));
+        };
+        document.body.appendChild(s);
+      });
+    }
+    return App._lazyViews[name];
+  },
+
   /**
    * 切换视图：更新面包屑与导航高亮，调用 def.render(container) 与 def.init?.()。
    * @param {string} name 视图名（对应导航 data-view）
    */
   async showView(name) {
+    // 懒加载：脚本未下载时先注入再渲染（Service Worker 缓存后二次进入秒开）
+    let ready = true;
+    try {
+      ready = await App.ensureView(name);
+    } catch (e) {
+      App.toast((e && e.message) || '视图加载失败');
+      return;
+    }
+    if (!ready) return;
     const def = App._views[name];
     if (!def) return;
     App.state.view = name;
