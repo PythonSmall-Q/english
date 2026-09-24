@@ -251,7 +251,9 @@
       const r = matrix[i] || [];
       const nm = String(r[nameIdx] == null ? '' : r[nameIdx]).trim();
       if (!nm || nm === '班级平均' || nm === '年级平均' || nm === '平均') continue;
-      const v = Number(r[engIdx]);
+      // 空分数视为缺考跳过（与旧版 parseFloat 语义一致；Number('')===0 会误判）
+      const rawScore = r[engIdx];
+      const v = rawScore === '' || rawScore == null ? NaN : Number(rawScore);
       if (!Number.isFinite(v)) continue;
       const row = { name: nm, score: Math.round(v * 10) / 10 };
       const no = noIdx >= 0 ? String(r[noIdx] == null ? '' : r[noIdx]).trim() : '';

@@ -19,6 +19,8 @@
         <div class="sidebar-user-name">Lynn</div>
         <div class="sidebar-user-sub">英语</div>
       </div>
+      <!-- 商议版品牌：校徽 + 校训（平台管理员配置后显示） -->
+      <div id="sidebar-brand" class="sidebar-brand hidden"></div>
       <nav class="nav">
         <a class="nav-item" data-view="dashboard"><span class="nav-ico">🏠</span> 工作台首页</a>
         <a class="nav-item" data-view="classes"><span class="nav-ico">🏫</span> 我的班级</a>
@@ -42,6 +44,8 @@
       <header class="topbar">
         <div class="breadcrumb" id="breadcrumb">工作台首页</div>
         <div class="topbar-right">
+          <!-- 白天/黑夜模式切换（本机记忆） -->
+          <button type="button" id="theme-toggle" class="theme-toggle" title="切换黑夜/白天模式">🌙</button>
           <!-- 身份查看（仅平台管理员）：选择以某成员身份查看与管理本空间 -->
           <div id="viewas-switcher" class="tenant-switcher hidden">
             <select id="viewas-select" class="viewas-select" aria-label="以成员身份查看">
@@ -85,6 +89,7 @@
   <script src="api.js"></script>
   <script src="auth.js"></script>
   <script src="landing.js"></script>
+  <script src="dict.js"></script>
   <!-- SheetJS（xlsx 解析）不全局加载：约 950KB 会阻塞首屏；
        各视图在真正需要导入/导出 xlsx 时才懒加载 vendor/xlsx.full.min.js -->
 

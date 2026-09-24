@@ -489,7 +489,9 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
         continue;
       }
     }
-    const score = Number(row.score);
+    // 空分数视为无效行跳过（Number('')===0 会把缺考误录成 0 分）
+    const rawScore = row.score;
+    const score = rawScore === '' || rawScore == null ? NaN : Number(rawScore);
     if (!Number.isFinite(score)) {
       failed++;
       continue;

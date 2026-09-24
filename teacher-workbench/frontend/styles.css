@@ -1185,3 +1185,376 @@ select.form-input {
   font-variant-numeric: tabular-nums;
   color: var(--text-muted, #6b7280);
 }
+
+/* ===== 全局开关滑块：所有 checkbox 统一为滑动开关样式 ===== */
+input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: #cbd5e1;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s;
+  vertical-align: middle;
+  flex-shrink: 0;
+  margin: 0;
+}
+input[type='checkbox']::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s;
+}
+input[type='checkbox']:checked {
+  background: var(--primary);
+}
+input[type='checkbox']:checked::before {
+  transform: translateX(16px);
+}
+input[type='checkbox']:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===== 设备模式：平板模式（大字体大按钮，适合触控） ===== */
+html[data-device='tablet'] {
+  font-size: 17px;
+}
+html[data-device='tablet'] .btn {
+  padding: 12px 20px;
+  font-size: 16px;
+  border-radius: 10px;
+}
+html[data-device='tablet'] .btn-sm {
+  padding: 9px 14px;
+  font-size: 15px;
+}
+html[data-device='tablet'] .form-input {
+  padding: 12px 14px;
+  font-size: 16px;
+}
+html[data-device='tablet'] .nav-item {
+  padding: 14px 16px;
+  font-size: 16px;
+}
+html[data-device='tablet'] .card {
+  padding: 22px;
+  border-radius: 14px;
+}
+html[data-device='tablet'] .nav-ico {
+  font-size: 18px;
+  width: 26px;
+}
+html[data-device='tablet'] input[type='checkbox'] {
+  width: 48px;
+  height: 28px;
+}
+html[data-device='tablet'] input[type='checkbox']::before {
+  width: 22px;
+  height: 22px;
+}
+html[data-device='tablet'] input[type='checkbox']:checked::before {
+  transform: translateX(20px);
+}
+html[data-device='tablet'] .ts-item,
+html[data-device='tablet'] .ts-btn {
+  padding: 12px 14px;
+  font-size: 16px;
+}
+
+/* ===== 黑夜模式（顶栏 🌙 按钮切换，本机 localStorage 持久化） ===== */
+html[data-theme='dark'] {
+  --primary: #3b82f6;
+  --primary-dark: #2563eb;
+  --cyan: #22d3ee;
+  --bg: #0f172a;
+  --card-bg: #1e293b;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+  --border: #334155;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.45), 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+html[data-theme='dark'] .ts-btn,
+html[data-theme='dark'] .ts-menu,
+html[data-theme='dark'] .viewas-select {
+  background: var(--card-bg);
+  color: var(--text);
+}
+html[data-theme='dark'] .nav-item:hover {
+  background: #334155;
+}
+html[data-theme='dark'] .nav-item.active {
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+}
+html[data-theme='dark'] .btn:hover {
+  background: #334155;
+}
+html[data-theme='dark'] .btn-primary:hover {
+  background: var(--primary-dark);
+}
+html[data-theme='dark'] .table th {
+  background: #0f172a;
+}
+html[data-theme='dark'] .table tr:hover td {
+  background: #273449;
+}
+html[data-theme='dark'] .auth-tab {
+  background: #0f172a;
+}
+html[data-theme='dark'] .landing-price-card {
+  background: var(--card-bg);
+}
+html[data-theme='dark'] .landing-price-card-featured {
+  background: rgba(59, 130, 246, 0.12);
+}
+html[data-theme='dark'] .landing-compare-wrap {
+  background: var(--card-bg);
+}
+html[data-theme='dark'] .modal-mask {
+  background: rgba(2, 6, 23, 0.65);
+}
+html[data-theme='dark'] ::placeholder {
+  color: #64748b;
+}
+html[data-theme='dark'] .dct-item,
+html[data-theme='dark'] .asg-item {
+  background: var(--card-bg);
+}
+html[data-theme='dark'] .sch-cell-slot,
+html[data-theme='dark'] .sch-cell-head {
+  background: #0f172a;
+}
+
+/* 主题切换小按钮（顶栏） */
+.theme-toggle {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text);
+  cursor: pointer;
+}
+.theme-toggle:hover {
+  border-color: var(--primary);
+}
+
+/* ===== 商议版品牌定制：侧栏校徽/校训 + 自定义加载图标动画 ===== */
+.sidebar-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.brand-logo {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  border-radius: 10px;
+}
+.brand-motto {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* 顶部进度条上的品牌加载图标 */
+.upload-progress.has-brand-loader {
+  gap: 8px;
+}
+.brand-loader {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+.brand-loader.spin {
+  animation: brand-spin 1s linear infinite;
+}
+.brand-loader.pulse {
+  animation: brand-pulse 1.1s ease-in-out infinite;
+}
+.brand-loader.bounce {
+  animation: brand-bounce 0.9s ease-in-out infinite;
+}
+.brand-loader.bar {
+  animation: brand-bar 1.2s ease-in-out infinite;
+}
+@keyframes brand-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes brand-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.25); opacity: 0.6; }
+}
+@keyframes brand-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+@keyframes brand-bar {
+  0%, 100% { transform: scaleX(1); }
+  50% { transform: scaleX(0.55); }
+}
+
+/* ===== 右下角浮动英语词典（§交接文档六） ===== */
+#dict-float {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 90;
+}
+.dict-fab {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  box-shadow: var(--shadow);
+  font-size: 19px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s;
+}
+.dict-fab:hover {
+  transform: scale(1.06);
+  border-color: var(--primary);
+}
+.dict-panel {
+  position: absolute;
+  right: 0;
+  bottom: 54px;
+  width: 300px;
+  max-height: 420px;
+  overflow-y: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  padding: 12px 14px 14px;
+  animation: dict-pop 0.14s ease-out;
+}
+@keyframes dict-pop {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.dict-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.dict-close {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+.dict-input {
+  margin-bottom: 8px;
+}
+.dict-hint {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+  padding: 6px 0;
+}
+.dict-word {
+  font-size: 17px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.dict-tag {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--primary);
+  background: rgba(37, 99, 235, 0.1);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.dict-tag-gaokao {
+  color: var(--cyan);
+  background: rgba(8, 145, 178, 0.12);
+}
+.dict-ipa {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 2px;
+}
+.dict-pos {
+  display: inline-block;
+  color: var(--primary);
+  font-size: 12.5px;
+  margin-top: 4px;
+}
+.dict-def {
+  margin-top: 4px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.dict-ex {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.dict-links {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.dict-links a {
+  color: var(--primary);
+  text-decoration: none;
+}
+.dict-links a:hover {
+  text-decoration: underline;
+}
+.dict-sugg {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin: 4px 0 2px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.dict-sugg-item {
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--primary);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.dict-sugg-item:hover {
+  border-color: var(--primary);
+}

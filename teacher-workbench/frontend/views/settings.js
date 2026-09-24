@@ -177,7 +177,22 @@ App.registerView('settings', {
         <div class="muted">支持 .xlsx / .csv / .json / 直接粘贴；导入在服务端解析校验后写入，匹配失败的数据会明确返回。</div>
       </div>
 
-      <!-- 5. AI 助手设置（§41-43：用户自配 Provider，存数据库） -->
+      <!-- 5. 显示（设备模式） -->
+      <div class="card">
+        <div class="card-title">显示</div>
+        <div class="form-row" style="align-items:flex-end">
+          <div>
+            <label class="form-label">设备模式（本机生效）</label>
+            <select class="form-input" id="pref-device-mode" style="min-width:200px">
+              <option value="desktop">💻 电脑模式</option>
+              <option value="tablet">📱 平板模式（大字体大按钮）</option>
+            </select>
+          </div>
+          <div class="muted" style="font-size:12.5px;padding-bottom:8px">平板模式字体与按钮更大、间距更宽，适合触控；仅保存在本设备</div>
+        </div>
+      </div>
+
+      <!-- 6. AI 助手设置（§41-43：用户自配 Provider，存数据库） -->
       <div class="card">
         <div class="card-title">AI 助手设置</div>
         <div id="ai-settings-status" class="muted" style="margin-bottom:10px">加载中…</div>
@@ -208,6 +223,7 @@ App.registerView('settings', {
       </div>`;
 
     bindProfile();
+    bindDeviceMode();
     await renderSpace();
     await renderMyQuota();
     bindDataManagement();
@@ -215,6 +231,19 @@ App.registerView('settings', {
     await bindAiSettings();
   },
 });
+
+/** 设备模式：读取本机保存值，切换即生效 */
+function bindDeviceMode() {
+  const select = document.getElementById('pref-device-mode');
+  if (!select) return;
+  select.value = App.currentDeviceMode() || 'desktop';
+  select.addEventListener('change', () => {
+    const mode = select.value === 'tablet' ? 'tablet' : 'desktop';
+    localStorage.setItem(App.DEVICE_MODE_KEY, mode);
+    App.applyDeviceMode(mode);
+    App.toast(mode === 'tablet' ? '已切换为平板模式' : '已切换为电脑模式');
+  });
+}
 
 /** AI 助手设置：加载当前配置（密钥只回显掩码），保存/清除 */
 async function bindAiSettings() {

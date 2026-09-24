@@ -82,6 +82,106 @@ window.App = {
   /** §66 页面状态 */
   state: { user: null, tenants: [], tenant: null, quota: null, view: null, academicYear: null, currentAcademicYear: null, academicYears: [], viewAs: null },
 
+  /** 设备模式：tablet=大字体大按钮适合触控；desktop=默认。本机 localStorage 持久化 */
+  DEVICE_MODE_KEY: 'wb_device_mode',
+  applyDeviceMode(mode) {
+    document.documentElement.dataset.device = mode === 'tablet' ? 'tablet' : 'desktop';
+  },
+  currentDeviceMode() {
+    return localStorage.getItem(App.DEVICE_MODE_KEY) || '';
+  },
+
+  /** 白天/黑夜模式：本机 localStorage 持久化 */
+  THEME_KEY: 'wb_theme',
+  applyTheme(theme) {
+    document.documentElement.dataset.theme = theme === 'dark' ? 'dark' : 'light';
+    const btn = document.getElementById('theme-toggle');
+    if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+    if (btn) btn.title = theme === 'dark' ? '切换到白天模式' : '切换到黑夜模式';
+  },
+  toggleTheme() {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    localStorage.setItem(App.THEME_KEY, next);
+    App.applyTheme(next);
+    App.toast(next === 'dark' ? '已切换到黑夜模式' : '已切换到白天模式');
+  },
+
+  /**
+   * 商议版品牌定制：加载并应用当前空间的 branding
+   * （校徽/校训展示在侧栏；favicon 换自定义 icon；上传进度条用自定义加载图标+动画）
+   * 配置由平台管理员在「平台管理 → 品牌」设置，图片为 URL（可托管 GitHub，经 raw/jsDelivr 访问）。
+   */
+  async loadBranding() {
+    const t = App.state.tenant;
+    if (!t) return;
+    try {
+      const data = await api.tenants.get(t.id);
+      App.state.branding = data.branding || null;
+    } catch (e) {
+      App.state.branding = null;
+    }
+    App.applyBranding();
+  },
+  applyBranding() {
+    const b = App.state.branding;
+    // 自定义 icon（favicon）
+    let link = document.querySelector('link[rel="icon"]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.href = (b && b.faviconUrl) || 'favicon.svg';
+    // 侧栏校徽 + 校训
+    const box = document.getElementById('sidebar-brand');
+    if (box) {
+      if (b && (b.logoUrl || b.motto)) {
+        box.classList.remove('hidden');
+        box.innerHTML =
+          (b.logoUrl ? `<img class="brand-logo" src="${App.esc(b.logoUrl)}" alt="校徽">` : '') +
+          (b.motto ? `<div class="brand-motto">${App.esc(b.motto)}</div>` : '');
+      } else {
+        box.classList.add('hidden');
+        box.innerHTML = '';
+      }
+    }
+    document.title =
+      b && b.motto ? `${App.state.tenant?.name || ''} · ${b.motto}` : '英语教师教学工作台';
+  },
+
+  /** 每台设备首次进入工作台：弹出模式选择 */
+  showDeviceModePicker() {
+    App.modal(
+      '选择使用模式',
+      `<div style="line-height:1.8;margin-bottom:4px">这台设备第一次使用，请选择适合的操作模式（之后可在「设置」中随时更改）：</div>
+       <div style="display:flex;flex-direction:column;gap:10px">
+         <button class="btn" data-dev-mode="desktop" type="button" style="padding:14px;font-size:15px;text-align:left">
+           💻 电脑模式<span class="muted" style="display:block;font-size:13px;margin-top:2px">默认精细布局，适合鼠标键盘操作</span>
+         </button>
+         <button class="btn btn-primary" data-dev-mode="tablet" type="button" style="padding:14px;font-size:15px;text-align:left">
+           📱 平板模式<span style="display:block;font-size:13px;margin-top:2px;opacity:.85">更大字体与按钮，间距更宽，适合触控</span>
+         </button>
+       </div>
+       <div class="modal-actions"><span class="muted" style="font-size:12px">选择即保存到本机</span></div>`,
+      () => {
+        document.querySelectorAll('[data-dev-mode]').forEach((btn) => {
+          btn.onclick = () => {
+            const mode = btn.dataset.devMode;
+            localStorage.setItem(App.DEVICE_MODE_KEY, mode);
+            App.applyDeviceMode(mode);
+            App.closeModal();
+            App.toast(mode === 'tablet' ? '已切换为平板模式' : '已切换为电脑模式');
+            try {
+              App.showView(App.state.view || 'dashboard');
+            } catch (e) {
+              /* 忽略重渲染失败 */
+            }
+          };
+        });
+      }
+    );
+  },
+
   /** 视图注册表：name → { title, icon, render, init? } */
   _views: {},
 
@@ -189,9 +289,15 @@ window.App = {
     const wrap = document.createElement('div');
     wrap.id = 'upload-progress';
     wrap.className = 'upload-progress';
-    wrap.innerHTML = `<span class="up-label">${App.esc(label)}</span>
+    // 商议版品牌：自定义加载图标 + 动画（spin/pulse/bounce/bar）
+    const b = App.state.branding;
+    const loaderImg = b && b.loaderUrl
+      ? `<img class="brand-loader ${App.esc(b.loaderAnim || 'spin')}" src="${App.esc(b.loaderUrl)}" alt="">`
+      : '';
+    wrap.innerHTML = `${loaderImg}<span class="up-label">${App.esc(label)}</span>
       <span class="up-track"><span class="up-fill" style="width:0%"></span></span>
       <span class="up-pct">0%</span>`;
+    if (loaderImg) wrap.classList.add('has-brand-loader');
     document.body.appendChild(wrap);
     requestAnimationFrame(() => wrap.classList.add('show'));
     const fill = wrap.querySelector('.up-fill');
@@ -272,6 +378,9 @@ window.App = {
     App.state.quota = tenant.quota || null;
     App.updateTenantSwitcher();
     App.updateViewAsSwitcher();
+    App.loadBranding();
+    // 每台设备首次进入：弹出 平板/电脑 模式选择
+    if (!App.currentDeviceMode()) App.showDeviceModePicker();
     App.closeTenantMenu();
     await App.loadAcademicYears();
     await App.showView(App.state.view || 'dashboard');
@@ -745,8 +854,13 @@ window.App = {
     // 平台管理员才显示「平台管理」（§72）
     const isAdmin = App.state.user?.platformRole === 'platform_admin';
     document.getElementById('nav-admin')?.classList.toggle('hidden', !isAdmin);
+    // 右下角浮动英语词典（登录后挂载）
+    window.DictFloat?.mount?.();
     App.updateTenantSwitcher();
     App.updateViewAsSwitcher();
+    App.loadBranding();
+    // 每台设备首次进入工作台：弹出 平板/电脑 模式选择
+    if (!App.currentDeviceMode()) App.showDeviceModePicker();
     // 初始视图：登录前暂存的目标路由（wb.redirect）> hash 中的有效视图 > dashboard
     let initial = null;
     const redirect = sessionStorage.getItem('wb.redirect');
@@ -806,6 +920,8 @@ window.App = {
           location.reload();
         });
       }
+      const themeBtn = document.getElementById('theme-toggle');
+      if (themeBtn) themeBtn.addEventListener('click', () => App.toggleTheme());
     }
 
     try {
@@ -846,6 +962,15 @@ window.App = {
   },
 };
 
+// 启动前先应用本机保存的设备模式与主题（避免闪烁；未选择过则按默认渲染）
+App.applyDeviceMode(App.currentDeviceMode() || 'desktop');
+App.applyTheme(localStorage.getItem(App.THEME_KEY) || 'light');
+// 注册本地静态缓存 Service Worker（品牌图片/词库/静态资源缓存到本机）
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {
+    /* 不支持或注册失败：不影响使用 */
+  });
+}
 document.addEventListener('DOMContentLoaded', () => App.boot());
 
 // hash 路由（#/name）：前进/后退（遍历历史时 popstate 与 hashchange 都会触发）

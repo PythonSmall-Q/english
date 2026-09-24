@@ -299,9 +299,21 @@ app.get('/:id', requireAuth, async (c) => {
     .bind(tenantId)
     .first();
 
+  // branding 解析后下发（商议版品牌定制：校徽/校训/自定义 icon/加载图标与动画）
+  let branding = null;
+  if (tenant.branding) {
+    try {
+      const b = JSON.parse(tenant.branding);
+      if (b && typeof b === 'object') branding = b;
+    } catch {
+      branding = null;
+    }
+  }
+  const { branding: _brandingRaw, ...tenantDto } = tenant;
+
   return c.json({
     success: true,
-    data: { tenant, members, quota, usage: await getQuotaUsage(db, tenantId) },
+    data: { tenant: tenantDto, members, quota, usage: await getQuotaUsage(db, tenantId), branding },
   });
 });
 
@@ -590,33 +602,58 @@ app.delete('/:id/members/:userId', requireAuth, requireTenant, requireRole(['own
  *  files 按 created_by，storageBytes 为 size 求和；ai 按 user_id + 当月） */
 async function getUserUsage(db, tenantId, userId) {
   const monthPrefix = new Date().toISOString().slice(0, 7);
+  // 6 条统计一次 batch（单往返），避免逐条串行
+  const [lessons, assignments, dictations, files, aiMonth, storage] = await db.batch([
+    db.prepare('SELECT COUNT(*) AS n FROM lessons WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId),
+    db.prepare('SELECT COUNT(*) AS n FROM assignments WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId),
+    db.prepare('SELECT COUNT(*) AS n FROM dictations WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId),
+    db.prepare('SELECT COUNT(*) AS n FROM files WHERE tenant_id = ? AND created_by = ?').bind(tenantId, userId),
+    db
+      .prepare('SELECT COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND user_id = ? AND substr(created_at, 1, 7) = ?')
+      .bind(tenantId, userId, monthPrefix),
+    db.prepare('SELECT COALESCE(SUM(size), 0) AS n FROM files WHERE tenant_id = ? AND created_by = ?').bind(tenantId, userId),
+  ]);
+  const n = (r) => (r.results && r.results[0] ? r.results[0].n : 0);
   return {
-    lessons: (
-      await db.prepare('SELECT COUNT(*) AS n FROM lessons WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId).first()
-    ).n,
-    assignments: (
-      await db.prepare('SELECT COUNT(*) AS n FROM assignments WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId).first()
-    ).n,
-    dictations: (
-      await db.prepare('SELECT COUNT(*) AS n FROM dictations WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId).first()
-    ).n,
-    files: (
-      await db.prepare('SELECT COUNT(*) AS n FROM files WHERE tenant_id = ? AND created_by = ?').bind(tenantId, userId).first()
-    ).n,
-    aiMonth: (
-      await db
-        .prepare('SELECT COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND user_id = ? AND substr(created_at, 1, 7) = ?')
-        .bind(tenantId, userId, monthPrefix)
-        .first()
-    ).n,
-    storageBytes:
-      (
-        await db
-          .prepare('SELECT COALESCE(SUM(size), 0) AS n FROM files WHERE tenant_id = ? AND created_by = ?')
-          .bind(tenantId, userId)
-          .first()
-      ).n || 0,
+    lessons: n(lessons),
+    assignments: n(assignments),
+    dictations: n(dictations),
+    files: n(files),
+    aiMonth: n(aiMonth),
+    storageBytes: n(storage) || 0,
   };
+}
+
+/** 全成员用量：GROUP BY 批量统计（6 条查询一次 batch），返回 Map(userId → usage)。
+ *  成员配额明细页用，避免 per-member 的 N+1。 */
+async function getAllUsersUsage(db, tenantId) {
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  const [lessons, assignments, dictations, files, aiMonth, storage] = await db.batch([
+    db.prepare('SELECT teacher_id AS uid, COUNT(*) AS n FROM lessons WHERE tenant_id = ? GROUP BY teacher_id').bind(tenantId),
+    db.prepare('SELECT teacher_id AS uid, COUNT(*) AS n FROM assignments WHERE tenant_id = ? GROUP BY teacher_id').bind(tenantId),
+    db.prepare('SELECT teacher_id AS uid, COUNT(*) AS n FROM dictations WHERE tenant_id = ? GROUP BY teacher_id').bind(tenantId),
+    db.prepare('SELECT created_by AS uid, COUNT(*) AS n FROM files WHERE tenant_id = ? GROUP BY created_by').bind(tenantId),
+    db
+      .prepare('SELECT user_id AS uid, COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ? GROUP BY user_id')
+      .bind(tenantId, monthPrefix),
+    db.prepare('SELECT created_by AS uid, COALESCE(SUM(size), 0) AS n FROM files WHERE tenant_id = ? GROUP BY created_by').bind(tenantId),
+  ]);
+  const map = new Map();
+  const empty = () => ({ lessons: 0, assignments: 0, dictations: 0, files: 0, aiMonth: 0, storageBytes: 0 });
+  const merge = (res, field) => {
+    for (const r of res.results) {
+      if (!r.uid) continue;
+      if (!map.has(r.uid)) map.set(r.uid, empty());
+      map.get(r.uid)[field] = r.n;
+    }
+  };
+  merge(lessons, 'lessons');
+  merge(assignments, 'assignments');
+  merge(dictations, 'dictations');
+  merge(files, 'files');
+  merge(aiMonth, 'aiMonth');
+  merge(storage, 'storageBytes');
+  return map;
 }
 
 /** 按用户配额覆盖支持的资源（files 按数量） */
@@ -644,16 +681,22 @@ app.get('/:id/quota-detail', requireAuth, requireTenant, requireRole(['owner', '
     deniedPerms.get(r.user_id).add(r.perm);
   }
 
+  // 全成员用量与按用户配额一次性批量取出（GROUP BY / 全表过滤 + JS 分组），避免 per-member N+1
+  const [usageMap, quotaAll] = await Promise.all([
+    getAllUsersUsage(db, tenantId),
+    db.prepare('SELECT user_id, resource, quota FROM user_quotas WHERE tenant_id = ?').bind(tenantId).all(),
+  ]);
+  const quotaByUser = new Map();
+  for (const r of quotaAll.results) {
+    if (!quotaByUser.has(r.user_id)) quotaByUser.set(r.user_id, {});
+    quotaByUser.get(r.user_id)[r.resource] = r.quota;
+  }
+
   const users = [];
   for (const m of members) {
     const userId = m.user_id;
-    const usage = await getUserUsage(db, tenantId, userId);
-    const quotaRows = await db
-      .prepare('SELECT resource, quota FROM user_quotas WHERE tenant_id = ? AND user_id = ?')
-      .bind(tenantId, userId)
-      .all();
-    const quotas = {};
-    for (const r of quotaRows.results) quotas[r.resource] = r.quota;
+    const usage = usageMap.get(userId) || { lessons: 0, assignments: 0, dictations: 0, files: 0, aiMonth: 0, storageBytes: 0 };
+    const quotas = quotaByUser.get(userId) || {};
     const denied = deniedPerms.get(userId) || new Set();
     const permissions = {};
     for (const perm of TEACHER_PERMS) {

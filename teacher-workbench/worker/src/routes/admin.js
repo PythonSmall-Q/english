@@ -532,50 +532,130 @@ app.post('/migrate', requireAuth, async (c) => {
     db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).bind(tenantId)
   );
 
-  // 第 2 步：按备份行构造 INSERT（列名取自行键；tenant_id 强制改写为目标租户，其余列原样含 id）
+  // 模式：replace（覆盖，缺省）= 清空后写入；merge（增量）= 不动现有数据，按真实 id 匹配合并
+  const mode = body.mode === 'merge' ? 'merge' : 'replace';
+
+  // ===== merge 模式：先建立 班级/学生/老师 的真实 id 映射 =====
+  // 班级按 (name, academic_year) 匹配；学生按 tenant 内 student_no 匹配（无学号按 name+class_id）；
+  // 老师按 body.teacherMap {旧系统userId: 本空间成员userId} 映射，缺省归导入操作者。
+  let classIdMap = new Map(); // 备份 class_id → 真实 class_id
+  let studentIdMap = new Map(); // 备份 student_id → 真实 student_id
+  const teacherMap = body.teacherMap && typeof body.teacherMap === 'object' ? body.teacherMap : {};
+  const matched = { classes: 0, students: 0 };
+  if (mode === 'merge') {
+    const exClasses = await db
+      .prepare('SELECT id, name, academic_year FROM classes WHERE tenant_id = ?')
+      .bind(tenantId)
+      .all();
+    const classKey = new Map(exClasses.results.map((r) => [`${r.name}|${r.academic_year || ''}`, r.id]));
+    const exStudents = await db
+      .prepare('SELECT id, student_no, name, class_id FROM students WHERE tenant_id = ?')
+      .bind(tenantId)
+      .all();
+    const stuByNo = new Map();
+    const stuByName = new Map();
+    for (const s of exStudents.results) {
+      if (s.student_no) stuByNo.set(String(s.student_no).trim(), s.id);
+      if (s.name) stuByName.set(`${s.name}|${s.class_id}`, s.id);
+    }
+
+    for (const row of backup.classes || []) {
+      if (!row || !row.id) continue;
+      const real = classKey.get(`${String(row.name || '').trim()}|${row.academic_year || ''}`);
+      if (real) {
+        classIdMap.set(row.id, real);
+        matched.classes++;
+      }
+    }
+    for (const row of backup.students || []) {
+      if (!row || !row.id) continue;
+      const mappedClass = (row.class_id && classIdMap.get(row.class_id)) || row.class_id;
+      let real = row.student_no ? stuByNo.get(String(row.student_no).trim()) : null;
+      if (!real && row.name && mappedClass) real = stuByName.get(`${row.name}|${mappedClass}`);
+      if (real) {
+        studentIdMap.set(row.id, real);
+        matched.students++;
+      }
+    }
+  }
+
+  /** 重写一行里的归属引用（merge）：id 命中匹配时用真实 id 就地更新；class/student/teacher 全部指向空间真实 id */
+  const remapRow = (table, row) => {
+    if (mode !== 'merge') return row;
+    const r = { ...row };
+    if (table === 'classes' && r.id && classIdMap.has(r.id)) r.id = classIdMap.get(r.id);
+    if (table === 'students' && r.id && studentIdMap.has(r.id)) r.id = studentIdMap.get(r.id);
+    if (r.class_id && classIdMap.has(r.class_id)) r.class_id = classIdMap.get(r.class_id);
+    if (r.student_id && studentIdMap.has(r.student_id)) r.student_id = studentIdMap.get(r.student_id);
+    if ('teacher_id' in r) {
+      const mapped = r.teacher_id ? teacherMap[r.teacher_id] : null;
+      // 已匹配班级保留原班主任；新班级/无主记录归导入操作者
+      if (table === 'classes' && row.id && classIdMap.has(row.id)) {
+        delete r.teacher_id; // 不动现有班主任
+      } else {
+        r.teacher_id = mapped || user.id;
+      }
+    }
+    return r;
+  };
+
+  // 第 2 步：按备份行构造写入（列名取自行键；tenant_id 强制改写为目标租户）
+  // merge 模式用 INSERT OR REPLACE（幂等：同备份重复导入结果一致），且不执行清空
   const inserts = [];
   const counts = {};
   for (const [table, key] of TABLES) {
     const rows = Array.isArray(backup[key]) ? backup[key] : [];
     counts[key] = rows.length;
-    for (const row of rows) {
-      if (!row || typeof row !== 'object') {
+    for (const rawRow of rows) {
+      if (!rawRow || typeof rawRow !== 'object') {
         throw new ApiError('VALIDATION_ERROR', `备份数据损坏：${key} 存在非法行`);
       }
+      const row = remapRow(table, rawRow);
       const cols = Object.keys(row);
       const tenantIdx = cols.indexOf('tenant_id');
       if (tenantIdx >= 0) cols.splice(tenantIdx, 1);
       const values = cols.map((col) => row[col]);
       const allCols = ['tenant_id', ...cols];
       const placeholders = allCols.map(() => '?').join(',');
+      const verb = mode === 'merge' ? 'INSERT OR REPLACE INTO' : 'INSERT INTO';
       inserts.push(
         db
-          .prepare(`INSERT INTO ${table} (${allCols.join(',')}) VALUES (${placeholders})`)
+          .prepare(`${verb} ${table} (${allCols.join(',')}) VALUES (${placeholders})`)
           .bind(tenantId, ...values)
       );
     }
   }
 
-  // 删除 + 插入一次性 batch（D1 batch 具有事务性，单批上限 1000 条语句；
+  // replace：删除 + 插入一次性 batch（D1 batch 具有事务性，单批上限 1000 条语句；
   // 超过上限时分块提交，此时不再保证整体原子性，README 已注明该限制）
   const CHUNK = 1000;
-  const all = [...deletes, ...inserts];
-  if (all.length <= CHUNK) {
-    await db.batch(all);
+  if (mode === 'merge') {
+    for (let i = 0; i < inserts.length; i += CHUNK) {
+      await db.batch(inserts.slice(i, i + CHUNK));
+    }
   } else {
-    for (let i = 0; i < all.length; i += CHUNK) {
-      await db.batch(all.slice(i, i + CHUNK));
+    const all = [...deletes, ...inserts];
+    if (all.length <= CHUNK) {
+      await db.batch(all);
+    } else {
+      for (let i = 0; i < all.length; i += CHUNK) {
+        await db.batch(all.slice(i, i + CHUNK));
+      }
     }
   }
 
   const restored = Object.values(counts).reduce((a, b) => a + b, 0);
-  await audit(db, tenantId, user.id, '平台迁入', 'tenant', tenantId, {
+  await audit(db, tenantId, user.id, mode === 'merge' ? '平台增量迁入' : '平台迁入', 'tenant', tenantId, {
     counts,
     restored,
+    matched,
     createdTenant,
     operatorEmail: user.email,
   });
-  return c.json({ success: true, data: { tenant_id: tenantId, tenant_name: tenantName, restored, counts } });
+  return c.json({
+    success: true,
+    data: { tenant_id: tenantId, tenant_name: tenantName, restored, counts, mode, matched },
+  });
 });
 
 /**
@@ -674,5 +754,49 @@ function maskKey(key) {
   const k = String(key || '');
   return k ? `****${k.slice(-4)}` : '';
 }
+
+/**
+ * PUT /api/v1/admin/tenants/:id/branding — 商议版租户品牌定制（仅 platform_admin）
+ * body: { logoUrl?, motto?, faviconUrl?, loaderUrl?, loaderAnim? }；全部为空对象 = 清除
+ * 仅 plan='custom'（商议版）租户可设置；图片为 URL（可托管 GitHub，经 raw/jsDelivr 访问）
+ * loaderAnim: spin | pulse | bounce | bar
+ */
+app.put('/tenants/:id/branding', requireAuth, async (c) => {
+  const user = requirePlatformAdmin(c);
+  const tenantId = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+
+  const tenant = await c.env.DB.prepare('SELECT id, name, plan FROM tenants WHERE id = ?').bind(tenantId).first();
+  if (!tenant) throw new ApiError('NOT_FOUND', '空间不存在');
+  if (tenant.plan !== 'custom') {
+    throw new ApiError('VALIDATION_ERROR', '仅「商议版」空间支持品牌定制');
+  }
+
+  const urlFields = ['logoUrl', 'faviconUrl', 'loaderUrl'];
+  const branding = {};
+  for (const f of urlFields) {
+    const v = String(body[f] || '').trim();
+    if (v && !/^https?:\/\//.test(v)) {
+      throw new ApiError('VALIDATION_ERROR', `${f} 必须是 http(s) 图片地址`);
+    }
+    if (v) branding[f] = v;
+  }
+  const motto = String(body.motto || '').trim();
+  if (motto.length > 60) throw new ApiError('VALIDATION_ERROR', '校训需为 60 字以内');
+  if (motto) branding.motto = motto;
+  const loaderAnim = String(body.loaderAnim || '').trim();
+  if (loaderAnim && !['spin', 'pulse', 'bounce', 'bar'].includes(loaderAnim)) {
+    throw new ApiError('VALIDATION_ERROR', 'loaderAnim 必须是 spin|pulse|bounce|bar');
+  }
+  if (loaderAnim) branding.loaderAnim = loaderAnim;
+
+  const hasAny = Object.keys(branding).length > 0;
+  await c.env.DB
+    .prepare('UPDATE tenants SET branding = ?, updated_at = ? WHERE id = ?')
+    .bind(hasAny ? JSON.stringify(branding) : null, now(), tenantId)
+    .run();
+  console.log(`[admin] 品牌定制已${hasAny ? '更新' : '清除'}：${tenant.name}（操作者 ${user.email}）`);
+  return c.json({ success: true, data: { branding: hasAny ? branding : null } });
+});
 
 export default app;

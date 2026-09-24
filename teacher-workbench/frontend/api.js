@@ -368,9 +368,19 @@
     /** 平台 AI 接口配置（GET 密钥仅掩码；PUT body {baseUrl?, apiKey?, model?}，apiKey 空=清除） */
     getAiSettings: () => request('/admin/ai-settings'),
     updateAiSettings: (body) => request('/admin/ai-settings', { method: 'PUT', body }),
+    /** 商议版品牌定制：body {logoUrl?, motto?, faviconUrl?, loaderUrl?, loaderAnim?}；空对象=清除 */
+    setBranding: (id, body) => request(`/admin/tenants/${id}/branding`, { method: 'PUT', body }),
     /** 平台管理员物理删除任意空间（不可恢复，含全部数据与文件） */
     deleteTenant: (id) => request(`/admin/tenants/${id}`, { method: 'DELETE' }),
   };
 
-  window.api = { auth, tenants, gradeGroups, classes, students, lessons, schedules, assignments, dictations, exams, recycle, dashboard, ai, files, import: imp, export: exp, archive, graduated, trials, admin };
+  /** 品牌图床：上传自动推送到私有 GitHub 仓库，经 Worker 代理下发 */
+  const brandImg = {
+    getConfig: () => request('/brand-images/config'),
+    updateConfig: (body) => request('/brand-images/config', { method: 'PUT', body }),
+    /** 上传图片：{filename, contentBase64} → {path, url} */
+    upload: (body) => request('/brand-images', { method: 'POST', body }),
+  };
+
+  window.api = { auth, tenants, gradeGroups, classes, students, lessons, schedules, assignments, dictations, exams, recycle, dashboard, ai, files, import: imp, export: exp, archive, graduated, trials, admin, brandImg };
 })();

@@ -76,13 +76,19 @@ App.registerView('admin', {
         </div>
       </div>
 
-      <!-- 数据迁入（迁移指南：跨租户迁入 version 3 备份 JSON，覆盖式，仅 platform_admin） -->
+      <!-- 数据迁入（迁移指南：跨租户迁入 version 3 备份 JSON，覆盖/增量，仅 platform_admin） -->
       <div class="card">
         <div class="card-title">数据迁入</div>
         <div class="muted" style="margin-bottom:10px;font-size:12.5px">
-          迁入格式见迁移文档，支持 version 3 备份 JSON；迁入为覆盖式，会清空目标空间现有业务数据。
+          迁入格式见迁移文档，支持 version 3 备份 JSON。<b>覆盖导入</b>会清空目标空间现有业务数据；<b>增量导入</b>保留现有数据，
+          班级按「名称+学年」、学生按学号自动匹配到空间已有记录（已存在则更新），子表全部挂到匹配后的真实班级/学生/老师下。
         </div>
         <div class="form-row" style="align-items:flex-end">
+          <div>
+            <label class="form-label">导入方式</label>
+            <label style="display:flex;align-items:center;gap:6px;margin-top:4px"><input type="radio" name="mig-mode" value="replace" checked> 覆盖导入</label>
+            <label style="display:flex;align-items:center;gap:6px;margin-top:4px"><input type="radio" name="mig-mode" value="merge"> 增量导入（合并匹配）</label>
+          </div>
           <div>
             <label class="form-label">迁移文件（.json，≤50MB）</label>
             <input type="file" id="mig-file" accept=".json,application/json">
@@ -120,6 +126,33 @@ App.registerView('admin', {
         <div class="card-title">平台设置</div>
         <div id="platform-settings">
           <div class="muted">加载中…</div>
+        </div>
+      </div>
+
+      <!-- GitHub 品牌图床：上传图片自动推送到私有仓库，经平台代理下发 -->
+      <div class="card">
+        <div class="card-title">GitHub 图床</div>
+        <div class="muted" style="font-size:12.5px;margin-bottom:10px">
+          配置后，「品牌」弹窗里可直接上传图片：平台自动推送到私有 GitHub 仓库，成员经平台接口读取（Token 只存服务端，不出现在图片地址里）。
+        </div>
+        <div class="form-row">
+          <div>
+            <label class="form-label">私有仓库（owner/repo）</label>
+            <input class="form-input" id="gh-repo" placeholder="PythonSmallQ/english-pics">
+          </div>
+          <div>
+            <label class="form-label">分支</label>
+            <input class="form-input" id="gh-branch" placeholder="main">
+          </div>
+          <div>
+            <label class="form-label">GitHub Token（Fine-grained，Contents 读写）</label>
+            <input class="form-input" id="gh-token" type="password" placeholder="ghp_… / github_pat_…">
+          </div>
+        </div>
+        <div id="gh-status" class="muted" style="font-size:12.5px;margin:6px 0 10px">加载中…</div>
+        <div class="modal-actions">
+          <button class="btn" id="gh-clear" type="button">清除配置</button>
+          <button class="btn btn-primary" id="gh-save" type="button">保存</button>
         </div>
       </div>
 
@@ -166,9 +199,121 @@ App.registerView('admin', {
     bindMigrate(el);
     await renderPlatformSettings();
     await bindPlatformAi();
+    await bindGithubCfg();
     await Promise.all([renderTenants(), renderUsers()]);
   },
 });
+
+/** GitHub 品牌图床配置：加载/保存/清除（token 只存服务端） */
+async function bindGithubCfg() {
+  const statusEl = document.getElementById('gh-status');
+  const tokenInput = document.getElementById('gh-token');
+  let current = null;
+  try {
+    current = await api.brandImg.getConfig();
+  } catch (err) {
+    statusEl.textContent = `加载失败：${(err && err.message) || '未知错误'}`;
+    return;
+  }
+  document.getElementById('gh-repo').value = current.repo || '';
+  document.getElementById('gh-branch').value = current.branch || 'main';
+  statusEl.textContent = current.configured
+    ? `已配置（Token ${current.tokenMasked}），重新输入可更换；留空保持不变`
+    : '未配置：品牌弹窗中的图片上传不可用';
+  if (current.configured) tokenInput.placeholder = `已配置（${current.tokenMasked}），留空保持不变`;
+
+  document.getElementById('gh-save').addEventListener('click', async () => {
+    const repo = document.getElementById('gh-repo').value.trim();
+    const branch = document.getElementById('gh-branch').value.trim() || 'main';
+    const token = tokenInput.value.trim();
+    if (!token && !(current && current.configured)) {
+      App.toast('请填写 GitHub Token（或先清除配置）');
+      return;
+    }
+    if (!repo) {
+      App.toast('请填写私有仓库（owner/repo）');
+      return;
+    }
+    const btn = document.getElementById('gh-save');
+    btn.disabled = true;
+    try {
+      const data = await api.brandImg.updateConfig({ token, repo, branch });
+      current = { configured: data.configured, repo: data.repo, branch: data.branch, tokenMasked: data.tokenMasked };
+      statusEl.textContent = data.configured
+        ? `已配置（Token ${data.tokenMasked}），重新输入可更换；留空保持不变`
+        : '已清除配置';
+      tokenInput.value = '';
+      tokenInput.placeholder = data.configured ? `已配置（${data.tokenMasked}），留空保持不变` : 'ghp_… / github_pat_…';
+      App.toast(data.configured ? 'GitHub 图床已保存' : '已清除');
+    } catch (err) {
+      App.toast((err && err.message) || '保存失败');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('gh-clear').addEventListener('click', async () => {
+    const ok = await App.confirmDialog('清除 GitHub 图床配置？品牌弹窗中的图片上传将不可用，已上传的图片不受影响。');
+    if (!ok) return;
+    try {
+      await api.brandImg.updateConfig({ token: '', repo: '', branch: 'main' });
+      current = { configured: false };
+      document.getElementById('gh-repo').value = '';
+      document.getElementById('gh-branch').value = 'main';
+      tokenInput.value = '';
+      tokenInput.placeholder = 'ghp_… / github_pat_…';
+      statusEl.textContent = '未配置：品牌弹窗中的图片上传不可用';
+      App.toast('已清除配置');
+    } catch (err) {
+      App.toast((err && err.message) || '清除失败');
+    }
+  });
+}
+
+/** 读取图片文件 → base64（品牌弹窗上传用） */
+function readImageAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      const m = dataUrl.match(/^data:[^;]+;base64,(.+)$/);
+      if (m) resolve(m[1]);
+      else reject(new Error('图片读取失败'));
+    };
+    reader.onerror = () => reject(new Error('图片读取失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** 品牌弹窗内的图片上传：推到 GitHub 并回填对应输入框 */
+async function uploadBrandImage(inputId, uploadBtn) {
+  const file = await new Promise((resolve) => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml,image/x-icon';
+    inp.onchange = () => resolve(inp.files[0] || null);
+    inp.click();
+  });
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) {
+    App.toast('图片超过 5MB 上限');
+    return;
+  }
+  uploadBtn.disabled = true;
+  const oldText = uploadBtn.textContent;
+  uploadBtn.textContent = '上传中…';
+  try {
+    const contentBase64 = await readImageAsBase64(file);
+    const data = await api.brandImg.upload({ filename: file.name, contentBase64 });
+    document.getElementById(inputId).value = data.url;
+    App.toast('已推送到 GitHub 并回填地址');
+  } catch (err) {
+    App.toast((err && err.message) || '上传失败');
+  } finally {
+    uploadBtn.disabled = false;
+    uploadBtn.textContent = oldText;
+  }
+}
 
 /** 平台 AI 接口：加载/保存/清除（未自配接口的成员走平台接口并计配额） */
 async function bindPlatformAi() {
@@ -365,7 +510,8 @@ function bindMigrate(el) {
       return;
     }
     const mode = el.querySelector('input[name="mig-target"]:checked').value;
-    const body = { backup };
+    const importMode = el.querySelector('input[name="mig-mode"]:checked')?.value || 'replace';
+    const body = { backup, mode: importMode };
     if (mode === 'existing') {
       if (!tenantSelect.value) {
         App.toast('请选择目标空间');
@@ -381,7 +527,9 @@ function bindMigrate(el) {
       body.new_tenant_name = name;
     }
     const ok = await App.confirmDialog(
-      '迁入为覆盖式：将清空目标空间现有业务数据（班级、学生、教案、课表、作业、默写、考试等，成员与配额不受影响），然后写入备份内容。确认继续？'
+      importMode === 'merge'
+        ? '增量导入：保留目标空间现有数据，备份中的班级/学生将自动匹配到空间已有记录并更新，其余新增。确认继续？'
+        : '迁入为覆盖式：将清空目标空间现有业务数据（班级、学生、教案、课表、作业、默写、考试等，成员与配额不受影响），然后写入备份内容。确认继续？'
     );
     if (!ok) return;
 
@@ -400,7 +548,8 @@ function bindMigrate(el) {
         .join('，');
       resultBox.innerHTML = `
         <div class="muted" style="font-size:12.5px">
-          迁入完成：${App.esc(data.tenant_name || '')}（共 ${total} 条）${summary ? '<br>' + App.esc(summary) : ''}
+          迁入完成：${App.esc(data.tenant_name || '')}（${data.mode === 'merge' ? '增量' : '覆盖'}，共 ${total} 条）${summary ? '<br>' + App.esc(summary) : ''}
+          ${data.matched && (data.matched.classes || data.matched.students) ? `<br><span class="muted">匹配到已有：班级 ${data.matched.classes} 个 · 学生 ${data.matched.students} 人（已就地更新）</span>` : ''}
         </div>`;
       App.toast(`迁入完成，共 ${total} 条`);
       await renderTenants();
@@ -475,6 +624,104 @@ function bindCreate(el) {
 }
 
 /** 租户列表 */
+/** 商议版品牌定制弹窗：校徽/校训/自定义 icon/加载图标与动画（图片 URL，可托管 GitHub） */
+async function openBrandingModal(tenantId, tenantName) {
+  App.modal('品牌定制 — ' + tenantName, '<div class="muted">加载中…</div>');
+  let current = {};
+  try {
+    const detail = await api.tenants.get(tenantId);
+    current = detail.branding || {};
+  } catch (e) {
+    App.closeModal();
+    App.toast((e && e.message) || '加载失败');
+    return;
+  }
+  const ANIMS = [
+    ['spin', '旋转'],
+    ['pulse', '脉冲'],
+    ['bounce', '弹跳'],
+    ['bar', '伸缩'],
+  ];
+  App.modal(
+    `品牌定制 — ${tenantName}`,
+    `
+    <div class="muted" style="font-size:12.5px;margin-bottom:10px">
+      图片请填写 http(s) 地址，可托管在 GitHub 仓库（用 raw.githubusercontent.com 或 cdn.jsdelivr.net 地址）。
+      保存后该空间成员侧栏显示校徽校训，浏览器图标与加载动画同步生效。
+    </div>
+    <div class="form-row">
+      <div>
+        <label class="form-label">校徽图片 URL</label>
+        <input class="form-input" id="br-logo" value="${App.esc(current.logoUrl || '')}" placeholder="https://…/logo.png">
+        <button class="btn btn-sm" id="br-logo-up" type="button" style="margin-top:6px">上传到 GitHub 并回填</button>
+      </div>
+      <div>
+        <label class="form-label">校训（60 字内）</label>
+        <input class="form-input" id="br-motto" value="${App.esc(current.motto || '')}" maxlength="60" placeholder="如：博学而笃志，切问而近思">
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label class="form-label">自定义 Icon（浏览器标签页图标）</label>
+        <input class="form-input" id="br-favicon" value="${App.esc(current.faviconUrl || '')}" placeholder="https://…/favicon.png">
+        <button class="btn btn-sm" id="br-favicon-up" type="button" style="margin-top:6px">上传到 GitHub 并回填</button>
+      </div>
+      <div>
+        <label class="form-label">加载图标 URL</label>
+        <input class="form-input" id="br-loader" value="${App.esc(current.loaderUrl || '')}" placeholder="https://…/loader.gif">
+        <button class="btn btn-sm" id="br-loader-up" type="button" style="margin-top:6px">上传到 GitHub 并回填</button>
+      </div>
+      <div>
+        <label class="form-label">加载动画</label>
+        <select class="form-input" id="br-anim">
+          ${ANIMS.map(([v, l]) => `<option value="${v}"${(current.loaderAnim || 'spin') === v ? ' selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-danger" id="br-clear" type="button">清除品牌</button>
+      <button class="btn" id="br-cancel" type="button">取消</button>
+      <button class="btn btn-primary" id="br-save" type="button">保存</button>
+    </div>`,
+    () => {
+      document.getElementById('br-cancel').onclick = () => App.closeModal();
+      document.getElementById('br-logo-up').onclick = (e) => uploadBrandImage('br-logo', e.currentTarget);
+      document.getElementById('br-favicon-up').onclick = (e) => uploadBrandImage('br-favicon', e.currentTarget);
+      document.getElementById('br-loader-up').onclick = (e) => uploadBrandImage('br-loader', e.currentTarget);
+      document.getElementById('br-save').onclick = async () => {
+        const body = {
+          logoUrl: document.getElementById('br-logo').value.trim(),
+          motto: document.getElementById('br-motto').value.trim(),
+          faviconUrl: document.getElementById('br-favicon').value.trim(),
+          loaderUrl: document.getElementById('br-loader').value.trim(),
+          loaderAnim: document.getElementById('br-anim').value,
+        };
+        const saveBtn = document.getElementById('br-save');
+        saveBtn.disabled = true;
+        try {
+          await api.admin.setBranding(tenantId, body);
+          App.closeModal();
+          App.toast('品牌定制已保存');
+        } catch (err) {
+          saveBtn.disabled = false;
+          App.toast((err && err.message) || '保存失败');
+        }
+      };
+      document.getElementById('br-clear').onclick = async () => {
+        const ok = await App.confirmDialog('清除该空间的品牌定制？将恢复默认图标与加载样式。');
+        if (!ok) return;
+        try {
+          await api.admin.setBranding(tenantId, {});
+          App.closeModal();
+          App.toast('品牌定制已清除');
+        } catch (err) {
+          App.toast((err && err.message) || '清除失败');
+        }
+      };
+    }
+  );
+}
+
 async function renderTenants() {
   const box = document.getElementById('admin-tenants');
   try {
@@ -507,6 +754,7 @@ async function renderTenants() {
                 <td>${t.memberCount ?? t.member_count ?? '-'}</td>
                 <td>
                   <button class="btn btn-sm" data-quota="${t.id}" data-name="${App.esc(t.name)}" type="button">配额/到期</button>
+                  ${t.plan === 'custom' ? `<button class="btn btn-sm" data-branding="${t.id}" data-name="${App.esc(t.name)}" type="button">品牌</button>` : ''}
                   <button class="btn btn-sm ${t.status === 'active' ? 'btn-danger' : ''}" data-toggle-status="${t.id}" data-status="${t.status === 'active' ? 'disabled' : 'active'}" type="button">
                     ${t.status === 'active' ? '停用' : '启用'}
                   </button>
@@ -533,6 +781,9 @@ async function renderTenants() {
     });
     box.querySelectorAll('[data-quota]').forEach((btn) => {
       btn.addEventListener('click', () => openQuotaModal(btn.dataset.quota, btn.dataset.name));
+    });
+    box.querySelectorAll('[data-branding]').forEach((btn) => {
+      btn.addEventListener('click', () => openBrandingModal(btn.dataset.branding, btn.dataset.name));
     });
     box.querySelectorAll('[data-del-tenant]').forEach((btn) => {
       btn.addEventListener('click', async () => {

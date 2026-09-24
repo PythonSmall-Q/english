@@ -180,20 +180,30 @@ app.get('/class-stats', requireAuth, requireTenant, async (c) => {
     .bind(tenantId, academicYear, classId)
     .all();
   const exams = [];
-  for (const e of examRows.results) {
-    const scoreRows = await db
+  // 成绩一次查出（按考试×学生双 IN），避免逐考试循环查询
+  const examIds = examRows.results.map((e) => e.id);
+  const scoreByExam = new Map(); // examId → Map(studentId → score)
+  if (examIds.length && students.length) {
+    const phE = examIds.map(() => '?').join(',');
+    const phS = students.map(() => '?').join(',');
+    const all = await db
       .prepare(
-        `SELECT s.student_id AS sid, s.score
-           FROM exam_scores s
-           JOIN students st ON st.id = s.student_id
-          WHERE s.tenant_id = ? AND s.exam_id = ?
-            AND st.tenant_id = ? AND st.class_id = ? AND st.academic_year = ?`
+        `SELECT exam_id, student_id, score
+           FROM exam_scores
+          WHERE tenant_id = ? AND exam_id IN (${phE}) AND student_id IN (${phS})`
       )
-      .bind(tenantId, e.id, tenantId, classId, academicYear)
+      .bind(tenantId, ...examIds, ...students.map((s) => s.id))
       .all();
+    for (const r of all.results) {
+      if (!scoreByExam.has(r.exam_id)) scoreByExam.set(r.exam_id, new Map());
+      scoreByExam.get(r.exam_id).set(r.student_id, r.score);
+    }
+  }
+  for (const e of examRows.results) {
     const scores = {};
     for (const s of students) scores[s.id] = null;
-    for (const r of scoreRows.results) scores[r.sid] = r.score;
+    const m = scoreByExam.get(e.id);
+    if (m) for (const [sid, sc] of m) scores[sid] = sc;
     exams.push({ examId: e.id, name: e.name, examDate: e.exam_date, scores });
   }
 
