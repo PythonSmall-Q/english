@@ -124,6 +124,8 @@
     addAccount: (id, body) => request(`/tenants/${id}/accounts`, { method: 'POST', body }),
     /** 成员配额明细：active+removed 成员、各人用量与按用户配额、租户总用量 */
     quotaDetail: (id) => request(`/tenants/${id}/quota-detail`),
+    /** 空间品牌定制（本空间 owner）：body 同 admin 端点 */
+    setBranding: (id, body) => request(`/tenants/${id}/branding`, { method: 'PUT', body }),
     /** 设置/清除成员按用户配额（quota 为 ≥0 整数或 null=不限） */
     updateMemberQuota: (id, userId, resource, quota) =>
       request(`/tenants/${id}/members/${userId}/quota`, { method: 'PUT', body: { resource, quota } }),
@@ -368,6 +370,10 @@
     /** 平台 AI 接口配置（GET 密钥仅掩码；PUT body {baseUrl?, apiKey?, model?}，apiKey 空=清除） */
     getAiSettings: () => request('/admin/ai-settings'),
     updateAiSettings: (body) => request('/admin/ai-settings', { method: 'PUT', body }),
+    /** 品牌：平台管理员读（非成员空间也可读）/写 */
+    getBranding: (id) => request(`/admin/tenants/${id}/branding`),
+    /** 调整空间套餐：body { plan: 'free'|'pro'|'school'|'custom' }（预设档同时覆盖配额） */
+    setPlan: (id, plan) => request(`/admin/tenants/${id}/plan`, { method: 'PUT', body: { plan } }),
     /** 商议版品牌定制：body {logoUrl?, motto?, faviconUrl?, loaderUrl?, loaderAnim?}；空对象=清除 */
     setBranding: (id, body) => request(`/admin/tenants/${id}/branding`, { method: 'PUT', body }),
     /** 平台管理员物理删除任意空间（不可恢复，含全部数据与文件） */

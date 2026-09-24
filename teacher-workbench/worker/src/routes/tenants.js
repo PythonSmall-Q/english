@@ -318,6 +318,28 @@ app.get('/:id', requireAuth, async (c) => {
 });
 
 /**
+ * PUT /api/v1/tenants/:id/branding — 空间品牌定制（本空间 owner）
+ * 与平台管理员的 admin 端点同规则：body {logoUrl?, motto?, faviconUrl?, loaderUrl?, loaderAnim?}；空对象=清除
+ */
+app.put('/:id/branding', requireAuth, requireTenant, requireRole(['owner']), async (c) => {
+  if (c.req.param('id') !== c.get('tenantId')) {
+    throw new ApiError('FORBIDDEN', '只能修改当前空间的品牌');
+  }
+  const db = c.get('tenantDb') || c.env.DB;
+  const tenantId = c.get('tenantId');
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => ({}));
+  const tenant = await db.prepare('SELECT id, name FROM tenants WHERE id = ?').bind(tenantId).first();
+  if (!tenant) throw new ApiError('NOT_FOUND', '空间不存在');
+  const branding = validateBranding(body);
+  await saveBranding(db, tenantId, branding);
+  await audit(db, tenantId, user.id, branding ? '设置空间品牌' : '清除空间品牌', 'tenant', tenantId, {
+    fields: branding ? Object.keys(branding) : [],
+  });
+  return c.json({ success: true, data: { branding } });
+});
+
+/**
  * POST /api/v1/tenants/:id/members — 邀请成员（owner/admin，§74）
  * body: { email, role: admin|teacher|viewer }
  * 响应只返回一次原始 token；库存 SHA-256；7 天有效

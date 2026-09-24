@@ -10,10 +10,11 @@
 import { Hono } from 'hono';
 import { ApiError, newId, now } from '../db.js';
 import { requireAuth, audit } from '../middleware.js';
-import { PERSONAL_DEFAULTS } from '../quota.js';
+import { PERSONAL_DEFAULTS, PLAN_PRESETS } from '../quota.js';
 import { previousAcademicYear, archiveTenantYear, archiveAllTenants } from '../archive.js';
 import { rolloverTenants } from '../rollover.js';
 import { purgeExpiredTrials, purgeTenantData } from '../trial.js';
+import { validateBranding, saveBranding, parseBranding } from '../branding.js';
 
 const app = new Hono();
 
@@ -756,9 +757,71 @@ function maskKey(key) {
 }
 
 /**
- * PUT /api/v1/admin/tenants/:id/branding — 商议版租户品牌定制（仅 platform_admin）
+ * PUT /api/v1/admin/tenants/:id/plan — 调整空间套餐（平台管理员）
+ * body: { plan: 'free'|'pro'|'school'|'custom' }
+ * 预设档（free/pro/school）同时按 PLAN_PRESETS 覆盖配额与成员上限；custom 只改套餐名、不动配额。
+ */
+app.put('/tenants/:id/plan', requireAuth, async (c) => {
+  const user = requirePlatformAdmin(c);
+  const tenantId = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const plan = String(body.plan || '');
+  if (!PLAN_PRESETS[plan]) {
+    throw new ApiError('VALIDATION_ERROR', `plan 必须是 ${Object.keys(PLAN_PRESETS).join('|')}`);
+  }
+  const tenant = await c.env.DB.prepare('SELECT id, name, plan FROM tenants WHERE id = ?').bind(tenantId).first();
+  if (!tenant) throw new ApiError('NOT_FOUND', '空间不存在');
+
+  const ts = now();
+  const preset = PLAN_PRESETS[plan];
+  if (preset.quotas) {
+    // 预设档：配额与成员上限整体覆盖
+    const q = preset.quotas;
+    await c.env.DB
+      .prepare(
+        `UPDATE tenant_quotas
+            SET max_classes = ?, max_students = ?, max_lessons = ?, max_assignments = ?, max_dictations = ?,
+                max_exams = ?, max_storage_bytes = ?, max_ai_requests_month = ?, max_members = ?, updated_at = ?
+          WHERE tenant_id = ?`
+      )
+      .bind(
+        q.max_classes ?? null,
+        q.max_students ?? null,
+        q.max_lessons ?? null,
+        q.max_assignments ?? null,
+        q.max_dictations ?? null,
+        q.max_exams ?? null,
+        q.max_storage_bytes ?? null,
+        q.max_ai_requests_month ?? null,
+        preset.maxMembers ?? null,
+        ts,
+        tenantId
+      )
+      .run();
+  }
+  await c.env.DB.prepare('UPDATE tenants SET plan = ?, updated_at = ? WHERE id = ?').bind(plan, ts, tenantId).run();
+  console.log(`[admin] 空间「${tenant.name}」套餐 ${tenant.plan} → ${plan}（操作者 ${user.email}）`);
+  return c.json({ success: true, data: { id: tenantId, plan, label: preset.label || plan } });
+});
+
+/**
+ * GET /api/v1/admin/tenants/:id/branding — 读取品牌配置（平台管理员，非成员也可读）
+ * 品牌弹窗预填用；空间所有者走 GET /tenants/:id（成员接口已带 branding）。
+ */
+app.get('/tenants/:id/branding', requireAuth, async (c) => {
+  requirePlatformAdmin(c);
+  const tenant = await c.env.DB
+    .prepare('SELECT id, name, branding FROM tenants WHERE id = ?')
+    .bind(c.req.param('id'))
+    .first();
+  if (!tenant) throw new ApiError('NOT_FOUND', '空间不存在');
+  return c.json({ success: true, data: { branding: parseBranding(tenant.branding) } });
+});
+
+/**
+ * PUT /api/v1/admin/tenants/:id/branding — 品牌定制（平台管理员；所有套餐可用）
  * body: { logoUrl?, motto?, faviconUrl?, loaderUrl?, loaderAnim? }；全部为空对象 = 清除
- * 仅 plan='custom'（商议版）租户可设置；图片为 URL（可托管 GitHub，经 raw/jsDelivr 访问）
+ * 图片为 URL（可用平台 GitHub 图床上传获得，亦可托管任意图床）
  * loaderAnim: spin | pulse | bounce | bar
  */
 app.put('/tenants/:id/branding', requireAuth, async (c) => {
@@ -768,35 +831,11 @@ app.put('/tenants/:id/branding', requireAuth, async (c) => {
 
   const tenant = await c.env.DB.prepare('SELECT id, name, plan FROM tenants WHERE id = ?').bind(tenantId).first();
   if (!tenant) throw new ApiError('NOT_FOUND', '空间不存在');
-  if (tenant.plan !== 'custom') {
-    throw new ApiError('VALIDATION_ERROR', '仅「商议版」空间支持品牌定制');
-  }
 
-  const urlFields = ['logoUrl', 'faviconUrl', 'loaderUrl'];
-  const branding = {};
-  for (const f of urlFields) {
-    const v = String(body[f] || '').trim();
-    if (v && !/^https?:\/\//.test(v)) {
-      throw new ApiError('VALIDATION_ERROR', `${f} 必须是 http(s) 图片地址`);
-    }
-    if (v) branding[f] = v;
-  }
-  const motto = String(body.motto || '').trim();
-  if (motto.length > 60) throw new ApiError('VALIDATION_ERROR', '校训需为 60 字以内');
-  if (motto) branding.motto = motto;
-  const loaderAnim = String(body.loaderAnim || '').trim();
-  if (loaderAnim && !['spin', 'pulse', 'bounce', 'bar'].includes(loaderAnim)) {
-    throw new ApiError('VALIDATION_ERROR', 'loaderAnim 必须是 spin|pulse|bounce|bar');
-  }
-  if (loaderAnim) branding.loaderAnim = loaderAnim;
-
-  const hasAny = Object.keys(branding).length > 0;
-  await c.env.DB
-    .prepare('UPDATE tenants SET branding = ?, updated_at = ? WHERE id = ?')
-    .bind(hasAny ? JSON.stringify(branding) : null, now(), tenantId)
-    .run();
-  console.log(`[admin] 品牌定制已${hasAny ? '更新' : '清除'}：${tenant.name}（操作者 ${user.email}）`);
-  return c.json({ success: true, data: { branding: hasAny ? branding : null } });
+  const branding = validateBranding(body);
+  await saveBranding(c.env.DB, tenantId, branding);
+  console.log(`[admin] 品牌定制已${branding ? '更新' : '清除'}：${tenant.name}（操作者 ${user.email}）`);
+  return c.json({ success: true, data: { branding } });
 });
 
 export default app;

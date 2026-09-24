@@ -155,6 +155,17 @@ App.registerView('settings', {
         <div id="my-quota"><div class="muted">加载中…</div></div>
       </div>
 
+      <!-- 2.2 空间品牌（仅 owner：校徽/校训/自定义 icon/加载图标与动画） -->
+      ${tenant.role === 'owner' ? `
+      <div class="card">
+        <div class="card-title">空间品牌</div>
+        <div class="muted" style="font-size:12.5px;margin-bottom:10px">
+          校徽与校训显示在成员侧边栏；自定义图标替换浏览器标签页图标；加载图标用于上传/导入进度。
+          图片可用下方按钮上传到 GitHub 图床（需平台管理员已配置），也可填任意图片 URL。
+        </div>
+        <div id="brand-settings"><div class="muted">加载中…</div></div>
+      </div>` : ''}
+
       <!-- 3. 数据管理（§50/§51）：按角色只渲染有权限的入口 -->
       ${isAdmin || canExportStudents ? `
       <div class="card">
@@ -229,8 +240,145 @@ App.registerView('settings', {
     bindDataManagement();
     bindImportEntries();
     await bindAiSettings();
+    await bindBrandSettings();
   },
 });
+
+/** 空间品牌（owner）：加载当前配置，保存/清除；图片可上传 GitHub 图床回填 */
+async function bindBrandSettings() {
+  const box = document.getElementById('brand-settings');
+  if (!box) return;
+  const tenant = App.state.tenant;
+  let current = {};
+  try {
+    const detail = await api.tenants.get(tenant.id);
+    current = detail.branding || {};
+  } catch (e) {
+    box.innerHTML = `<div class="muted">品牌配置加载失败：${App.esc((e && e.message) || '未知错误')}</div>`;
+    return;
+  }
+  const ANIMS = [
+    ['spin', '旋转'],
+    ['pulse', '脉冲'],
+    ['bounce', '弹跳'],
+    ['bar', '伸缩'],
+  ];
+  box.innerHTML = `
+    <div class="form-row">
+      <div>
+        <label class="form-label">校徽图片 URL</label>
+        <input class="form-input" id="bs-logo" value="${App.esc(current.logoUrl || '')}" placeholder="https://…/logo.png">
+        <button class="btn btn-sm" id="bs-logo-up" type="button" style="margin-top:6px">上传到 GitHub 并回填</button>
+      </div>
+      <div>
+        <label class="form-label">校训（60 字内）</label>
+        <input class="form-input" id="bs-motto" value="${App.esc(current.motto || '')}" maxlength="60" placeholder="如：博学而笃志，切问而近思">
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label class="form-label">自定义 Icon</label>
+        <input class="form-input" id="bs-favicon" value="${App.esc(current.faviconUrl || '')}" placeholder="https://…/favicon.png">
+        <button class="btn btn-sm" id="bs-favicon-up" type="button" style="margin-top:6px">上传到 GitHub 并回填</button>
+      </div>
+      <div>
+        <label class="form-label">加载图标 URL</label>
+        <input class="form-input" id="bs-loader" value="${App.esc(current.loaderUrl || '')}" placeholder="https://…/loader.gif">
+        <button class="btn btn-sm" id="bs-loader-up" type="button" style="margin-top:6px">上传到 GitHub 并回填</button>
+      </div>
+      <div>
+        <label class="form-label">加载动画</label>
+        <select class="form-input" id="bs-anim">
+          ${ANIMS.map(([v, l]) => `<option value="${v}"${(current.loaderAnim || 'spin') === v ? ' selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-danger" id="bs-clear" type="button">清除品牌</button>
+      <button class="btn btn-primary" id="bs-save" type="button">保存品牌</button>
+    </div>`;
+
+  const readForm = () => ({
+    logoUrl: document.getElementById('bs-logo').value.trim(),
+    motto: document.getElementById('bs-motto').value.trim(),
+    faviconUrl: document.getElementById('bs-favicon').value.trim(),
+    loaderUrl: document.getElementById('bs-loader').value.trim(),
+    loaderAnim: document.getElementById('bs-anim').value,
+  });
+
+  document.getElementById('bs-save').addEventListener('click', async () => {
+    const btn = document.getElementById('bs-save');
+    btn.disabled = true;
+    try {
+      const data = await api.tenants.setBranding(tenant.id, readForm());
+      App.state.branding = data.branding || null;
+      App.applyBranding?.();
+      App.toast('空间品牌已保存');
+    } catch (err) {
+      App.toast((err && err.message) || '保存失败');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('bs-clear').addEventListener('click', async () => {
+    const ok = await App.confirmDialog('清除空间品牌？将恢复默认图标与加载样式。');
+    if (!ok) return;
+    try {
+      await api.tenants.setBranding(tenant.id, {});
+      App.state.branding = null;
+      App.applyBranding?.();
+      document.getElementById('bs-logo').value = '';
+      document.getElementById('bs-motto').value = '';
+      document.getElementById('bs-favicon').value = '';
+      document.getElementById('bs-loader').value = '';
+      App.toast('空间品牌已清除');
+    } catch (err) {
+      App.toast((err && err.message) || '清除失败');
+    }
+  });
+
+  // 图片上传（GitHub 图床）：选图 → 上传 → 回填
+  const upload = async (inputId, btn) => {
+    const file = await new Promise((resolve) => {
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml,image/x-icon';
+      inp.onchange = () => resolve(inp.files[0] || null);
+      inp.click();
+    });
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      App.toast('图片超过 5MB 上限');
+      return;
+    }
+    btn.disabled = true;
+    const old = btn.textContent;
+    btn.textContent = '上传中…';
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const m = String(reader.result || '').match(/^data:[^;]+;base64,(.+)$/);
+          m ? resolve(m[1]) : reject(new Error('读取失败'));
+        };
+        reader.onerror = () => reject(new Error('读取失败'));
+        reader.readAsDataURL(file);
+      });
+      const data = await api.brandImg.upload({ filename: file.name, contentBase64: dataUrl });
+      document.getElementById(inputId).value = data.url;
+      App.toast('已推送到 GitHub 并回填地址');
+    } catch (err) {
+      App.toast((err && err.message) || '上传失败');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+  };
+  document.getElementById('bs-logo-up').addEventListener('click', (e) => upload('bs-logo', e.currentTarget));
+  document.getElementById('bs-favicon-up').addEventListener('click', (e) => upload('bs-favicon', e.currentTarget));
+  document.getElementById('bs-loader-up').addEventListener('click', (e) => upload('bs-loader', e.currentTarget));
+}
 
 /** 设备模式：读取本机保存值，切换即生效 */
 function bindDeviceMode() {

@@ -84,7 +84,28 @@ app.put('/config', requireAuth, async (c) => {
 // ---------- 上传（推送到 GitHub） ----------
 
 app.post('/', requireAuth, async (c) => {
-  const user = requirePlatformAdminLocal(c);
+  const user = c.get('user');
+  // 平台管理员，或本空间 owner 均可上传（图片按租户前缀隔离存放）
+  let tenantPrefix = 'platform';
+  if (user.platform_role !== 'platform_admin') {
+    const tenantId = c.req.header('X-Tenant-Id');
+    if (!tenantId) throw new ApiError('BAD_REQUEST', '缺少 X-Tenant-Id 请求头');
+    // 主库 → TRIAL_DB 双库定位成员身份（与 requireTenant 同口径）
+    let membership = await c.env.DB
+      .prepare("SELECT role FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
+      .bind(tenantId, user.id)
+      .first();
+    if (!membership && c.env.TRIAL_DB) {
+      membership = await c.env.TRIAL_DB
+        .prepare("SELECT role FROM memberships WHERE tenant_id = ? AND user_id = ? AND status = 'active'")
+        .bind(tenantId, user.id)
+        .first();
+    }
+    if (!membership || membership.role !== 'owner') {
+      throw new ApiError('FORBIDDEN', '仅平台管理员或空间所有者可上传品牌图片');
+    }
+    tenantPrefix = tenantId.slice(0, 8);
+  }
   const cfg = await readCfg(c.env.DB);
   if (!cfg) throw new ApiError('PRECONDITION_FAILED', '未配置 GitHub 图床（平台管理 → GitHub 图床）');
 
@@ -100,7 +121,7 @@ app.post('/', requireAuth, async (c) => {
   }
   if (bytes > MAX_BYTES) throw new ApiError('VALIDATION_ERROR', '图片超过 5MB 上限');
 
-  const path = `${newId().slice(0, 8)}-${filename}`;
+  const path = `${tenantPrefix}/${newId().slice(0, 8)}-${filename}`;
   const resp = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${path}`, {
     method: 'PUT',
     headers: {

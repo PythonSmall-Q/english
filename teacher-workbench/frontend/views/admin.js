@@ -624,12 +624,66 @@ function bindCreate(el) {
 }
 
 /** 租户列表 */
-/** 商议版品牌定制弹窗：校徽/校训/自定义 icon/加载图标与动画（图片 URL，可托管 GitHub） */
+/** 调整空间套餐弹窗：预设档（基础/专业/学校）会覆盖配额与成员上限，商议只改名不动配额 */
+function openPlanModal(tenantId, tenantName, current) {
+  App.modal(
+    `调整套餐 — ${tenantName}`,
+    `
+    <div class="muted" style="font-size:12.5px;margin-bottom:10px">
+      选择预设档（基础版/专业版/学校版）会<b>立即按套餐覆盖该空间的配额与成员上限</b>；「商议」只改套餐名，配额保持现状。
+    </div>
+    ${[
+      ['free', '基础版', '1 班 · 30 学生 · AI 20 次/月 · 10MB · 5 成员'],
+      ['pro', '专业版', '10 班 · 300 学生 · AI 500 次/月 · 5GB · 30 成员'],
+      ['school', '学校版', '班级学生不限 · AI 5000 次/月 · 50GB · 成员不限'],
+      ['custom', '商议', '保持现有配额不变'],
+    ]
+      .map(
+        ([v, label, desc]) => `
+        <label style="display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer">
+          <input type="radio" name="plan-sel" value="${v}"${(current || 'custom') === v ? ' checked' : ''} style="margin-top:3px">
+          <span><b>${label}</b><br><span class="muted" style="font-size:12px">${desc}</span></span>
+        </label>`
+      )
+      .join('')}
+    <div class="modal-actions">
+      <button class="btn" id="plan-cancel" type="button">取消</button>
+      <button class="btn btn-primary" id="plan-save" type="button">保存</button>
+    </div>`,
+    () => {
+      document.getElementById('plan-cancel').onclick = () => App.closeModal();
+      document.getElementById('plan-save').onclick = async () => {
+        const plan = document.querySelector('input[name="plan-sel"]:checked')?.value;
+        if (!plan) return;
+        if (plan !== 'custom') {
+          const ok = await App.confirmDialog(
+            `切换到预设套餐将按套餐覆盖该空间的全部配额与成员上限，现有自定义配额会丢失。确认继续？`
+          );
+          if (!ok) return;
+        }
+        const btn = document.getElementById('plan-save');
+        btn.disabled = true;
+        try {
+          await api.admin.setPlan(tenantId, plan);
+          App.closeModal();
+          App.toast('套餐已调整');
+          await renderTenants();
+        } catch (err) {
+          btn.disabled = false;
+          App.toast((err && err.message) || '调整失败');
+        }
+      };
+    }
+  );
+}
+
+/** 品牌定制弹窗：校徽/校训/自定义 icon/加载图标与动画（图片 URL，可托管 GitHub）
+ *  加载走 admin 专用接口：平台管理员即使不是该空间成员也能读写（修复「你不属于该空间」） */
 async function openBrandingModal(tenantId, tenantName) {
   App.modal('品牌定制 — ' + tenantName, '<div class="muted">加载中…</div>');
   let current = {};
   try {
-    const detail = await api.tenants.get(tenantId);
+    const detail = await api.admin.getBranding(tenantId);
     current = detail.branding || {};
   } catch (e) {
     App.closeModal();
@@ -754,7 +808,8 @@ async function renderTenants() {
                 <td>${t.memberCount ?? t.member_count ?? '-'}</td>
                 <td>
                   <button class="btn btn-sm" data-quota="${t.id}" data-name="${App.esc(t.name)}" type="button">配额/到期</button>
-                  ${t.plan === 'custom' ? `<button class="btn btn-sm" data-branding="${t.id}" data-name="${App.esc(t.name)}" type="button">品牌</button>` : ''}
+                  <button class="btn btn-sm" data-plan="${t.id}" data-name="${App.esc(t.name)}" data-current="${App.esc(t.plan || 'custom')}" type="button">套餐</button>
+                  <button class="btn btn-sm" data-branding="${t.id}" data-name="${App.esc(t.name)}" type="button">品牌</button>
                   <button class="btn btn-sm ${t.status === 'active' ? 'btn-danger' : ''}" data-toggle-status="${t.id}" data-status="${t.status === 'active' ? 'disabled' : 'active'}" type="button">
                     ${t.status === 'active' ? '停用' : '启用'}
                   </button>
@@ -784,6 +839,9 @@ async function renderTenants() {
     });
     box.querySelectorAll('[data-branding]').forEach((btn) => {
       btn.addEventListener('click', () => openBrandingModal(btn.dataset.branding, btn.dataset.name));
+    });
+    box.querySelectorAll('[data-plan]').forEach((btn) => {
+      btn.addEventListener('click', () => openPlanModal(btn.dataset.plan, btn.dataset.name, btn.dataset.current));
     });
     box.querySelectorAll('[data-del-tenant]').forEach((btn) => {
       btn.addEventListener('click', async () => {
