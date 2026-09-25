@@ -4,17 +4,20 @@
  * 约定：
  * - 快捷指令 type：practice 生成练习题 / lesson_plan 写教案 / essay_feedback 批改作文
  *   / analysis 学情解读 / translate 中英互译
- * - 流程（§42）：身份/租户/角色校验 → checkQuota('ai') → 构造 system prompt
- *   → 优先用用户自配 Provider（user_ai_settings 表），其次环境变量 AI_API_KEY，
- *     都没有则用内置 mock（保证可演示）→ 写 ai_generations
+ * - 流程（§42）：身份/租户/角色校验 → checkQuota('ai')（仅平台侧）→ 构造 system prompt
+ *   → 按用户服务方式 mode 路由：own=自配 Provider（不计配额）/ platform=平台接口或
+ *     环境变量 AI_API_KEY（计配额）/ cloudflare=Workers AI（按 credit 扣租户额度）→ 写 ai_generations
+ * - cloudflare 模式：前置校验平台开关与 [ai] binding → env.AI.run(cfModel, {messages})
+ *   → usage 估算 credits → 原子扣减 tenants.ai_credits → 返回 credits/creditsLeft
  * - 浏览器不直连 AI Provider，全部经 Worker 代理
  * - 用户配置端点：GET/PUT /ai/settings（仅本人；密钥只写不读全量，GET 返回掩码）
  */
 
 import { Hono } from 'hono';
 import { ApiError, newId, now } from '../db.js';
-import { requireAuth, requireTenant, requireRole, audit } from '../middleware.js';
+import { requireAuth, requireTenant, requireRole } from '../middleware.js';
 import { checkQuota } from '../quota.js';
+import { CF_MODELS, getCfModel, parseCfAiSetting, estimateCredits, ensureMonthlyReplenish } from '../cfai.js';
 
 const app = new Hono();
 
@@ -44,10 +47,10 @@ function normalizeAiBaseUrl(value) {
     .replace(/\/chat\/completions$/, '');
 }
 
-/** 读取用户自配 AI Provider（无则返回 null） */
+/** 读取用户自配 AI Provider（无则返回 null；含 mode/cf_model） */
 async function getUserAiSettings(db, userId) {
   return db
-    .prepare('SELECT user_id, base_url, api_key, model FROM user_ai_settings WHERE user_id = ?')
+    .prepare('SELECT user_id, base_url, api_key, model, mode, cf_model FROM user_ai_settings WHERE user_id = ?')
     .bind(userId)
     .first();
 }
@@ -67,10 +70,40 @@ async function getPlatformAiConfig(mainDb) {
   }
 }
 
+/** 读取平台级 Cloudflare AI 开关（platform_settings.cf_ai，JSON {enabled}） */
+async function getCfAiSetting(mainDb) {
+  const row = await mainDb.prepare("SELECT value FROM platform_settings WHERE key = 'cf_ai'").first();
+  return parseCfAiSetting(row?.value);
+}
+
 /** 密钥掩码：只暴露末 4 位 */
 function maskKey(key) {
   const k = String(key || '');
   return k ? `****${k.slice(-4)}` : '';
+}
+
+/**
+ * GET /ai/settings 的 tenantCredits 用：按 X-Tenant-Id 头在 主库→试用库 定位租户
+ * 惰性触发月度补足后返回 { credits, monthly, bonus }（无头/未命中返回 null）。
+ */
+async function resolveTenantCredits(c) {
+  const tenantId = c.req.header('X-Tenant-Id');
+  if (!tenantId) return null;
+  let row = await c.env.DB.prepare('SELECT ai_credits FROM tenants WHERE id = ?').bind(tenantId).first();
+  let db = c.env.DB;
+  if (!row && c.env.TRIAL_DB) {
+    db = c.env.TRIAL_DB;
+    row = await db.prepare('SELECT ai_credits FROM tenants WHERE id = ?').bind(tenantId).first();
+  }
+  if (!row) return null;
+  // 展示前惰性触发月度补足（与生成路径同口径，用户月初打开设置即看到补后额度）
+  await ensureMonthlyReplenish(db, tenantId);
+  const fresh = await db
+    .prepare('SELECT ai_credits, ai_credits_monthly, ai_credits_bonus FROM tenants WHERE id = ?')
+    .bind(tenantId)
+    .first();
+  if (!fresh) return null;
+  return { credits: fresh.ai_credits, monthly: fresh.ai_credits_monthly, bonus: fresh.ai_credits_bonus };
 }
 
 /** 无 AI_API_KEY 时的内置 mock 回复（按 type 模板，含 prompt 关键词，保证可演示） */
@@ -116,7 +149,8 @@ function mockGenerate(type, prompt) {
 /**
  * POST /api/v1/ai/generate — 快捷指令生成（§41/§42/§43）
  * body: { type, prompt }
- * 成功：{ result, mock: true|false }（并写入 ai_generations 供历史与配额统计）
+ * 成功：{ id, type, result, mock, cf, credits, creditsLeft }
+ *   （cf=true 为 Cloudflare AI 生成；并写入 ai_generations 供历史与配额统计）
  */
 app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
   // 租户级（配额、生成记录）走试用库/主库 tenantDb；用户级 AI Provider 配置 user_ai_settings 只在主库
@@ -124,6 +158,12 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
   const mainDb = c.env.DB;
   const user = c.get('user');
   const tenantId = c.get('tenantId');
+
+  // 试用空间（TRIAL_DB）一律不支持 AI 助手：写死拒绝，不走到任何 Provider / 扣费逻辑
+  if (c.get('tenant').plan === 'trial' || db === c.env.TRIAL_DB) {
+    throw new ApiError('FORBIDDEN', '试用空间不支持 AI 助手，开通正式版本后可使用', 403);
+  }
+
   const body = await c.req.json().catch(() => ({}));
   const type = String(body.type || '');
   const prompt = String(body.prompt || '').trim();
@@ -132,92 +172,172 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
   }
   if (!prompt) throw new ApiError('VALIDATION_ERROR', 'prompt 不能为空');
 
-  // Provider 优先级：用户自配（主库 user_ai_settings 表，不计配额）>
-  //   平台接口（platform_settings，平台管理员配置，计配额）> 环境变量 AI_API_KEY（计配额）> 内置 mock（计配额）
+  // 服务方式（§42 扩展）：own=自配接口（不计配额）/ cloudflare=Workers AI（按 credit 扣租户额度）/
+  //   platform=平台接口或环境变量或 mock（计配额）；旧数据无 mode 列 → 默认 'own'，按 api_key 有无兼容回退原逻辑
   const userSettings = await getUserAiSettings(mainDb, user.id);
-  const platformCfg = userSettings?.api_key ? null : await getPlatformAiConfig(mainDb);
-  const apiKey = userSettings?.api_key || platformCfg?.apiKey || c.env.AI_API_KEY || '';
-  // billed=1：走平台侧（平台接口/环境变量/mock），计入 AI 月度配额；billed=0：用户自配接口，不计配额
-  const billed = userSettings?.api_key ? 0 : 1;
-
-  // §43：只有走平台侧的调用才校验/占用 AI 月度配额（租户级，按所在库统计）
-  if (billed) {
-    await checkQuota(db, tenantId, 'ai', user.id);
-  }
-
+  const mode = userSettings?.mode || 'own';
   let result;
   let mock = false;
-  if (apiKey) {
-    // 真实 Provider：Workers 代理调用（§42），30 秒超时，非 2xx 视为内部错误
-    const baseUrl = normalizeAiBaseUrl(
-      userSettings?.base_url ||
-      platformCfg?.baseUrl ||
-      c.env.AI_BASE_URL ||
-      'https://api.openai.com/v1'
-    );
-    const model = userSettings?.model || platformCfg?.model || c.env.AI_MODEL || 'gpt-4o-mini';
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
-    try {
-      const resp = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPTS[type] },
-            { role: 'user', content: prompt },
-          ],
-        }),
-        signal: controller.signal,
-      });
-      if (!resp.ok) {
-        const upstream = await resp.text().catch(() => '');
-        let detail = '';
-        try {
-          const parsed = JSON.parse(upstream);
-          detail = parsed?.error?.message || parsed?.message || '';
-        } catch {
-          detail = upstream.trim().slice(0, 180);
-        }
-        const hint =
-          resp.status === 401
-            ? '请检查平台 API 密钥是否有效，以及该端点是否要求 Bearer 鉴权'
-            : resp.status === 403
-              ? '请检查 API 密钥权限、账户余额或模型访问权限'
-              : resp.status === 404
-                ? '请检查 API 端点是否为 OpenAI 兼容接口，以及模型名称是否正确'
-                : '';
-        throw new ApiError(
-          'INTERNAL_ERROR',
-          `AI 服务返回异常状态 ${resp.status}${hint ? `：${hint}` : ''}${detail ? `（${detail}）` : ''}`
-        );
-      }
-      const data = await resp.json();
-      result = data?.choices?.[0]?.message?.content ?? '';
-      if (!result) throw new ApiError('INTERNAL_ERROR', 'AI 服务未返回有效内容');
-    } finally {
-      clearTimeout(timer);
+  let cf = false;
+  let credits = null;
+  let creditsLeft = null;
+
+  if (mode === 'cloudflare') {
+    // 前置校验：平台开关 → [ai] binding → 模型须在目录内
+    const cfSetting = await getCfAiSetting(mainDb);
+    if (!cfSetting.enabled) {
+      throw new ApiError('PRECONDITION_FAILED', '平台未开启 Cloudflare AI', 403);
     }
+    if (!c.env.AI) {
+      throw new ApiError('PRECONDITION_FAILED', 'Cloudflare AI 未绑定（wrangler.toml [ai]）', 403);
+    }
+    const cfModel = userSettings?.cf_model;
+    if (!getCfModel(cfModel)) {
+      throw new ApiError('VALIDATION_ERROR', '请先在设置页选择 Cloudflare AI 模型');
+    }
+
+    // §43：cloudflare 走平台侧，计入 AI 月度请求配额；credits 按实际消耗另计
+    await checkQuota(db, tenantId, 'ai', user.id);
+
+    // 预检：新月先惰性补足（限额 + 加赠池），额度已耗尽则拒绝，避免白白消耗一次 Cloudflare 调用
+    await ensureMonthlyReplenish(db, tenantId);
+    const balanceRow = await db
+      .prepare('SELECT ai_credits, ai_credits_bonus FROM tenants WHERE id = ?')
+      .bind(tenantId)
+      .first();
+    if (!balanceRow || !(balanceRow.ai_credits > 0)) {
+      throw new ApiError('QUOTA_EXCEEDED', 'AI 额度不足，请联系平台管理员充值', 403);
+    }
+
+    let usage = null;
+    try {
+      const resp = await c.env.AI.run(cfModel, {
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPTS[type] },
+          { role: 'user', content: prompt },
+        ],
+        signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+      });
+      result = typeof resp === 'string' ? resp : (resp?.response ?? '');
+      usage = resp && typeof resp === 'object' ? resp.usage : null;
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      const timedOut =
+        err?.name === 'TimeoutError' || /aborted|timeout/i.test(String(err?.message || ''));
+      throw new ApiError(
+        'INTERNAL_ERROR',
+        timedOut ? 'Cloudflare AI 请求超时，请稍后重试' : `Cloudflare AI 调用失败：${String(err?.message || err)}`
+      );
+    }
+    if (!result) throw new ApiError('INTERNAL_ERROR', 'AI 服务未返回有效内容');
+
+    // 计费：按 usage 估算 credits 并原子扣减租户额度（试用库 tenants 同样有 ai_credits 列）
+    // 扣减顺序：基础池先用、加赠池后用——基础池下月补足到限额，加赠池只减不补
+    credits = estimateCredits(cfModel, usage);
+    const balance = balanceRow.ai_credits;
+    const bonus = balanceRow.ai_credits_bonus || 0;
+    const basePart = Math.max(0, balance - bonus); // 基础池剩余
+    const bonusTake = Math.max(0, credits - basePart); // 超出基础池的部分从加赠池扣
+    const upd = await db
+      .prepare(
+        `UPDATE tenants
+            SET ai_credits = ai_credits - ?,
+                ai_credits_bonus = ai_credits_bonus - ?
+          WHERE id = ? AND ai_credits >= ? AND ai_credits_bonus >= ?`
+      )
+      .bind(credits, bonusTake, tenantId, credits, bonusTake)
+      .run();
+    if (upd.meta?.changes !== 1) {
+      throw new ApiError('QUOTA_EXCEEDED', 'AI 额度不足，请联系平台管理员充值');
+    }
+    const tenantRow = await db.prepare('SELECT ai_credits FROM tenants WHERE id = ?').bind(tenantId).first();
+    creditsLeft = tenantRow ? tenantRow.ai_credits : null;
+    cf = true;
   } else {
-    // 无 key：内置 mock，保证演示可用
-    result = mockGenerate(type, prompt);
-    mock = true;
+    // Provider 优先级：用户自配（主库 user_ai_settings 表，不计配额）>
+    //   平台接口（platform_settings，平台管理员配置，计配额）> 环境变量 AI_API_KEY（计配额）> 内置 mock（计配额）
+    const platformCfg = userSettings?.api_key ? null : await getPlatformAiConfig(mainDb);
+    const apiKey = userSettings?.api_key || platformCfg?.apiKey || c.env.AI_API_KEY || '';
+    // billed=1：走平台侧（平台接口/环境变量/mock），计入 AI 月度配额；billed=0：用户自配接口，不计配额
+    const billed = userSettings?.api_key ? 0 : 1;
+
+    // §43：只有走平台侧的调用才校验/占用 AI 月度配额（租户级，按所在库统计）
+    if (billed) {
+      await checkQuota(db, tenantId, 'ai', user.id);
+    }
+
+    if (apiKey) {
+      // 真实 Provider：Workers 代理调用（§42），30 秒超时，非 2xx 视为内部错误
+      const baseUrl = normalizeAiBaseUrl(
+        userSettings?.base_url ||
+        platformCfg?.baseUrl ||
+        c.env.AI_BASE_URL ||
+        'https://api.openai.com/v1'
+      );
+      const model = userSettings?.model || platformCfg?.model || c.env.AI_MODEL || 'gpt-4o-mini';
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+      try {
+        const resp = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: 'system', content: SYSTEM_PROMPTS[type] },
+              { role: 'user', content: prompt },
+            ],
+          }),
+          signal: controller.signal,
+        });
+        if (!resp.ok) {
+          const upstream = await resp.text().catch(() => '');
+          let detail = '';
+          try {
+            const parsed = JSON.parse(upstream);
+            detail = parsed?.error?.message || parsed?.message || '';
+          } catch {
+            detail = upstream.trim().slice(0, 180);
+          }
+          const hint =
+            resp.status === 401
+              ? '请检查平台 API 密钥是否有效，以及该端点是否要求 Bearer 鉴权'
+              : resp.status === 403
+                ? '请检查 API 密钥权限、账户余额或模型访问权限'
+                : resp.status === 404
+                  ? '请检查 API 端点是否为 OpenAI 兼容接口，以及模型名称是否正确'
+                  : '';
+          throw new ApiError(
+            'INTERNAL_ERROR',
+            `AI 服务返回异常状态 ${resp.status}${hint ? `：${hint}` : ''}${detail ? `（${detail}）` : ''}`
+          );
+        }
+        const data = await resp.json();
+        result = data?.choices?.[0]?.message?.content ?? '';
+        if (!result) throw new ApiError('INTERNAL_ERROR', 'AI 服务未返回有效内容');
+      } finally {
+        clearTimeout(timer);
+      }
+    } else {
+      // 无 key：内置 mock，保证演示可用
+      result = mockGenerate(type, prompt);
+      mock = true;
+    }
   }
 
   const id = newId();
   await db
     .prepare(
-      `INSERT INTO ai_generations (id, tenant_id, user_id, type, prompt, result, billed, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO ai_generations (id, tenant_id, user_id, type, prompt, result, billed, credits, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(id, tenantId, user.id, type, prompt, result, billed, now())
+    .bind(id, tenantId, user.id, type, prompt, result, cf ? 1 : userSettings?.api_key ? 0 : 1, credits, now())
     .run();
 
-  return c.json({ success: true, data: { id, type, result, mock } }, 201);
+  return c.json({ success: true, data: { id, type, result, mock, cf, credits, creditsLeft } }, 201);
 });
 
 /**
@@ -238,7 +358,9 @@ app.get('/history', requireAuth, requireTenant, requireRole(['teacher']), async 
 
 /**
  * GET /api/v1/ai/settings — 当前用户的 AI Provider 配置（密钥仅返回掩码）
- * 响应：{ baseUrl, model, hasKey, keyMasked, source: 'user'|'env'|'mock' }
+ * 响应：{ baseUrl, model, hasKey, keyMasked, source: 'user'|'env'|'mock',
+ *        mode: 'own'|'platform'|'cloudflare', cfModel,
+ *        cf: { available, enabled, models }, tenantCredits }
  */
 app.get('/settings', requireAuth, async (c) => {
   // user_ai_settings 是用户级全局表，只在主库（试用租户也不例外）
@@ -247,6 +369,10 @@ app.get('/settings', requireAuth, async (c) => {
   const row = await getUserAiSettings(db, user.id);
   // 平台接口（platform_settings.ai_provider）也视为平台侧来源
   const platformCfg = await getPlatformAiConfig(db);
+  // 平台 Cloudflare AI 开关 + binding 状态（available = 已绑定且平台已启用）
+  const cfSetting = await getCfAiSetting(db);
+  const cfAvailable = !!c.env.AI && cfSetting.enabled === true;
+  const tenantCredits = await resolveTenantCredits(c);
   return c.json({
     success: true,
     data: {
@@ -255,15 +381,22 @@ app.get('/settings', requireAuth, async (c) => {
       hasKey: !!row?.api_key,
       keyMasked: maskKey(row?.api_key),
       source: row?.api_key ? 'user' : platformCfg || c.env.AI_API_KEY ? 'platform' : 'mock',
+      mode: row?.mode || 'own',
+      cfModel: row?.cf_model || '',
+      cf: { available: cfAvailable, enabled: cfSetting.enabled, models: CF_MODELS },
+      tenantCredits: tenantCredits ? tenantCredits.credits : null,
+      tenantCreditsMonthly: tenantCredits ? tenantCredits.monthly : null,
+      tenantCreditsBonus: tenantCredits ? tenantCredits.bonus : null,
     },
   });
 });
 
 /**
- * PUT /api/v1/ai/settings — 保存/清除用户 AI Provider 配置
- * body: { baseUrl?, apiKey?, model?, clear? }
- * - clear=true：删除配置，回退到环境变量或内置 mock
- * - 未提供的字段保持原值；apiKey 传空串表示保持原密钥
+ * PUT /api/v1/ai/settings — 保存/清除用户 AI 服务方式与 Provider 配置
+ * body: { mode?, baseUrl?, apiKey?, model?, cfModel?, clear? }
+ * - clear=true：删除配置，回默认平台模式
+ * - mode='own' 需 apiKey（或已存），沿用端点/模型校验；'cloudflare' 需 cfModel 在目录内；
+ *   'platform' 保留原校验逻辑；未提供的字段保持原值；apiKey 传空串表示保持原密钥
  */
 app.put('/settings', requireAuth, async (c) => {
   // user_ai_settings 是用户级全局表，只在主库（试用租户也不例外）
@@ -273,37 +406,67 @@ app.put('/settings', requireAuth, async (c) => {
 
   if (body.clear) {
     await db.prepare('DELETE FROM user_ai_settings WHERE user_id = ?').bind(user.id).run();
-    return c.json({ success: true, data: { cleared: true } });
+    return c.json({ success: true, data: { cleared: true, mode: 'platform', cfModel: '' } });
   }
 
   const row = await getUserAiSettings(db, user.id);
+  const mode = body.mode !== undefined ? String(body.mode).trim() : row?.mode || 'own';
+  if (!['own', 'platform', 'cloudflare'].includes(mode)) {
+    throw new ApiError('VALIDATION_ERROR', "mode 必须是 'own' | 'platform' | 'cloudflare'");
+  }
   const baseUrl = body.baseUrl !== undefined ? String(body.baseUrl).trim() : row?.base_url || '';
   const model = body.model !== undefined ? String(body.model).trim() : row?.model || '';
   const apiKey = body.apiKey !== undefined ? String(body.apiKey).trim() : row?.api_key || '';
+  const cfModel = body.cfModel !== undefined ? String(body.cfModel).trim() : row?.cf_model || '';
 
-  if (apiKey && baseUrl && !/^https?:\/\/.+/.test(baseUrl)) {
-    throw new ApiError('VALIDATION_ERROR', '端点需以 http:// 或 https:// 开头');
-  }
-  if (apiKey && !model) {
-    throw new ApiError('VALIDATION_ERROR', '请填写模型名称');
-  }
-  if (!apiKey && (baseUrl || model)) {
-    throw new ApiError('VALIDATION_ERROR', '请同时填写 API 密钥');
+  if (mode === 'own') {
+    if (apiKey && baseUrl && !/^https?:\/\/.+/.test(baseUrl)) {
+      throw new ApiError('VALIDATION_ERROR', '端点需以 http:// 或 https:// 开头');
+    }
+    if (apiKey && !model) {
+      throw new ApiError('VALIDATION_ERROR', '请填写模型名称');
+    }
+    if (!apiKey) {
+      throw new ApiError('VALIDATION_ERROR', '请同时填写 API 密钥');
+    }
+  } else if (mode === 'cloudflare') {
+    if (!getCfModel(cfModel)) {
+      throw new ApiError('VALIDATION_ERROR', 'cfModel 必须是平台支持的 Cloudflare AI 模型');
+    }
+  } else {
+    // platform：保留原校验逻辑（未提供密钥时仍可保存空配置）
+    if (apiKey && baseUrl && !/^https?:\/\/.+/.test(baseUrl)) {
+      throw new ApiError('VALIDATION_ERROR', '端点需以 http:// 或 https:// 开头');
+    }
+    if (apiKey && !model) {
+      throw new ApiError('VALIDATION_ERROR', '请填写模型名称');
+    }
+    if (!apiKey && (baseUrl || model)) {
+      throw new ApiError('VALIDATION_ERROR', '请同时填写 API 密钥');
+    }
   }
 
   const ts = now();
   await db
     .prepare(
-      `INSERT INTO user_ai_settings (user_id, base_url, api_key, model, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(user_id) DO UPDATE SET base_url = ?, api_key = ?, model = ?, updated_at = ?`
+      `INSERT INTO user_ai_settings (user_id, base_url, api_key, model, mode, cf_model, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET base_url = ?, api_key = ?, model = ?, mode = ?, cf_model = ?, updated_at = ?`
     )
-    .bind(user.id, baseUrl, apiKey, model, ts, ts, baseUrl, apiKey, model, ts)
+    .bind(user.id, baseUrl, apiKey, model, mode, cfModel, ts, ts, baseUrl, apiKey, model, mode, cfModel, ts)
     .run();
 
   return c.json({
     success: true,
-    data: { baseUrl, model, hasKey: !!apiKey, keyMasked: maskKey(apiKey), source: apiKey ? 'user' : 'mock' },
+    data: {
+      baseUrl,
+      model,
+      hasKey: !!apiKey,
+      keyMasked: maskKey(apiKey),
+      source: apiKey ? 'user' : 'mock',
+      mode,
+      cfModel,
+    },
   });
 });
 

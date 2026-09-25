@@ -19,6 +19,30 @@ const QUOTA_LABELS = {
   ai: 'AI（本月）',
 };
 
+/**
+ * Cloudflare AI 模型目录（与后端 worker/src/cfai.js 官方定价同构；1 credit = $0.01；
+ * inPer1k/outPer1k = 每 1K 输入/输出 token 的 credits，输入输出分列精确计费）
+ */
+const CF_MODELS = [
+  { id: '@cf/meta/llama-3.1-8b-instruct', label: 'Llama 3.1 8B', tag: 'low', inPer1k: 0.0282, outPer1k: 0.0827 },
+  { id: '@cf/mistral/mistral-7b-instruct-v0.1', label: 'Mistral 7B', tag: 'low', inPer1k: 0.011, outPer1k: 0.019 },
+  { id: '@cf/openai/gpt-oss-20b', label: 'GPT-OSS 20B', tag: 'efficient', inPer1k: 0.02, outPer1k: 0.03 },
+  { id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', label: 'Llama 3.3 70B', tag: 'high', inPer1k: 0.0293, outPer1k: 0.2253 },
+  { id: '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', label: 'DeepSeek R1 32B', tag: 'extra-high', inPer1k: 0.0497, outPer1k: 0.4881 },
+];
+/** tag → 中文档位（低/经济/高/极高），徽标四色 muted 蓝/绿/橙/红（样式见 styles.css .badge-cf-*） */
+const CF_TAG_META = {
+  low: { label: '低', cls: 'badge-cf-low' },
+  efficient: { label: '经济', cls: 'badge-cf-efficient' },
+  high: { label: '高', cls: 'badge-cf-high' },
+  'extra-high': { label: '极高', cls: 'badge-cf-extra-high' },
+};
+/** 模型档位徽标 HTML */
+function cfTagBadge(tag) {
+  const meta = CF_TAG_META[tag] || { label: tag, cls: 'badge-cf-low' };
+  return `<span class="badge ${meta.cls}">${meta.label}</span>`;
+}
+
 /** 数据导入入口定义（§70 数据导入 / §47-§49）：每个入口独立的字段说明与模板示例 */
 const IMPORT_ENTRIES = [
   {
@@ -203,32 +227,65 @@ App.registerView('settings', {
         </div>
       </div>
 
-      <!-- 6. AI 助手设置（§41-43：用户自配 Provider，存数据库） -->
-      <div class="card">
+      <!-- 6. AI 助手设置（§41-43：服务方式三选一，own/platform 存数据库，cloudflare 走平台 Workers AI 按 credit 计费） -->
+      <div class="card" id="ai-settings-card">
         <div class="card-title">AI 助手设置</div>
         <div id="ai-settings-status" class="muted" style="margin-bottom:10px">加载中…</div>
-        <div class="muted" style="font-size:12px;margin-bottom:10px">
-          不配置时自动使用<b>平台接口</b>（调用计入本空间 AI 月度配额）；配置自己的接口后调用<b>不计配额</b>。
+        <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:12px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="ai-mode" value="own"> <span>🧩 自定义接口（不计配额）</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="ai-mode" value="platform"> <span>🏢 平台接口（计配额）</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer" id="ai-mode-cf-label">
+            <input type="radio" name="ai-mode" value="cloudflare"> <span>☁️ Cloudflare AI（按 credit 计费）</span>
+          </label>
         </div>
-        <div class="form-row">
-          <div>
-            <label class="form-label">API 端点</label>
-            <input class="form-input" id="ai-base-url" placeholder="https://api.openai.com/v1">
+        <!-- own：自定义接口三输入 -->
+        <div id="ai-panel-own" class="hidden">
+          <div class="form-row">
+            <div>
+              <label class="form-label">API 端点</label>
+              <input class="form-input" id="ai-base-url" placeholder="https://api.openai.com/v1">
+            </div>
+            <div>
+              <label class="form-label">模型</label>
+              <input class="form-input" id="ai-model" placeholder="如：gpt-4o-mini">
+            </div>
           </div>
-          <div>
-            <label class="form-label">模型</label>
-            <input class="form-input" id="ai-model" placeholder="如：gpt-4o-mini">
+          <div class="form-row">
+            <div>
+              <label class="form-label">API 密钥</label>
+              <input class="form-input" id="ai-api-key" type="password" placeholder="sk-...">
+              <div class="muted" style="font-size:12px;margin-top:4px" id="ai-key-hint">密钥仅存服务端数据库，不会在前端明文回显。</div>
+            </div>
           </div>
         </div>
-        <div class="form-row">
-          <div>
-            <label class="form-label">API 密钥</label>
-            <input class="form-input" id="ai-api-key" type="password" placeholder="sk-...">
-            <div class="muted" style="font-size:12px;margin-top:4px" id="ai-key-hint">密钥仅存服务端数据库，不会在前端明文回显。</div>
+        <!-- cloudflare：模型下拉 + 额度 -->
+        <div id="ai-panel-cf" class="hidden">
+          <div class="form-row">
+            <div>
+              <label class="form-label">模型</label>
+              <select class="form-input" id="ai-cf-model" style="min-width:280px">
+                ${CF_MODELS.map(
+                  (m) => `<option value="${App.esc(m.id)}">${App.esc(m.label)}（${CF_TAG_META[m.tag].label} · 入${m.inPer1k} / 出${m.outPer1k} per 1k）</option>`
+                ).join('')}
+              </select>
+            </div>
           </div>
+          <div id="ai-cf-unavailable" class="hidden" style="margin:6px 0;padding:8px 12px;border-radius:8px;background:#fef3c7;border:1px solid #fde68a;font-size:13px">
+            ⚠️ 平台未开启 Cloudflare AI（未绑定或已停用），暂不可用；请联系平台管理员。
+          </div>
+          <div class="muted" style="font-size:12.5px;margin:6px 0">剩余 AI 额度：<b id="ai-cf-credits">—</b> credits<span id="ai-cf-breakdown" class="muted"></span></div>
+          <div class="muted" style="font-size:12px">按实际消耗 credit 扣减：先用月度基础池、后用加赠池；每月基础池补足到限额，加赠池只减不补。额度不足请联系平台管理员。</div>
+        </div>
+        <!-- platform：说明文案 -->
+        <div id="ai-panel-platform" class="hidden">
+          <div class="muted" style="font-size:12.5px">使用平台统一配置的 AI 接口，调用<b>计入本空间 AI 月度配额</b>，无需填写任何密钥。</div>
         </div>
         <div class="modal-actions">
-          <button class="btn" id="ai-clear" type="button">恢复内置演示</button>
+          <button class="btn" id="ai-clear" type="button">恢复默认</button>
           <button class="btn btn-primary" id="ai-save" type="button">保存 AI 配置</button>
         </div>
       </div>`;
@@ -396,66 +453,137 @@ function bindDeviceMode() {
   });
 }
 
-/** AI 助手设置：加载当前配置（密钥只回显掩码），保存/清除 */
+/** AI 助手设置状态行文案（按 mode/source 推导） */
+function aiStatusText(d) {
+  const mode = d.mode || (d.source === 'user' ? 'own' : 'platform');
+  if (mode === 'own') return `当前服务方式：🧩 自定义接口（密钥 ${d.keyMasked || '已保存'}，不计入空间配额）`;
+  if (mode === 'cloudflare') return '当前服务方式：☁️ Cloudflare AI（按 credit 从空间额度扣减）';
+  if (d.source === 'platform') return '当前服务方式：🏢 平台接口（计入空间 AI 月度配额）';
+  if (d.source === 'env') return '当前服务方式：平台预置模型（计入空间 AI 月度配额）';
+  return '当前服务方式：内置演示回复（计入配额）';
+}
+
+/** AI 助手设置：服务方式三选一；own 自定义三输入、cloudflare 模型下拉+额度、platform 说明；保存/清除 */
 async function bindAiSettings() {
+  // 试用空间不支持 AI 助手：提示并跳过配置交互
+  if (App.state.tenant?.plan === 'trial') {
+    const statusEl0 = document.getElementById('ai-settings-status');
+    if (statusEl0) statusEl0.innerHTML = '<span style="color:var(--warning)">试用空间不支持 AI 助手，开通正式版本后可使用</span>';
+    document.querySelectorAll('#ai-settings-card input, #ai-settings-card select, #ai-settings-card button').forEach((el) => {
+      el.disabled = true;
+    });
+    return;
+  }
   const statusEl = document.getElementById('ai-settings-status');
   const keyHint = document.getElementById('ai-key-hint');
+  const modeRadios = Array.from(document.querySelectorAll('input[name="ai-mode"]'));
   let current = null;
   try {
-    current = await api.ai.getSettings();
+    current = await api.ai.getSettings(); // 每次加载刷新 tenantCredits（本空间剩余 AI 额度）
   } catch (err) {
     statusEl.textContent = `AI 配置加载失败：${(err && err.message) || '未知错误'}`;
     return;
   }
-  const statusText = {
-    user: `当前使用自定义模型（密钥 ${current.keyMasked}，不计入空间配额）`,
-    platform: '当前使用平台接口（计入空间 AI 配额）',
-    env: '当前使用平台预置模型（计入空间 AI 配额）',
-    mock: '当前使用内置演示回复（未配置密钥，计入配额）',
+
+  const cfAvailable = !!(current.cf && current.cf.available);
+  // 平台未开启 CF：禁用该选项（后端也会 403 兜底）
+  if (!cfAvailable) {
+    const cfRadio = modeRadios.find((r) => r.value === 'cloudflare');
+    cfRadio.disabled = true;
+    document.getElementById('ai-cf-unavailable').classList.remove('hidden');
+  }
+  const setCredits = (v, monthly, bonus) => {
+    const el = document.getElementById('ai-cf-credits');
+    if (el) el.textContent = v === null || v === undefined ? '—' : String(v);
+    const bd = document.getElementById('ai-cf-breakdown');
+    if (bd) {
+      bd.textContent =
+        v === null || v === undefined
+          ? ''
+          : `（月度限额 ${monthly == null ? '未设置' : monthly} · 加赠池 ${bonus || 0}）`;
+    }
   };
-  statusEl.textContent = statusText[current.source] || statusText.mock;
+  setCredits(current.tenantCredits, current.tenantCreditsMonthly, current.tenantCreditsBonus);
+
+  /** 切换面板显示 */
+  const applyMode = (mode) => {
+    document.getElementById('ai-panel-own').classList.toggle('hidden', mode !== 'own');
+    document.getElementById('ai-panel-cf').classList.toggle('hidden', mode !== 'cloudflare');
+    document.getElementById('ai-panel-platform').classList.toggle('hidden', mode !== 'platform');
+  };
+  let mode = current.mode || (current.source === 'user' ? 'own' : 'platform');
+  if (mode === 'cloudflare' && !cfAvailable) mode = 'platform';
+  modeRadios.forEach((r) => (r.checked = r.value === mode));
+  applyMode(mode);
+  modeRadios.forEach((r) => r.addEventListener('change', () => applyMode(r.value)));
+
+  statusEl.textContent = aiStatusText(current);
   document.getElementById('ai-base-url').value = current.baseUrl || '';
   document.getElementById('ai-model').value = current.model || '';
+  if (current.cfModel && CF_MODELS.some((m) => m.id === current.cfModel)) {
+    document.getElementById('ai-cf-model').value = current.cfModel;
+  }
   if (current.hasKey) {
     document.getElementById('ai-api-key').placeholder = `已保存（${current.keyMasked}），留空则保持不变`;
     keyHint.textContent = '已保存密钥，重新输入可更换；留空保持不变。';
   }
 
   document.getElementById('ai-save').addEventListener('click', async () => {
-    const baseUrl = document.getElementById('ai-base-url').value.trim();
-    const model = document.getElementById('ai-model').value.trim();
-    const apiKey = document.getElementById('ai-api-key').value.trim();
-    if (!apiKey && !(current && current.hasKey)) {
-      App.toast('请填写 API 密钥（或点「恢复内置演示」使用内置回复）');
-      return;
+    const selMode = (document.querySelector('input[name="ai-mode"]:checked') || {}).value || 'platform';
+    const body = { mode: selMode };
+    if (selMode === 'own') {
+      const apiKey = document.getElementById('ai-api-key').value.trim();
+      if (!apiKey && !(current && current.hasKey)) {
+        App.toast('请填写 API 密钥（或改用平台接口 / Cloudflare AI）');
+        return;
+      }
+      body.baseUrl = document.getElementById('ai-base-url').value.trim();
+      body.model = document.getElementById('ai-model').value.trim();
+      body.apiKey = apiKey;
+    } else if (selMode === 'cloudflare') {
+      body.cfModel = document.getElementById('ai-cf-model').value;
+      if (!CF_MODELS.some((m) => m.id === body.cfModel)) {
+        App.toast('请选择 Cloudflare 模型');
+        return;
+      }
     }
+    const btn = document.getElementById('ai-save');
+    btn.disabled = true;
     try {
-      const data = await api.ai.updateSettings({ baseUrl, model, apiKey });
+      const data = await api.ai.updateSettings(body);
       App.toast('AI 配置已保存');
       current = data;
-      statusEl.textContent =
-        data.source === 'user'
-          ? `当前使用自定义模型（密钥 ${data.keyMasked}，不计入空间配额）`
-          : data.source === 'platform'
-            ? '当前使用平台接口（计入空间 AI 配额）'
-            : '当前使用内置演示回复（未配置密钥，计入配额）';
-      document.getElementById('ai-api-key').value = '';
-      document.getElementById('ai-api-key').placeholder = `已保存（${data.keyMasked}），留空则保持不变`;
+      statusEl.textContent = aiStatusText(data);
+      setCredits(data.tenantCredits, data.tenantCreditsMonthly, data.tenantCreditsBonus); // 保存顺带刷新额度显示
+      const keyInput = document.getElementById('ai-api-key');
+      keyInput.value = '';
+      if (data.hasKey) {
+        keyInput.placeholder = `已保存（${data.keyMasked}），留空则保持不变`;
+        keyHint.textContent = '已保存密钥，重新输入可更换；留空保持不变。';
+      }
     } catch (err) {
+      // 后端 403 额度不足 / 前置校验文案直接透传
       App.toast((err && err.message) || '保存失败');
+    } finally {
+      btn.disabled = false;
     }
   });
 
   document.getElementById('ai-clear').addEventListener('click', async () => {
     try {
-      await api.ai.updateSettings({ clear: true });
-      App.toast('已恢复内置演示回复');
+      const data = await api.ai.updateSettings({ clear: true });
+      App.toast('已恢复默认（平台接口）');
+      current = data;
       document.getElementById('ai-base-url').value = '';
       document.getElementById('ai-model').value = '';
       document.getElementById('ai-api-key').value = '';
       document.getElementById('ai-api-key').placeholder = 'sk-...';
-      statusEl.textContent = statusText.mock;
-      current = { source: 'mock', hasKey: false };
+      keyHint.textContent = '密钥仅存服务端数据库，不会在前端明文回显。';
+      const clearMode = data.mode || 'platform';
+      modeRadios.forEach((r) => (r.checked = r.value === clearMode));
+      applyMode(clearMode);
+      statusEl.textContent = aiStatusText(data);
+      setCredits(data.tenantCredits, data.tenantCreditsMonthly, data.tenantCreditsBonus);
     } catch (err) {
       App.toast((err && err.message) || '操作失败');
     }

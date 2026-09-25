@@ -272,7 +272,7 @@
     history: (query) => request('/ai/history', { query }),
     /** 用户 AI 配置（密钥仅返回掩码） */
     getSettings: () => request('/ai/settings'),
-    /** 保存/清除 AI 配置；body: { baseUrl?, apiKey?, model?, clear? } */
+    /** 保存/清除 AI 配置；body: { mode?, baseUrl?, apiKey?, model?, cfModel?, clear? }（mode ∈ own|platform|cloudflare） */
     updateSettings: (body) => request('/ai/settings', { method: 'PUT', body }),
   };
 
@@ -379,6 +379,14 @@
     /** 平台 AI 接口配置（GET 密钥仅掩码；PUT body {baseUrl?, apiKey?, model?}，apiKey 空=清除） */
     getAiSettings: () => request('/admin/ai-settings'),
     updateAiSettings: (body) => request('/admin/ai-settings', { method: 'PUT', body }),
+    /** Cloudflare AI：GET {available, enabled, models}；PUT {enabled} 切换启用，返回同 GET 形状 */
+    getCfAi: () => request('/admin/cf-ai'),
+    updateCfAi: (body) => request('/admin/cf-ai', { method: 'PUT', body }),
+    /** 设置空间 AI 额度（credits ≥ 0）→ {id, ai_credits} */
+    /** 手动增加 AI 额度（加赠池，累计）：body { credits > 0 } */
+    setAiCredits: (id, credits) => request(`/admin/tenants/${id}/ai-credits`, { method: 'PUT', body: { credits } }),
+    /** 设置 AI 月度限额（每月补足到 限额+加赠；null 关闭）：body { monthly } */
+    setAiMonthly: (id, monthly) => request(`/admin/tenants/${id}/ai-monthly`, { method: 'PUT', body: { monthly } }),
     /** 品牌：平台管理员读（非成员空间也可读）/写 */
     getBranding: (id) => request(`/admin/tenants/${id}/branding`),
     /** 调整空间套餐：body { plan: 'free'|'pro'|'school'|'custom' }（预设档同时覆盖配额） */

@@ -39,6 +39,10 @@ migrations_dir = "trial-migrations"
 binding = "FILES"
 bucket_name = "fff"
 
+# Cloudflare Workers AI；未开通时 env.AI 为空，平台管理界面会显示未绑定
+[ai]
+binding = "AI"
+
 [vars]
 ALLOWED_ORIGINS = "http://localhost:8080,http://localhost:3000,http://127.0.0.1:8080,https://fff.xmoj-script.uk,https://fffsaas.is-a.bot"
 PLATFORM_ADMIN_EMAILS = "seanoj_noreply@yeah.net"

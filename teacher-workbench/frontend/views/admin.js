@@ -181,6 +181,10 @@ App.registerView('admin', {
           <button class="btn" id="pai-clear" type="button">清除平台配置</button>
           <button class="btn btn-primary" id="pai-save" type="button">保存</button>
         </div>
+        <!-- Cloudflare AI：绑定状态 + 启用开关 + 模型目录（成员侧按 credit 从空间额度扣减） -->
+        <div id="pai-cf-box" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+          <div class="muted">Cloudflare AI 加载中…</div>
+        </div>
       </div>
 
       <!-- 租户列表 -->
@@ -199,6 +203,7 @@ App.registerView('admin', {
     bindMigrate(el);
     await renderPlatformSettings();
     await bindPlatformAi();
+    await bindCfAi();
     await bindGithubCfg();
     await Promise.all([renderTenants(), renderUsers()]);
   },
@@ -378,6 +383,76 @@ async function bindPlatformAi() {
       App.toast((err && err.message) || '清除失败');
     }
   });
+}
+
+/** Cloudflare AI 模型档位徽标（与 settings.js CF_TAG_META 同构；视图懒加载互不可见，各自定义） */
+const CF_TAG_META_ADMIN = {
+  low: { label: '低', cls: 'badge-cf-low' },
+  efficient: { label: '经济', cls: 'badge-cf-efficient' },
+  high: { label: '高', cls: 'badge-cf-high' },
+  'extra-high': { label: '极高', cls: 'badge-cf-extra-high' },
+};
+
+/** Cloudflare AI 子区块：绑定状态 + 启用开关 + 模型目录只读列表（成员按 credit 从空间额度扣减） */
+async function bindCfAi() {
+  const box = document.getElementById('pai-cf-box');
+  if (!box) return;
+  let current = null;
+  try {
+    current = await api.admin.getCfAi(); // { available: !!env.AI, enabled, models }
+  } catch (err) {
+    box.innerHTML = `<div class="muted">Cloudflare AI 状态加载失败：${App.esc((err && err.message) || '未知错误')}</div>`;
+    return;
+  }
+
+  const renderBox = (d) => {
+    const stateBadge = !d.available
+      ? '<span class="badge badge-leave">未绑定</span>'
+      : d.enabled
+        ? '<span class="badge badge-success">可用（已绑定且已启用）</span>'
+        : '<span class="badge badge-warning">未启用</span>';
+    const stateNote = !d.available
+      ? 'Worker 未绑定 AI（wrangler.toml 缺 [ai] 段或未开通 Cloudflare Workers AI）。'
+      : d.enabled
+        ? '成员可在「设置 → AI 助手设置」选择 Cloudflare AI，按所选模型计费。'
+        : '启用后成员方可选择 Cloudflare AI。';
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+        <b style="font-size:14px">☁️ Cloudflare AI</b>
+        ${stateBadge}
+        <button class="btn btn-sm" id="pai-cf-toggle" type="button" ${d.available ? '' : 'disabled'}>${d.enabled ? '停用' : '启用'}</button>
+      </div>
+      <div class="muted" style="font-size:12.5px;margin-bottom:8px">${stateNote}</div>
+      <table class="table">
+        <thead><tr><th>模型</th><th>档位</th><th>计费</th></tr></thead>
+        <tbody>
+          ${(d.models || [])
+            .map((m) => {
+              const meta = CF_TAG_META_ADMIN[m.tag] || { label: m.tag, cls: 'badge-cf-low' };
+              return `<tr>
+                <td>${App.esc(m.label)}</td>
+                <td><span class="badge ${meta.cls}">${meta.label}</span></td>
+                <td class="muted">入 ${m.inPer1k} / 出 ${m.outPer1k} per 1k</td>
+              </tr>`;
+            })
+            .join('')}
+        </tbody>
+      </table>`;
+    const toggleBtn = box.querySelector('#pai-cf-toggle');
+    toggleBtn.addEventListener('click', async () => {
+      toggleBtn.disabled = true;
+      try {
+        const data = await api.admin.updateCfAi({ enabled: !d.enabled });
+        App.toast(data.enabled ? 'Cloudflare AI 已启用' : 'Cloudflare AI 已停用');
+        current = data;
+        renderBox(data);
+      } catch (err) {
+        toggleBtn.disabled = false;
+        App.toast((err && err.message) || '切换失败');
+      }
+    });
+  };
+  renderBox(current);
 }
 
 /** 平台设置：新建账户是否自动创建个人空间 */
@@ -810,7 +885,7 @@ async function renderTenants() {
                 <td class="muted">${expired ? `<span style="color:var(--danger)">${App.esc((t.expires_at || '').slice(0, 10))}</span>` : App.esc((t.expires_at || '').slice(0, 10) || '—')}</td>
                 <td>${t.memberCount ?? t.member_count ?? '-'}</td>
                 <td>
-                  <button class="btn btn-sm" data-quota="${t.id}" data-name="${App.esc(t.name)}" type="button">配额/到期</button>
+                  <button class="btn btn-sm" data-quota="${t.id}" data-name="${App.esc(t.name)}" data-ai-credits="${t.ai_credits ?? 0}" data-ai-monthly="${t.ai_credits_monthly ?? ''}" data-ai-bonus="${t.ai_credits_bonus ?? 0}" type="button">配额/到期</button>
                   <button class="btn btn-sm" data-plan="${t.id}" data-name="${App.esc(t.name)}" data-current="${App.esc(t.plan || 'custom')}" type="button">套餐</button>
                   <button class="btn btn-sm" data-branding="${t.id}" data-name="${App.esc(t.name)}" type="button">品牌</button>
                   <button class="btn btn-sm ${t.status === 'active' ? 'btn-danger' : ''}" data-toggle-status="${t.id}" data-status="${t.status === 'active' ? 'disabled' : 'active'}" type="button">
@@ -838,7 +913,13 @@ async function renderTenants() {
       });
     });
     box.querySelectorAll('[data-quota]').forEach((btn) => {
-      btn.addEventListener('click', () => openQuotaModal(btn.dataset.quota, btn.dataset.name));
+      btn.addEventListener('click', () =>
+        openQuotaModal(btn.dataset.quota, btn.dataset.name, {
+          credits: Number(btn.dataset.aiCredits || 0),
+          monthly: btn.dataset.aiMonthly === '' ? null : Number(btn.dataset.aiMonthly),
+          bonus: Number(btn.dataset.aiBonus || 0),
+        })
+      );
     });
     box.querySelectorAll('[data-branding]').forEach((btn) => {
       btn.addEventListener('click', () => openBrandingModal(btn.dataset.branding, btn.dataset.name));
@@ -869,8 +950,9 @@ async function renderTenants() {
   }
 }
 
-/** 配额编辑弹窗：数字输入，留空表示不限（NULL）；含到期日期 */
-function openQuotaModal(tenantId, name) {
+/** 配额编辑弹窗：数字输入，留空表示不限（NULL）；含到期日期与 AI 额度（月度限额 + 手动加赠） */
+function openQuotaModal(tenantId, name, aiState) {
+  const ai = aiState || { credits: 0, monthly: null, bonus: 0 };
   App.modal(
     `配额与到期 — ${name}`,
     `
@@ -879,6 +961,20 @@ function openQuotaModal(tenantId, name) {
           <label class="form-label">到期日期（留空 = 永不过期；到期后空间只读，数据保留）</label>
           <input class="form-input" id="quota-expires" type="date">
         </div>
+      </div>
+      <div class="form-row" style="margin-bottom:8px">
+        <div>
+          <label class="form-label">AI 月度限额（每月自动补足到「限额 + 加赠余额」；留空 = 不自动补足）</label>
+          <input class="form-input" id="quota-ai-monthly" type="number" min="0" step="1" placeholder="不自动补足"
+            value="${ai.monthly == null ? '' : Number(ai.monthly)}">
+        </div>
+        <div>
+          <label class="form-label">手动增加额度（credits &gt; 0 才生效，累计加赠；当前余额 ${Number(ai.credits) || 0} · 加赠池 ${Number(ai.bonus) || 0}）</label>
+          <input class="form-input" id="quota-ai-add" type="number" min="0" step="1" placeholder="本次增加，如 10">
+        </div>
+      </div>
+      <div class="muted" style="font-size:12px;margin-bottom:6px">
+        扣费先用月度基础池、后用加赠池；下月基础池补足到限额，加赠池只减不补（管理员加的用完即消失）。
       </div>` +
       QUOTA_FIELDS.map(
         ([key, label]) => `
@@ -915,14 +1011,46 @@ function openQuotaModal(tenantId, name) {
           quotas[input.dataset.quotaField] = v === '' ? null : Number(v);
         });
         quotas.expiresAt = modal.querySelector('#quota-expires').value || null;
+        const monthlyRaw = modal.querySelector('#quota-ai-monthly').value.trim();
+        const monthly = monthlyRaw === '' ? null : Number(monthlyRaw);
+        if (monthly !== null && (!Number.isFinite(monthly) || monthly < 0)) {
+          App.toast('AI 月度限额须为 ≥ 0 的数字或留空');
+          return;
+        }
+        const addRaw = modal.querySelector('#quota-ai-add').value.trim();
+        const addVal = addRaw === '' ? 0 : Number(addRaw);
+        if (!Number.isFinite(addVal) || addVal < 0) {
+          App.toast('手动增加额度须为 ≥ 0 的数字');
+          return;
+        }
+        const saveBtn = modal.querySelector('#quota-save');
+        saveBtn.disabled = true;
         try {
           await api.admin.setQuota(tenantId, quotas);
-          App.closeModal();
-          App.toast('配额已更新');
-          await renderTenants();
         } catch (e) {
-          App.toast(e.message || '保存失败');
+          saveBtn.disabled = false;
+          App.toast(e.message || '配额保存失败');
+          return;
         }
+        try {
+          await api.admin.setAiMonthly(tenantId, monthly);
+        } catch (e) {
+          saveBtn.disabled = false;
+          App.toast(`配额已保存；AI 月度限额保存失败：${(e && e.message) || '未知错误'}`);
+          return;
+        }
+        if (addVal > 0) {
+          try {
+            await api.admin.setAiCredits(tenantId, addVal);
+          } catch (e) {
+            saveBtn.disabled = false;
+            App.toast(`配额已保存；AI 加赠失败：${(e && e.message) || '未知错误'}`);
+            return;
+          }
+        }
+        App.closeModal();
+        App.toast('配额已更新');
+        await renderTenants();
       };
     }
   );

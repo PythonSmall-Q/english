@@ -515,6 +515,24 @@ body {
   color: #8a94a6;
 }
 
+/* Cloudflare AI 模型档位徽标（低/经济/高/极高，四色 muted 蓝/绿/橙/红） */
+.badge-cf-low {
+  background: #e0f2fe;
+  color: var(--cyan);
+}
+.badge-cf-efficient {
+  background: #dcfce7;
+  color: var(--success);
+}
+.badge-cf-high {
+  background: #ffedd5;
+  color: #c2410c;
+}
+.badge-cf-extra-high {
+  background: #fee2e2;
+  color: var(--danger);
+}
+
 /* ===== 表格 ===== */
 
 .table {

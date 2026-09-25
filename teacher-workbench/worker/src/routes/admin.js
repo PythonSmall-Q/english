@@ -15,6 +15,7 @@ import { previousAcademicYear, archiveTenantYear, archiveAllTenants } from '../a
 import { rolloverTenants } from '../rollover.js';
 import { purgeExpiredTrials, purgeTenantData } from '../trial.js';
 import { validateBranding, saveBranding, parseBranding } from '../branding.js';
+import { CF_MODELS, parseCfAiSetting } from '../cfai.js';
 
 const app = new Hono();
 
@@ -755,6 +756,129 @@ function maskKey(key) {
   const k = String(key || '');
   return k ? `****${k.slice(-4)}` : '';
 }
+
+/**
+ * GET /api/v1/admin/cf-ai — Cloudflare AI 平台开关与模型目录（平台管理员）
+ * available = 已绑定 [ai]（env.AI 存在）；enabled = 平台开关（platform_settings.cf_ai）
+ */
+app.get('/cf-ai', requireAuth, async (c) => {
+  requirePlatformAdmin(c);
+  const row = await c.env.DB.prepare("SELECT value FROM platform_settings WHERE key = 'cf_ai'").first();
+  const setting = parseCfAiSetting(row?.value);
+  return c.json({
+    success: true,
+    data: { available: !!c.env.AI, enabled: setting.enabled, models: CF_MODELS },
+  });
+});
+
+/**
+ * PUT /api/v1/admin/cf-ai — 开启/关闭 Cloudflare AI（平台管理员）
+ * body: { enabled: boolean }；同 GET 形状返回
+ */
+app.put('/cf-ai', requireAuth, async (c) => {
+  const user = requirePlatformAdmin(c);
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.enabled !== 'boolean') {
+    throw new ApiError('VALIDATION_ERROR', 'enabled 必须是布尔值');
+  }
+  await c.env.DB
+    .prepare(
+      `INSERT INTO platform_settings (key, value, updated_at) VALUES ('cf_ai', ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    )
+    .bind(JSON.stringify({ enabled: body.enabled }), now())
+    .run();
+  await audit(c.env.DB, 'platform', user.id, body.enabled ? '开启 Cloudflare AI' : '关闭 Cloudflare AI', 'platform_settings', 'cf_ai', {
+    enabled: body.enabled,
+  });
+  console.log(`[admin] Cloudflare AI 已${body.enabled ? '开启' : '关闭'}（操作者 ${user.email}）`);
+  return c.json({ success: true, data: { available: !!c.env.AI, enabled: body.enabled, models: CF_MODELS } });
+});
+
+/**
+ * PUT /api/v1/admin/tenants/:id/ai-credits — 设置租户 AI 额度（平台管理员充值/调整）
+ * body: { credits: ≥0 数字 }；租户在主库或试用库，返回 { id, ai_credits }
+ */
+/**
+ * PUT /api/v1/admin/tenants/:id/ai-credits — 手动增加 AI 额度（加赠池，累计制）
+ * body: { credits: >0 数字 }——累加到加赠池与可用余额；加赠只减不补、每月补足不计入加赠。
+ * 试用空间写死 0，禁止加赠。
+ */
+app.put('/tenants/:id/ai-credits', requireAuth, async (c) => {
+  const user = requirePlatformAdmin(c);
+  const tenantId = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const credits = body.credits;
+  if (typeof credits !== 'number' || !Number.isFinite(credits) || credits <= 0) {
+    throw new ApiError('VALIDATION_ERROR', 'credits 必须是 > 0 的数字（手动增加额度）');
+  }
+  // 试用空间 AI 额度写死为 0，不可加赠
+  let tenantRow = await c.env.DB.prepare('SELECT plan FROM tenants WHERE id = ?').bind(tenantId).first();
+  if (!tenantRow && c.env.TRIAL_DB) {
+    tenantRow = await c.env.TRIAL_DB.prepare('SELECT plan FROM tenants WHERE id = ?').bind(tenantId).first();
+    if (tenantRow) {
+      throw new ApiError('VALIDATION_ERROR', '试用空间的 AI 额度固定为 0，不支持充值');
+    }
+  }
+  if (tenantRow && tenantRow.plan === 'trial') {
+    throw new ApiError('VALIDATION_ERROR', '试用空间的 AI 额度固定为 0，不支持充值');
+  }
+
+  // 主库 → 试用库依次定位租户
+  let db = c.env.DB;
+  let tenant = await db.prepare('SELECT id, name, ai_credits, ai_credits_bonus FROM tenants WHERE id = ?').bind(tenantId).first();
+  if (!tenant && c.env.TRIAL_DB) {
+    tenant = await c.env.TRIAL_DB.prepare('SELECT id, name, ai_credits, ai_credits_bonus FROM tenants WHERE id = ?').bind(tenantId).first();
+    if (tenant) db = c.env.TRIAL_DB;
+  }
+  if (!tenant) throw new ApiError('NOT_FOUND', '租户不存在');
+
+  await db
+    .prepare('UPDATE tenants SET ai_credits = ai_credits + ?, ai_credits_bonus = ai_credits_bonus + ?, updated_at = ? WHERE id = ?')
+    .bind(credits, credits, now(), tenantId)
+    .run();
+  const after = await db.prepare('SELECT ai_credits, ai_credits_bonus FROM tenants WHERE id = ?').bind(tenantId).first();
+  await audit(db, tenantId, user.id, '手动增加 AI 额度', 'tenant', tenantId, {
+    added: credits,
+    balance: after.ai_credits,
+    bonus: after.ai_credits_bonus,
+  });
+  console.log(`[admin] 空间「${tenant.name}」AI 额度 +${credits}（余额 ${after.ai_credits}，加赠 ${after.ai_credits_bonus}，操作者 ${user.email}）`);
+  return c.json({ success: true, data: { id: tenantId, ai_credits: after.ai_credits, ai_credits_bonus: after.ai_credits_bonus } });
+});
+
+/**
+ * PUT /api/v1/admin/tenants/:id/ai-monthly — 设置 AI 月度限额（每月自动补足到「限额+加赠余额」）
+ * body: { monthly: ≥0 数字 | null }；null = 关闭自动补足
+ */
+app.put('/tenants/:id/ai-monthly', requireAuth, async (c) => {
+  const user = requirePlatformAdmin(c);
+  const tenantId = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const monthly = body.monthly;
+  if (monthly !== null && monthly !== undefined) {
+    if (typeof monthly !== 'number' || !Number.isFinite(monthly) || monthly < 0) {
+      throw new ApiError('VALIDATION_ERROR', 'monthly 必须是 ≥ 0 的数字或 null');
+    }
+  }
+  let db = c.env.DB;
+  let tenant = await db.prepare('SELECT id, name FROM tenants WHERE id = ?').bind(tenantId).first();
+  if (!tenant && c.env.TRIAL_DB) {
+    tenant = await c.env.TRIAL_DB.prepare('SELECT id, name FROM tenants WHERE id = ?').bind(tenantId).first();
+    if (tenant) db = c.env.TRIAL_DB;
+  }
+  if (!tenant) throw new ApiError('NOT_FOUND', '租户不存在');
+
+  const val = monthly === undefined ? null : monthly;
+  await db
+    .prepare('UPDATE tenants SET ai_credits_monthly = ?, ai_credits_period = NULL, updated_at = ? WHERE id = ?')
+    .bind(val, now(), tenantId)
+    .run();
+  await audit(db, tenantId, user.id, val == null ? '关闭 AI 月度补足' : '设置 AI 月度限额', 'tenant', tenantId, {
+    monthly: val,
+  });
+  return c.json({ success: true, data: { id: tenantId, ai_credits_monthly: val } });
+});
 
 /**
  * PUT /api/v1/admin/tenants/:id/plan — 调整空间套餐（平台管理员）
