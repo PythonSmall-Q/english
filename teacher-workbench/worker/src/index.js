@@ -37,6 +37,7 @@ import { rolloverTenants } from './rollover.js';
 import { purgeExpiredTrials } from './trial.js';
 import { purgeRecycleBin } from './recycle.js';
 import trialRoutes from './routes/trial.js';
+import todoRoutes from './routes/todos.js';
 
 const app = new Hono();
 
@@ -78,6 +79,7 @@ app.route('/api/v1/archive', archiveRoutes);
 app.route('/api/v1/graduated', graduatedRoutes);
 app.route('/api/v1/trials', trialRoutes);
 app.route('/api/v1/recycle', recycleRoutes);
+app.route('/api/v1/todos', todoRoutes);
 
 app.onError(onError);
 app.notFound(notFoundHandler);

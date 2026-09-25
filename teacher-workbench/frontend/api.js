@@ -252,6 +252,15 @@
     restore: (id) => request(`/recycle/${id}/restore`, { method: 'POST', body: {} }),
   };
 
+  // —— 待办中心（个人 / 年级组 / 学科组；scope=grade|subject 仅组长可发布，403 由后端文案拦截）——
+  const todos = {
+    /** 列表：{ list: [{id,scope,groupId,groupName,title,dueDate,status,creatorName,createdAt}] } */
+    list: () => request('/todos'),
+    create: (body) => request('/todos', { method: 'POST', body }),
+    update: (id, body) => request(`/todos/${id}`, { method: 'PUT', body }),
+    remove: (id) => request(`/todos/${id}`, { method: 'DELETE' }),
+  };
+
   // —— Dashboard（§40）——
   const dashboard = {
     get: () => request('/dashboard'),
@@ -388,5 +397,5 @@
     upload: (body) => request('/brand-images', { method: 'POST', body }),
   };
 
-  window.api = { auth, tenants, gradeGroups, classes, students, lessons, schedules, assignments, dictations, exams, recycle, dashboard, ai, files, import: imp, export: exp, archive, graduated, trials, admin, brandImg };
+  window.api = { auth, tenants, gradeGroups, classes, students, lessons, schedules, assignments, dictations, exams, recycle, todos, dashboard, ai, files, import: imp, export: exp, archive, graduated, trials, admin, brandImg };
 })();
