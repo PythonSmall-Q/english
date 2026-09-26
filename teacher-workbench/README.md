@@ -76,6 +76,12 @@ npm run mobile:open       # 在 Android Studio 中打开
 npm run mobile:apk        # 生成 android/app/build/outputs/apk/release/app-release.apk
 ```
 
+### GitHub Actions 桌面版发布
+
+工作流 `.github/workflows/desktop-release.yml` 支持手动触发，会在 Windows 和 macOS Runner
+上分别构建未签名安装包，然后创建 GitHub Release。进入仓库的 **Actions → Desktop Release → Run workflow**，
+填写版本标签（例如 `v3.0.0`）即可。
+
 桌面应用通过 `WB_API_BASE` 注入 API 地址，未设置时使用生产 API。Android 构建使用
 `capacitor.config.json` 的 `webDir` 直接打包 `frontend/`，如需本地 Worker，请在设备可访问的地址上配置 API
 覆盖（不能使用 Android 模拟器不可达的 `localhost`）。应用包名为 `cn.xmoj.teacherworkbench`。

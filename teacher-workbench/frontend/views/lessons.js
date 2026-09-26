@@ -47,10 +47,10 @@ function loadVditor() {
       l.dataset.lsnVendor = href;
       document.head.appendChild(l);
     };
-    injectCss('vendor/vditor/index.css');
+    injectCss('vendor/vditor/dist/index.css');
     injectCss('vendor/katex/katex.min.css');
     const s = document.createElement('script');
-    s.src = 'vendor/vditor/index.min.js';
+    s.src = 'vendor/vditor/dist/index.min.js';
     s.onload = () => resolve();
     s.onerror = () => {
       loadVditor._p = null;
@@ -507,7 +507,7 @@ App.registerView('lessons', {
         try {
           await loadVditor();
           if (!document.getElementById('lsn-d-content')) return; // 用户已关闭 modal
-          Vditor.preview(contentEl, lesson.content, { cdn: 'vendor/vditor', lang: 'zh_CN' });
+          Vditor.preview(contentEl, lesson.content, { cdn: 'vendor/vditor/dist', lang: 'zh_CN' });
           contentEl.style.whiteSpace = 'normal'; // 渲染后为 HTML，去掉 pre-wrap
         } catch (err) {
           const el = document.getElementById('lsn-d-content');
@@ -692,7 +692,7 @@ App.registerView('lessons', {
           const v = new Vditor(box, {
             mode: 'wysiwyg',
             lang: 'zh_CN',
-            cdn: 'vendor/vditor',
+            cdn: 'vendor/vditor/dist',
             cache: { enable: false },
             height: 360,
             minHeight: 200,
