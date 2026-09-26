@@ -107,7 +107,7 @@ function clsTrendSvg(values) {
     .map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.2" fill="var(--primary)"/>`)
     .join('');
   const fmt = (v) => (Math.round(v * 10) / 10).toFixed(1);
-  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="班均分趋势">
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${I18n.t('clsTrend')}">
     <path d="${line}" fill="none" stroke="var(--primary)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
     ${dots}
     <text x="0" y="${y(pts[0]).toFixed(1)}" font-size="9" fill="var(--text-muted)" dominant-baseline="middle">${fmt(pts[0])}</text>
@@ -123,7 +123,7 @@ function clsPaintTrend(classId) {
   if (!values) return;
   const svg = clsTrendSvg(values);
   if (!svg) return;
-  host.innerHTML = `<div class="cls-trend-label">班均分趋势</div>${svg}`;
+  host.innerHTML = `<div class="cls-trend-label">${I18n.t('clsTrend')}</div>${svg}`;
 }
 
 /** 异步补取该班 class-stats（exams.scores → 班均分序列），不阻塞整页；失败静默 */
@@ -175,7 +175,7 @@ App.registerView('classes', {
     clsInjectStyles();
     clsView = this;
     clsEl = el;
-    el.innerHTML = '<div class="card"><div class="card-title">我的班级</div><div class="muted">加载中…</div></div>';
+    el.innerHTML = `<div class="card"><div class="card-title">${I18n.t('classes')}</div><div class="muted">${I18n.t('clsLoading')}</div></div>`;
 
     const role = App.state.tenant?.role;
     clsIsAdmin = role === 'owner' || role === 'admin';
@@ -196,7 +196,7 @@ App.registerView('classes', {
       clsGroups = grpData.groups || [];
       clsMyPerms = quotaData?.permissions || null;
     } catch (err) {
-      el.innerHTML = '<div class="card"><div class="card-title">我的班级</div><div class="muted">加载失败，请稍后重试</div></div>';
+      el.innerHTML = `<div class="card"><div class="card-title">${I18n.t('classes')}</div><div class="muted">${I18n.t('clsLoadFailed')}</div></div>`;
       App.toast((err && err.message) || '加载失败');
       return;
     }
@@ -258,7 +258,7 @@ App.registerView('classes', {
       const list = c.subjectTeachers || [];
       return list.length
         ? list.map((t) => App.esc(t.subject ? `${t.subject}·${t.name}` : t.name)).join('、')
-        : '无';
+        : I18n.t('clsNoSubjectTeachers');
     };
 
     // 组卡片：owner/admin 全量管理版；组长仅看自己带领的组（班级清单 + 设置老师入口）
@@ -270,32 +270,32 @@ App.registerView('classes', {
           (p) =>
             `<span class="cls-chip">${App.esc(p.name || p.userId)}${
               canManage
-                ? `<button class="cls-chip-x" type="button" data-grp-rmpl="${App.esc(g.id)}" data-uid="${App.esc(p.userId)}" title="移除备课组长">×</button>`
+                      ? `<button class="cls-chip-x" type="button" data-grp-rmpl="${App.esc(g.id)}" data-uid="${App.esc(p.userId)}" title="${I18n.t('clsRemoveTeacher')}">×</button>`
                 : ''
             }</span>`
         )
         .join('');
-      return `<div class="cls-card-meta cls-chips-row"><span style="white-space:nowrap">备课组长：</span>${
+      return `<div class="cls-card-meta cls-chips-row"><span style="white-space:nowrap">${I18n.t('clsPrepLeader')}：</span>${
         chips || '<span class="muted">—</span>'
-      }${canManage ? `<button class="btn btn-sm" type="button" data-grp-addpl="${App.esc(g.id)}">＋备课组长</button>` : ''}</div>`;
+      }${canManage ? `<button class="btn btn-sm" type="button" data-grp-addpl="${App.esc(g.id)}">＋${I18n.t('clsPrepLeader')}</button>` : ''}</div>`;
     };
     const groupCardHtml = (g) => {
       if (isAdmin) {
         return `
               <div class="cls-group" data-grp-id="${App.esc(g.id)}">
                 <div class="cls-group-name">${App.esc(g.name)}</div>
-                <div class="cls-group-meta">组长：${
+                <div class="cls-group-meta">${I18n.t('clsLeader')}：${
                   g.leader_name
                     ? `${App.esc(g.leader_name)}（${App.esc(g.leader_email || '')}）`
-                    : '未设置'
+                    : I18n.t('clsUnassigned')
                 }</div>
                 ${prepLeadersHtml(g)}
-                <div class="cls-group-classes">组内 ${Number(g.classCount) || 0} 个班：${
-                    g.classes && g.classes.length ? g.classes.map((c) => App.esc(c.name)).join('、') : '（暂无班级）'
+                <div class="cls-group-classes">${I18n.format('clsGroupClasses', { count: Number(g.classCount) || 0 })}：${
+                  g.classes && g.classes.length ? g.classes.map((c) => App.esc(c.name)).join('、') : I18n.t('clsNoGroupClasses')
                   }</div>
                 <div class="cls-group-actions">
-                  <button class="btn btn-sm" type="button" data-grp-leader="${App.esc(g.id)}">设组长</button>
-                  <button class="btn btn-sm btn-danger" type="button" data-grp-del="${App.esc(g.id)}">删除组</button>
+                  <button class="btn btn-sm" type="button" data-grp-leader="${App.esc(g.id)}">${I18n.t('clsSetLeader')}</button>
+                  <button class="btn btn-sm btn-danger" type="button" data-grp-del="${App.esc(g.id)}">${I18n.t('clsDelete')}</button>
                 </div>
               </div>`;
       }
@@ -304,7 +304,7 @@ App.registerView('classes', {
               <div class="cls-group" data-grp-id="${App.esc(g.id)}">
                 <div class="cls-group-name">${App.esc(g.name)}</div>
                 ${prepLeadersHtml(g)}
-                <div class="cls-group-classes">组内 ${clsList.length} 个班</div>
+                <div class="cls-group-classes">${I18n.format('clsTotal', { count: clsList.length })}</div>
                 ${
                   clsList.length
                     ? clsList
@@ -313,13 +313,13 @@ App.registerView('classes', {
                   <div class="cls-gclass">
                     <div class="cls-gclass-head">
                       <span>${App.esc(c.name)}</span>
-                      <button class="btn btn-sm" type="button" data-cls-setup="${App.esc(c.id)}">设置老师</button>
+                      <button class="btn btn-sm" type="button" data-cls-setup="${App.esc(c.id)}">${I18n.t('clsEdit')}</button>
                     </div>
-                    <div class="cls-group-meta">班主任：${App.esc(c.teacher_name || '未分配')} ｜ 任课：${subsSummary(c)}</div>
+                    <div class="cls-group-meta">${I18n.t('clsHeadTeacherLabel')}${App.esc(c.teacher_name || I18n.t('clsUnassigned'))} ｜ ${I18n.t('clsSubjectTeacher')}：${subsSummary(c)}</div>
                   </div>`
                         )
                         .join('')
-                    : '<div class="cls-group-classes">（暂无班级）</div>'
+                    : `<div class="cls-group-classes">${I18n.t('clsNoGroupClasses')}</div>`
                 }
               </div>`;
     };
@@ -331,13 +331,13 @@ App.registerView('classes', {
       ? `
       <div class="card cls-sec">
         <div class="cls-sec-head">
-          <span class="cls-sec-title">${isAdmin ? `年级组（${groups.length}）` : `我带领的年级组（${ledGroups.length}）`}</span>
-          ${isAdmin ? '<button class="btn btn-sm" type="button" id="cls-new-group">＋ 新建年级组</button>' : ''}
+          <span class="cls-sec-title">${isAdmin ? I18n.format('clsGroupsCount', { count: groups.length }) : I18n.format('clsMyGroupsCount', { count: ledGroups.length })}</span>
+          ${isAdmin ? `<button class="btn btn-sm" type="button" id="cls-new-group">＋ ${I18n.t('clsNewGroup')}</button>` : ''}
         </div>
         ${
           panelGroups.length
             ? `<div class="cls-group-grid">${panelGroups.map(groupCardHtml).join('')}</div>`
-            : '<div class="muted" style="font-size:13px">还没有年级组。年级组长可协助管理本组班级的班主任设置。</div>'
+            : `<div class="muted" style="font-size:13px">${I18n.t('clsNoGroups')}</div>`
         }
       </div>`
       : '';
@@ -346,17 +346,17 @@ App.registerView('classes', {
     const canCreateClass = !myPerms || myPerms.create_classes !== false;
     const headHtml = `
       <div class="cls-head">
-        <span class="cls-head-title">共 ${classes.length} 个班级</span>
-        ${canCreateClass ? '<button class="btn btn-primary" type="button" id="cls-new">＋ 新建班级</button>' : ''}
+        <span class="cls-head-title">${I18n.format('clsTotal', { count: classes.length })}</span>
+        ${canCreateClass ? `<button class="btn btn-primary" type="button" id="cls-new">＋ ${I18n.t('clsNewClass')}</button>` : ''}
       </div>`;
 
     // 班级卡片：先「我的班级」（班主任/任课），再「其他班级」（仅当两类都有时才分区展示）
     const classCardHtml = (c) => {
             // 年级组下拉（owner/admin 专属，后端仅放行 owner/admin）
             const ggSelect = isAdmin
-              ? `<div class="cls-field"><label>年级组</label>
+              ? `<div class="cls-field"><label>${I18n.t('clsGradeGroup')}</label>
                    <select class="form-input" data-cls-gg="${App.esc(c.id)}">
-                     <option value="">未分组</option>
+                     <option value="">${I18n.t('clsUngrouped')}</option>
                      ${groups
                        .map(
                          (g) =>
@@ -367,9 +367,9 @@ App.registerView('classes', {
               : '';
             // 班主任下拉：仅 canDelete（owner/admin、本班年级组长）可改；班主任本人见禁用态 + 提示
             const tSelect = c.canDelete
-              ? `<div class="cls-field"><label>班主任</label>
+              ? `<div class="cls-field"><label>${I18n.t('clsHeadTeacher')}</label>
                      <select class="form-input" data-cls-t="${App.esc(c.id)}">
-                       <option value="">未分配</option>
+                       <option value="">${I18n.t('clsUnassigned')}</option>
                        ${members
                          .map(
                            (m) =>
@@ -380,11 +380,11 @@ App.registerView('classes', {
                          .join('')}
                      </select></div>`
               : c.canAssignTeachers
-                ? `<div class="cls-field"><label>班主任</label>
+                ? `<div class="cls-field"><label>${I18n.t('clsHeadTeacher')}</label>
                      <select class="form-input" disabled>
-                       <option selected>${App.esc(c.teacher_name || '未分配')}</option>
+                       <option selected>${App.esc(c.teacher_name || I18n.t('clsUnassigned'))}</option>
                      </select></div>
-                   <div class="muted" style="font-size:12px">班主任由空间管理员或年级组长调整</div>`
+                   <div class="muted" style="font-size:12px">${I18n.t('clsTeacherAdjust')}</div>`
                 : '';
             // 任课老师 chips（subject 为 null 只显示姓名）；canAssignTeachers 可「＋任课老师」、chips 带 × 移除
             const subs = c.subjectTeachers || [];
@@ -393,39 +393,39 @@ App.registerView('classes', {
                 (t) =>
                   `<span class="cls-chip">${App.esc(t.subject ? `${t.subject}·${t.name}` : t.name)}${
                     c.canAssignTeachers
-                      ? `<button class="cls-chip-x" type="button" data-cls-rmt="${App.esc(c.id)}" data-uid="${App.esc(t.userId)}" title="移除任课老师">×</button>`
+                      ? `<button class="cls-chip-x" type="button" data-cls-rmt="${App.esc(c.id)}" data-uid="${App.esc(t.userId)}" title="${I18n.t('clsRemoveTeacher')}">×</button>`
                       : ''
                   }</span>`
               )
               .join('');
-            const subLine = `<div class="cls-card-meta cls-chips-row"><span style="white-space:nowrap">任课：</span>${
+            const subLine = `<div class="cls-card-meta cls-chips-row"><span style="white-space:nowrap">${I18n.t('clsSubjectTeacher')}：</span>${
               subChips || '<span class="muted">—</span>'
             }${
               c.canAssignTeachers
-                ? `<button class="btn btn-sm" type="button" data-cls-addt="${App.esc(c.id)}">＋任课老师</button>`
+                ? `<button class="btn btn-sm" type="button" data-cls-addt="${App.esc(c.id)}">＋${I18n.t('clsAddTeacher')}</button>`
                 : ''
             }</div>`;
             // 编辑：可管理者（canManage）可见；删除：仅 canDelete（owner/admin、本班年级组长）
             const manageBtns = c.canManage
-              ? `<button class="btn btn-sm" type="button" data-cls-edit="${App.esc(c.id)}">编辑</button>`
+              ? `<button class="btn btn-sm" type="button" data-cls-edit="${App.esc(c.id)}">${I18n.t('clsEdit')}</button>`
               : '';
             const deleteBtn = c.canDelete
-              ? `<button class="btn btn-sm btn-danger" type="button" data-cls-del="${App.esc(c.id)}">删除</button>`
+              ? `<button class="btn btn-sm btn-danger" type="button" data-cls-del="${App.esc(c.id)}">${I18n.t('clsDelete')}</button>`
               : '';
             return `
         <div class="card cls-card" data-cls-id="${App.esc(c.id)}">
           <div class="cls-card-name">${App.esc(c.name)}${
-            c.graduation_year ? `<span class="cls-grad-badge">毕业 ${App.esc(c.graduation_year)}</span>` : ''
+            c.graduation_year ? `<span class="cls-grad-badge">${I18n.format('clsGraduated', { year: App.esc(c.graduation_year) })}</span>` : ''
           }</div>
-          <div class="cls-card-meta">${App.esc([c.grade, c.academic_year].filter(Boolean).join(' · ') || '未设置年级/学年')}</div>
-          <div class="cls-card-meta">班主任：${App.esc(c.teacher_name || '未分配')} ｜ 年级组：${App.esc(c.grade_group_name || '未分组')}</div>
+          <div class="cls-card-meta">${App.esc([c.grade, c.academic_year].filter(Boolean).join(' · ') || I18n.t('clsNotSet'))}</div>
+          <div class="cls-card-meta">${I18n.t('clsHeadTeacherLabel')}${App.esc(c.teacher_name || I18n.t('clsUnassigned'))} ｜ ${I18n.t('clsGroupLabel')}${App.esc(c.grade_group_name || I18n.t('clsUngrouped'))}</div>
           ${subLine}
-          <div class="cls-card-count"><strong>${Number(c.student_count) || 0}</strong>名学生</div>
+          <div class="cls-card-count"><strong>${Number(c.student_count) || 0}</strong>${I18n.t('clsStudents')}</div>
           <div class="cls-trend" data-cls-trend="${App.esc(c.id)}"></div>
           ${ggSelect}
           ${tSelect}
           <div class="cls-card-actions">
-            <button class="btn btn-sm btn-primary" type="button" data-cls-students="${App.esc(c.id)}" data-cls-name="${App.esc(c.name)}">查看学生</button>
+            <button class="btn btn-sm btn-primary" type="button" data-cls-students="${App.esc(c.id)}" data-cls-name="${App.esc(c.name)}">${I18n.t('clsViewStudents')}</button>
             ${manageBtns}
             ${deleteBtn}
           </div>
@@ -442,10 +442,10 @@ App.registerView('classes', {
       `<div class="card cls-sec"><div class="cls-sec-head"><span class="cls-sec-title">${title}</span></div>${classGridHtml(list)}</div>`;
     const bodyHtml = classes.length
       ? myClasses.length && otherClasses.length
-        ? classSecHtml(`我的班级（${myClasses.length}）`, myClasses) +
-          classSecHtml(`其他班级（${otherClasses.length}）`, otherClasses)
+        ? classSecHtml(I18n.format('clsMyClasses', { count: myClasses.length }), myClasses) +
+          classSecHtml(I18n.format('clsOtherClasses', { count: otherClasses.length }), otherClasses)
         : classGridHtml(classes)
-      : `<div class="card"><div class="cls-empty">还没有班级，点击右上角「新建班级」开始创建<br><span class="muted" style="font-size:13px">也可以通过「设置 → 数据导入」批量导入班级与学生</span></div></div>`;
+      : `<div class="card"><div class="cls-empty">${I18n.t('clsNoClasses')}<br><span class="muted" style="font-size:13px">${I18n.t('clsImportHint')}</span></div></div>`;
 
     // —— 已毕业班级归档（owner/admin；纯读取板块，数据随 render 首屏加载，写操作后不重拉）——
     const fmtTime = (t) => {
@@ -461,23 +461,23 @@ App.registerView('classes', {
             <td>${fmtTime(g.archived_at)}</td>
             <td><button class="btn btn-sm" type="button" data-grad-dl="${App.esc(g.id)}" data-grad-name="${App.esc(
               g.class_name
-            )}" data-grad-year="${App.esc(g.academic_year)}">下载</button></td>
+            )}" data-grad-year="${App.esc(g.academic_year)}">${I18n.t('clsDownload')}</button></td>
           </tr>`;
     const gradHtml = clsIsAdmin
       ? `
       <div class="card cls-sec">
-        <div class="cls-sec-head"><span class="cls-sec-title">已毕业班级归档（${clsGraduated.length}）</span></div>
+        <div class="cls-sec-head"><span class="cls-sec-title">${I18n.format('clsGradArchive', { count: clsGraduated.length })}</span></div>
         ${
           clsGradFailed
-            ? '<div class="muted" style="font-size:13px">毕业归档加载失败，请稍后重试</div>'
+            ? `<div class="muted" style="font-size:13px">${I18n.t('clsGradLoadFailed')}</div>`
             : !clsGradLoaded
-              ? '<div class="muted" style="font-size:13px">加载中…</div>'
+              ? `<div class="muted" style="font-size:13px">${I18n.t('clsGradLoading')}</div>`
               : clsGraduated.length
               ? `<div class="cls-grad-table-wrap"><table class="table">
-          <thead><tr><th>班级名</th><th>毕业年份</th><th>原学年</th><th>学生数</th><th>归档时间</th><th>操作</th></tr></thead>
+          <thead><tr><th>${I18n.t('clsClassName')}</th><th>${I18n.t('clsGradYear')}</th><th>${I18n.t('clsAcademicYear')}</th><th>${I18n.t('clsStudents')}</th><th>${I18n.t('clsArchiveTime')}</th><th>${I18n.t('clsAction')}</th></tr></thead>
           <tbody>${clsGraduated.map(gradRowHtml).join('')}</tbody>
         </table></div>`
-              : '<div class="muted" style="font-size:13px">暂无毕业归档</div>'
+              : `<div class="muted" style="font-size:13px">${I18n.t('clsGradEmpty')}</div>`
         }
       </div>`
       : '';
@@ -691,27 +691,27 @@ App.registerView('classes', {
   openForm(cls) {
     const isEdit = !!cls;
     App.modal(
-      isEdit ? '编辑班级' : '新建班级',
+      isEdit ? I18n.t('clsEdit') : I18n.t('clsNewClass'),
       `
-      <label class="form-label" for="cls-f-name">班级名称</label>
-      <input class="form-input" id="cls-f-name" type="text" placeholder="如：高三 6 班" value="${App.esc(cls?.name || '')}">
-      <label class="form-label" for="cls-f-grade">年级</label>
-      <input class="form-input" id="cls-f-grade" type="text" placeholder="如：高三" value="${App.esc(cls?.grade || '')}">
-      <label class="form-label" for="cls-f-grad-year">毕业年份（选填）</label>
-      <input class="form-input" id="cls-f-grad-year" type="number" min="2000" max="2100" placeholder="如：2027，留空 = 未设置" value="${
+      <label class="form-label" for="cls-f-name">${I18n.t('clsClassName')}</label>
+      <input class="form-input" id="cls-f-name" type="text" placeholder="${I18n.t('clsNamePlaceholder')}" value="${App.esc(cls?.name || '')}">
+      <label class="form-label" for="cls-f-grade">${I18n.t('clsGradeGroup')}</label>
+      <input class="form-input" id="cls-f-grade" type="text" placeholder="${I18n.t('clsGradePlaceholder')}" value="${App.esc(cls?.grade || '')}">
+      <label class="form-label" for="cls-f-grad-year">${I18n.t('clsGradYear')} ${I18n.t('clsOptional')}</label>
+      <input class="form-input" id="cls-f-grad-year" type="number" min="2000" max="2100" placeholder="${I18n.t('clsGradYearPlaceholder')}" value="${
         cls?.graduation_year != null ? App.esc(cls.graduation_year) : ''
       }">
-      <div class="muted" style="font-size:12px;margin-top:4px">设置毕业年份后，该班级将在对应学年开学时自动归档，平台内不再保留其数据。</div>
+      <div class="muted" style="font-size:12px;margin-top:4px">${I18n.t('clsArchiveHint')}</div>
       <div class="modal-actions">
-        <button class="btn" type="button" id="cls-f-cancel">取消</button>
-        <button class="btn btn-primary" type="button" id="cls-f-save">${isEdit ? '保存' : '创建'}</button>
+        <button class="btn" type="button" id="cls-f-cancel">${I18n.t('clsCancel')}</button>
+        <button class="btn btn-primary" type="button" id="cls-f-save">${isEdit ? I18n.t('clsSave') : I18n.t('clsCreate')}</button>
       </div>`,
       () => {
         document.getElementById('cls-f-cancel').onclick = () => App.closeModal();
         document.getElementById('cls-f-save').onclick = async () => {
           const name = document.getElementById('cls-f-name').value.trim();
           if (!name) {
-            App.toast('班级名称不能为空');
+            App.toast(I18n.t('clsClassNameRequired'));
             return;
           }
           const gradRaw = document.getElementById('cls-f-grad-year').value.trim();
@@ -719,7 +719,7 @@ App.registerView('classes', {
           if (gradRaw !== '') {
             const gy = Number(gradRaw);
             if (!Number.isInteger(gy) || gy < 2000 || gy > 2100) {
-              App.toast('毕业年份须为 2000–2100 的整数，或留空');
+              App.toast(I18n.t('clsGradYearInvalid'));
               return;
             }
             graduation_year = gy;
@@ -785,22 +785,22 @@ App.registerView('classes', {
   /** 新建年级组 modal（owner/admin） */
   openGroupForm(members) {
     App.modal(
-      '新建年级组',
+      I18n.t('clsNewGroupModal'),
       `
-      <label class="form-label" for="cls-g-name">组名 *</label>
-      <input class="form-input" id="cls-g-name" type="text" placeholder="如：高三年级组">
-      <label class="form-label" for="cls-g-leader">组长（可选）</label>
-      <select class="form-input" id="cls-g-leader">${this.memberOptions(members, '', '暂不设组长')}</select>
+      <label class="form-label" for="cls-g-name">${I18n.t('clsGroupName')} *</label>
+      <input class="form-input" id="cls-g-name" type="text" placeholder="${I18n.t('clsGradePlaceholder')}">
+      <label class="form-label" for="cls-g-leader">${I18n.t('clsLeader')}${I18n.t('clsOptional')}</label>
+      <select class="form-input" id="cls-g-leader">${this.memberOptions(members, '', I18n.t('clsNoLeader'))}</select>
       <div class="modal-actions">
-        <button class="btn" type="button" id="cls-g-cancel">取消</button>
-        <button class="btn btn-primary" type="button" id="cls-g-save">创建</button>
+        <button class="btn" type="button" id="cls-g-cancel">${I18n.t('clsCancel')}</button>
+        <button class="btn btn-primary" type="button" id="cls-g-save">${I18n.t('clsCreate')}</button>
       </div>`,
       () => {
         document.getElementById('cls-g-cancel').onclick = () => App.closeModal();
         document.getElementById('cls-g-save').onclick = async () => {
           const name = document.getElementById('cls-g-name').value.trim();
           if (!name) {
-            App.toast('组名不能为空');
+            App.toast(I18n.t('clsGroupNameRequired'));
             return;
           }
           const leaderUserId = document.getElementById('cls-g-leader').value || null;
@@ -819,11 +819,11 @@ App.registerView('classes', {
               leader_user_id: leaderUserId,
             });
             App.closeModal();
-            App.toast('年级组创建成功');
+            App.toast(I18n.t('clsGroupCreated'));
             clsView.rerender();
           } catch (err) {
             saveBtn.disabled = false;
-            App.toast((err && err.message) || '操作失败');
+            App.toast((err && err.message) || I18n.t('clsOperationFailed'));
           }
         };
       }
@@ -834,13 +834,13 @@ App.registerView('classes', {
   /** 设组长 modal（owner/admin；空选项 = 撤销组长） */
   openSetLeader(group, members) {
     App.modal(
-      `设组长 — ${group.name}`,
+      `${I18n.t('clsSetLeaderModal')} — ${group.name}`,
       `
-      <label class="form-label" for="cls-l-sel">组长</label>
-      <select class="form-input" id="cls-l-sel">${this.memberOptions(members, group.leader_user_id, '撤销组长')}</select>
+      <label class="form-label" for="cls-l-sel">${I18n.t('clsLeader')}</label>
+      <select class="form-input" id="cls-l-sel">${this.memberOptions(members, group.leader_user_id, I18n.t('clsRevokeLeader'))}</select>
       <div class="modal-actions">
-        <button class="btn" type="button" id="cls-l-cancel">取消</button>
-        <button class="btn btn-primary" type="button" id="cls-l-save">保存</button>
+        <button class="btn" type="button" id="cls-l-cancel">${I18n.t('clsCancel')}</button>
+        <button class="btn btn-primary" type="button" id="cls-l-save">${I18n.t('clsSave')}</button>
       </div>`,
       () => {
         document.getElementById('cls-l-cancel').onclick = () => App.closeModal();
@@ -855,7 +855,7 @@ App.registerView('classes', {
             group.leader_name = m ? m.display_name || null : null;
             group.leader_email = m ? m.email || null : null;
             App.closeModal();
-            App.toast(leaderUserId ? '组长已设置' : '已撤销组长');
+            App.toast(leaderUserId ? I18n.t('clsLeaderSet') : I18n.t('clsLeaderRevoked'));
             clsView.rerender();
           } catch (err) {
             saveBtn.disabled = false;
@@ -871,11 +871,11 @@ App.registerView('classes', {
     const excluded = new Set((group.prepLeaders || []).map((p) => p.userId).filter(Boolean));
     const candidates = members.filter((m) => !excluded.has(m.user_id));
     App.modal(
-      `添加备课组长 — ${group.name}`,
+      `${I18n.t('clsAddPrepLeader')} — ${group.name}`,
       `
-      <label class="form-label" for="cls-pl-m">成员 *</label>
+      <label class="form-label" for="cls-pl-m">${I18n.t('clsMemberRequired')}</label>
       <select class="form-input" id="cls-pl-m">
-        <option value="">选择成员…</option>
+        <option value="">${I18n.t('clsChooseMember')}</option>
         ${candidates
           .map(
             (m) =>
@@ -884,15 +884,15 @@ App.registerView('classes', {
           .join('')}
       </select>
       <div class="modal-actions">
-        <button class="btn" type="button" id="cls-pl-cancel">取消</button>
-        <button class="btn btn-primary" type="button" id="cls-pl-save" ${candidates.length ? '' : 'disabled'}>确定</button>
+        <button class="btn" type="button" id="cls-pl-cancel">${I18n.t('clsCancel')}</button>
+        <button class="btn btn-primary" type="button" id="cls-pl-save" ${candidates.length ? '' : 'disabled'}>${I18n.t('clsConfirm')}</button>
       </div>`,
       () => {
         document.getElementById('cls-pl-cancel').onclick = () => App.closeModal();
         document.getElementById('cls-pl-save').onclick = async () => {
           const userId = document.getElementById('cls-pl-m').value;
           if (!userId) {
-            App.toast('请选择成员');
+            App.toast(I18n.t('clsMemberRequiredToast'));
             return;
           }
           const saveBtn = document.getElementById('cls-pl-save');
@@ -905,7 +905,7 @@ App.registerView('classes', {
               { userId, name: m ? m.display_name || m.email || '' : '' },
             ];
             App.closeModal();
-            App.toast('已设置备课组长');
+            App.toast(I18n.t('clsPrepLeaderSet'));
             clsView.rerender();
           } catch (err) {
             saveBtn.disabled = false;
@@ -921,11 +921,11 @@ App.registerView('classes', {
     const excluded = new Set([cls.teacher_id, ...(cls.subjectTeachers || []).map((t) => t.userId)].filter(Boolean));
     const candidates = members.filter((m) => !excluded.has(m.user_id));
     App.modal(
-      `添加任课老师 — ${cls.name}`,
+      `${I18n.t('clsAddSubjectTeacher')} — ${cls.name}`,
       `
-      <label class="form-label" for="cls-at-m">成员 *</label>
+      <label class="form-label" for="cls-at-m">${I18n.t('clsMemberRequired')}</label>
       <select class="form-input" id="cls-at-m">
-        <option value="">选择成员…</option>
+        <option value="">${I18n.t('clsChooseMember')}</option>
         ${candidates
           .map(
             (m) =>
@@ -933,18 +933,18 @@ App.registerView('classes', {
           )
           .join('')}
       </select>
-      <label class="form-label" for="cls-at-s">科目（选填）</label>
-      <input class="form-input" id="cls-at-s" type="text" placeholder="如：英语 / 数学">
+      <label class="form-label" for="cls-at-s">${I18n.t('clsSubjectOptional')}</label>
+      <input class="form-input" id="cls-at-s" type="text" placeholder="${I18n.t('clsSubjectOptional')}">
       <div class="modal-actions">
-        <button class="btn" type="button" id="cls-at-cancel">取消</button>
-        <button class="btn btn-primary" type="button" id="cls-at-save" ${candidates.length ? '' : 'disabled'}>添加</button>
+        <button class="btn" type="button" id="cls-at-cancel">${I18n.t('clsCancel')}</button>
+        <button class="btn btn-primary" type="button" id="cls-at-save" ${candidates.length ? '' : 'disabled'}>${I18n.t('clsAdd')}</button>
       </div>`,
       () => {
         document.getElementById('cls-at-cancel').onclick = () => App.closeModal();
         document.getElementById('cls-at-save').onclick = async () => {
           const userId = document.getElementById('cls-at-m').value;
           if (!userId) {
-            App.toast('请选择成员');
+            App.toast(I18n.t('clsMemberRequiredToast'));
             return;
           }
           const subject = document.getElementById('cls-at-s').value.trim() || null;
@@ -958,7 +958,7 @@ App.registerView('classes', {
               { userId, name: m ? m.display_name || m.email || '' : '', subject },
             ];
             App.closeModal();
-            App.toast('已添加任课老师');
+            App.toast(I18n.t('clsTeacherAdded'));
             clsView.rerender();
           } catch (err) {
             saveBtn.disabled = false;

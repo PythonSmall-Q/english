@@ -36,12 +36,12 @@ const DASH_TYPE_COLOR = {
 
 /** 快捷入口配置（§39） */
 const DASH_ACTIONS = [
-  { label: '📚 去备课', view: 'lessons' },
-  { label: '📝 布置作业', view: 'assignments' },
-  { label: '✏️ 默写管理', view: 'dictations' },
-  { label: '📊 考试成绩', view: 'exams' },
-  { label: '👥 学生管理', view: 'students' },
-  { label: '🤖 AI 助手', view: 'ai' },
+  { label: '📚 ', key: 'lessons', view: 'lessons' },
+  { label: '📝 ', key: 'assignments', view: 'assignments' },
+  { label: '✏️ ', key: 'dictations', view: 'dictations' },
+  { label: '📊 ', key: 'exams', view: 'exams' },
+  { label: '👥 ', key: 'students', view: 'students' },
+  { label: '🤖 ', key: 'ai', view: 'ai' },
 ];
 
 /** 注入本模块专属样式（幂等，类名带 dash- 前缀） */
@@ -88,7 +88,7 @@ App.registerView('dashboard', {
   async render(el) {
     dashInjectStyles();
     // 加载中占位
-    el.innerHTML = '<div class="card"><div class="card-title">工作台首页</div><div class="muted">加载中…</div></div>';
+    el.innerHTML = `<div class="card"><div class="card-title">${I18n.t('dashboard')}</div><div class="muted">${I18n.t('dashLoading')}</div></div>`;
 
     let data = {};
     try {
@@ -105,7 +105,7 @@ App.registerView('dashboard', {
       <div class="card">
         <div class="dash-quick">
           ${DASH_ACTIONS.map(
-            (a) => `<button class="btn" type="button" data-dash-view="${App.esc(a.view)}">${App.esc(a.label)}</button>`
+            (a) => `<button class="btn" type="button" data-dash-view="${App.esc(a.view)}">${a.label}${I18n.t(a.key)}</button>`
           ).join('')}
         </div>
       </div>`;
@@ -125,7 +125,7 @@ App.registerView('dashboard', {
             </div>`;
           })
           .join('')}</div>`
-      : `<div class="dash-empty">今天没有排课，去「教学课表」添加吧</div>`;
+      : `<div class="dash-empty">${I18n.t('dashNoSchedule')}</div>`;
 
     // —— 备课中心待办（可 tick 完成） ——
     const todoHtml = lessonTodo.length
@@ -133,14 +133,14 @@ App.registerView('dashboard', {
           .map((l) => {
             const color = DASH_TYPE_COLOR[l.lesson_type] || '#9ca3af';
             return `<div class="dash-item" data-dash-lesson="${App.esc(l.id)}">
-              <button class="dash-tick" type="button" title="标记完成" data-dash-tick="${App.esc(l.id)}">✓</button>
+              <button class="dash-tick" type="button" title="${I18n.t('dashMarkDone')}" data-dash-tick="${App.esc(l.id)}">✓</button>
               <span class="dash-dot" style="background:${color}"></span>
-              <span class="dash-item-main" data-dash-title="${App.esc(l.id)}">${App.esc(l.title || '未命名教案')}</span>
+              <span class="dash-item-main" data-dash-title="${App.esc(l.id)}">${App.esc(l.title || I18n.t('dashUnnamedLesson'))}</span>
               <span class="dash-item-sub">${App.esc(l.class_name || '')}</span>
             </div>`;
           })
           .join('')}</div>`
-      : `<div class="dash-empty">备课中心没有待办，一切就绪 ✓</div>`;
+      : `<div class="dash-empty">${I18n.t('dashNoLessonTodo')}</div>`;
 
     // —— 最近布置作业 ——
     const hwHtml = recentAssignments.length
@@ -150,8 +150,8 @@ App.registerView('dashboard', {
             const total = a.total_count || 0;
             const rate = total > 0 ? Math.round((submitted / total) * 100) : 0;
             return `<div class="dash-hw-row">
-              <span class="dash-hw-title">${App.esc(a.title || '未命名作业')}</span>
-              <span class="dash-hw-meta">${App.esc(a.class_name || '全年段')} · 已交 ${submitted}/${total}</span>
+              <span class="dash-hw-title">${App.esc(a.title || I18n.t('dashUnnamedAssignment'))}</span>
+              <span class="dash-hw-meta">${App.esc(a.class_name || I18n.t('dashWholeGrade'))} · ${I18n.t('dashSubmitted')} ${submitted}/${total}</span>
               <span class="dash-hw-rate">
                 <span class="quota-bar" style="flex:1;display:block"><span class="quota-bar-fill" style="display:block;width:${rate}%"></span></span>
                 ${rate}%
@@ -159,22 +159,22 @@ App.registerView('dashboard', {
             </div>`;
           })
           .join('')
-      : `<div class="dash-empty">最近没有布置作业</div>`;
+      : `<div class="dash-empty">${I18n.t('dashNoAssignments')}</div>`;
 
     el.innerHTML = `
       ${quickHtml}
       <div class="dash-row">
         <div class="card">
-          <div class="card-title">📅 今日课表</div>
+          <div class="card-title">📅 ${I18n.t('dashTodaySchedule')}</div>
           ${schedHtml}
         </div>
         <div class="card">
-          <div class="card-title">📚 备课中心待办</div>
+          <div class="card-title">📚 ${I18n.t('dashLessonTodo')}</div>
           <div id="dash-todo-list">${todoHtml}</div>
         </div>
       </div>
       <div class="card">
-        <div class="card-title">📝 最近布置作业</div>
+        <div class="card-title">📝 ${I18n.t('dashRecentAssignments')}</div>
         ${hwHtml}
       </div>`;
 

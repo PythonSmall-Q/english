@@ -73,6 +73,76 @@
     '收起': ['Collapse', '收起'],
     '输入英文单词，回车查词': ['Enter an English word and press Enter', '輸入英文單詞，按 Enter 查詞'],
     '加载词库中…': ['Loading dictionary…', '載入詞庫中…'],
+    '加载中…': ['Loading…', '載入中…'],
+    '加载失败，请稍后重试': ['Loading failed. Please try again.', '載入失敗，請稍後重試'],
+    '加载失败': ['Loading failed', '載入失敗'],
+    '操作失败': ['Operation failed', '操作失敗'],
+    '操作成功': ['Done', '操作成功'],
+    '班主任：': ['Class teacher: ', '班主任：'],
+    '年级组：': ['Grade group: ', '年級組：'],
+    '任课：': ['Subject teachers: ', '任課：'],
+    '班均分趋势': ['Class average trend', '班均分趨勢'],
+    '暂无班级': ['No classes', '暫無班級'],
+    '暂无任课老师': ['No subject teachers', '暫無任課老師'],
+    '学生数': ['Students', '學生數'],
+    '名学生': [' students', '名學生'],
+    '查看学生': ['View students', '查看學生'],
+    '任课老师': ['Subject teacher', '任課老師'],
+    '移除任课老师': ['Remove subject teacher', '移除任課老師'],
+    '设置老师': ['Set teachers', '設定老師'],
+    '下载': ['Download', '下載'],
+    '下载中…': ['Downloading…', '下載中…'],
+    '编辑班级': ['Edit class', '編輯班級'],
+    '新建班级': ['New class', '新增班級'],
+    '班级名称': ['Class name', '班級名稱'],
+    '年级': ['Grade', '年級'],
+    '毕业年份': ['Graduation year', '畢業年份'],
+    '取消': ['Cancel', '取消'],
+    '创建': ['Create', '建立'],
+    '确定': ['Confirm', '確定'],
+    '未设置': ['Not set', '未設定'],
+    '全部': ['All', '全部'],
+    '今天': ['Today', '今天'],
+    '逾期': ['Overdue', '逾期'],
+    '已归档': ['Archived', '已歸檔'],
+    '已完成': ['Completed', '已完成'],
+    '未完成': ['Incomplete', '未完成'],
+    '待处理': ['Pending', '待處理'],
+    '恢复': ['Restore', '恢復'],
+    '上传': ['Upload', '上傳'],
+    '下载归档': ['Download archive', '下載歸檔'],
+    '新建': ['New', '新增'],
+    '详情': ['Details', '詳情'],
+    '查看': ['View', '查看'],
+    '返回': ['Back', '返回'],
+    '重试': ['Retry', '重試'],
+    '清除': ['Clear', '清除'],
+    '导出统计': ['Export statistics', '匯出統計'],
+    '导出名单': ['Export roster', '匯出名單'],
+    '选择班级': ['Select class', '選擇班級'],
+    '选择成员…': ['Choose a member…', '選擇成員…'],
+    '无': ['None', '無'],
+    '暂无': ['None', '暫無'],
+    '暂无作业': ['No assignments', '暫無作業'],
+    '暂无学生': ['No students', '暫無學生'],
+    '暂无考试': ['No exams', '暫無考試'],
+    '暂无待办': ['No todos', '暫無待辦'],
+    '请输入标题': ['Enter a title', '請輸入標題'],
+    '请选择班级': ['Select a class', '請選擇班級'],
+    '请选择成员': ['Please choose a member', '請選擇成員'],
+    '请输入内容': ['Enter content', '請輸入內容'],
+    '保存成功': ['Saved', '儲存成功'],
+    '删除成功': ['Deleted', '刪除成功'],
+    '恢复成功': ['Restored', '恢復成功'],
+    '加载失败，请稍后重试': ['Loading failed. Please try again.', '載入失敗，請稍後重試'],
+    '网络错误': ['Network error', '網路錯誤'],
+    '文件上传失败': ['File upload failed', '檔案上傳失敗'],
+    '未重默名单': ['Students pending retest', '待重默名單'],
+    '重默': ['Retest', '重默'],
+    '人': [' students', ' 人'],
+    '待重默': [' pending retest', '待重默'],
+    '生成于': ['Generated at', '產生於'],
+    '图片生成失败': ['Failed to generate image', '圖片產生失敗'],
   };
   const messages = {
     'zh-CN': {
@@ -81,6 +151,15 @@
       students: '学生管理', assignments: '作业统计', dictations: '默写管理', exams: '考试成绩',
       todos: '待办中心', ai: 'AI 教学助手', recycle: '回收站', settings: '设置', admin: '平台管理',
       logout: '退出登录', language: '界面语言', loading: '加载中', quota: '配额管理',
+      dashLoading: '加载中…', dashTodaySchedule: '今日课表', dashLessonTodo: '备课中心待办', dashRecentAssignments: '最近布置作业',
+      dashNoSchedule: '今天没有排课，去「教学课表」添加吧', dashNoLessonTodo: '备课中心没有待办，一切就绪 ✓', dashNoAssignments: '最近没有布置作业',
+      dashMarkDone: '标记完成', dashUnnamedLesson: '未命名教案', dashUnnamedAssignment: '未命名作业', dashWholeGrade: '全年段', dashSubmitted: '已交',
+      clsLoading: '加载中…', clsLoadFailed: '加载失败，请稍后重试', clsGroups: '年级组', clsGroupsCount: '年级组（{count}）', clsMyGroups: '我带领的年级组', clsMyGroupsCount: '我带领的年级组（{count}）', clsNewGroup: '新建年级组',
+      clsNoGroups: '还没有年级组。年级组长可协助管理本组班级的班主任设置。', clsTotal: '共 {count} 个班级', clsNewClass: '新建班级',
+      clsGradeGroup: '年级组', clsUngrouped: '未分组', clsHeadTeacher: '班主任', clsUnassigned: '未分配', clsTeacherAdjust: '班主任由空间管理员或年级组长调整', clsPrepLeader: '备课组长', clsSetLeader: '设组长', clsLeader: '组长', clsGroupClasses: '组内 {count} 个班', clsNoGroupClasses: '（暂无班级）', clsImportHint: '也可以通过「设置 → 数据导入」批量导入班级与学生',
+      clsSubjectTeacher: '任课', clsAddTeacher: '任课老师', clsRemoveTeacher: '移除任课老师', clsEdit: '编辑', clsDelete: '删除', clsViewStudents: '查看学生',
+      clsGraduated: '毕业 {year}', clsNotSet: '未设置年级/学年', clsGroupLabel: '年级组：', clsHeadTeacherLabel: '班主任：', clsStudents: '名学生',
+      clsMyClasses: '我的班级（{count}）', clsOtherClasses: '其他班级（{count}）', clsNoClasses: '还没有班级，点击右上角「新建班级」开始创建', clsTrend: '班均分趋势', clsDownload: '下载', clsGradArchive: '已毕业班级归档（{count}）', clsGradLoadFailed: '毕业归档加载失败，请稍后重试', clsGradLoading: '加载中…', clsGradEmpty: '暂无毕业归档', clsClassName: '班级名', clsGradYear: '毕业年份', clsAcademicYear: '原学年', clsArchiveTime: '归档时间', clsAction: '操作', clsDownloadLoading: '下载中…', clsDownloadStarted: '毕业归档已开始下载', clsCreate: '创建', clsSave: '保存', clsCancel: '取消', clsClassNameRequired: '班级名称不能为空', clsGradYearInvalid: '毕业年份须为 2000–2100 的整数，或留空', clsSaved: '已保存', clsCreated: '班级创建成功', clsNewGroupModal: '新建年级组', clsGroupName: '组名', clsOptional: '（可选）', clsNoLeader: '暂不设组长', clsGroupNameRequired: '组名不能为空', clsGroupCreated: '年级组创建成功', clsSetLeaderModal: '设组长', clsRevokeLeader: '撤销组长', clsLeaderSet: '组长已设置', clsLeaderRevoked: '已撤销组长', clsAddPrepLeader: '添加备课组长', clsMemberRequired: '成员 *', clsChooseMember: '选择成员…', clsConfirm: '确定', clsMemberRequiredToast: '请选择成员', clsPrepLeaderSet: '已设置备课组长', clsAddSubjectTeacher: '添加任课老师', clsSubjectOptional: '科目（选填）', clsAdd: '添加', clsTeacherAdded: '已添加任课老师', clsTeacherUpdated: '班主任已更新', clsNoSubjectTeachers: '暂无任课老师', clsDone: '完成', clsRemoveConfirm: '确定移除任课老师「{name}」吗？', clsPrepRemoveConfirm: '确定移除备课组长「{name}」吗？', clsDeleteClassConfirm: '确定删除班级「{name}」吗？删除后不可恢复。', clsDeleteGroupConfirm: '确定删除年级组「{name}」吗？组内 {count} 个班级将移出该组（班级本身不删除）。', clsDeleted: '已删除', clsOperationFailed: '操作失败', clsGroupUpdated: '「{name}」年级组已更新', clsTeacherChanged: '「{name}」班主任已更新', clsNamePlaceholder: '如：高三 6 班', clsGradePlaceholder: '如：高三', clsGradYearPlaceholder: '如：2027，留空 = 未设置', clsArchiveHint: '设置毕业年份后，该班级将在对应学年开学时自动归档，平台内不再保留其数据。',
     },
     'zh-TW': {
       appTitle: '英語教師教學工作台', dashboard: '工作台首頁',
@@ -88,6 +167,15 @@
       students: '學生管理', assignments: '作業統計', dictations: '默寫管理', exams: '考試成績',
       todos: '待辦中心', ai: 'AI 教學助手', recycle: '回收站', settings: '設定', admin: '平台管理',
       logout: '登出', language: '介面語言', loading: '載入中', quota: '配額管理',
+      dashLoading: '載入中…', dashTodaySchedule: '今日課表', dashLessonTodo: '備課中心待辦', dashRecentAssignments: '最近布置作業',
+      dashNoSchedule: '今天沒有排課，去「教學課表」新增吧', dashNoLessonTodo: '備課中心沒有待辦，一切就緒 ✓', dashNoAssignments: '最近沒有布置作業',
+      dashMarkDone: '標記完成', dashUnnamedLesson: '未命名教案', dashUnnamedAssignment: '未命名作業', dashWholeGrade: '全年段', dashSubmitted: '已交',
+      clsLoading: '載入中…', clsLoadFailed: '載入失敗，請稍後重試', clsGroups: '年級組', clsGroupsCount: '年級組（{count}）', clsMyGroups: '我帶領的年級組', clsMyGroupsCount: '我帶領的年級組（{count}）', clsNewGroup: '新增年級組',
+      clsNoGroups: '還沒有年級組。年級組長可協助管理本組班級的班主任設定。', clsTotal: '共 {count} 個班級', clsNewClass: '新增班級',
+      clsGradeGroup: '年級組', clsUngrouped: '未分組', clsHeadTeacher: '班主任', clsUnassigned: '未分配', clsTeacherAdjust: '班主任由空間管理員或年級組長調整', clsPrepLeader: '備課組長', clsSetLeader: '設組長', clsLeader: '組長', clsGroupClasses: '組內 {count} 個班', clsNoGroupClasses: '（暫無班級）', clsImportHint: '也可以透過「設定 → 資料匯入」批量匯入班級與學生',
+      clsSubjectTeacher: '任課', clsAddTeacher: '任課老師', clsRemoveTeacher: '移除任課老師', clsEdit: '編輯', clsDelete: '刪除', clsViewStudents: '查看學生',
+      clsGraduated: '畢業 {year}', clsNotSet: '未設定年級/學年', clsGroupLabel: '年級組：', clsHeadTeacherLabel: '班主任：', clsStudents: '名學生',
+      clsMyClasses: '我的班級（{count}）', clsOtherClasses: '其他班級（{count}）', clsNoClasses: '還沒有班級，點擊右上角「新增班級」開始建立', clsTrend: '班均分趨勢', clsDownload: '下載', clsGradArchive: '已畢業班級歸檔（{count}）', clsGradLoadFailed: '畢業歸檔載入失敗，請稍後重試', clsGradLoading: '載入中…', clsGradEmpty: '暫無畢業歸檔', clsClassName: '班級名', clsGradYear: '畢業年份', clsAcademicYear: '原學年', clsArchiveTime: '歸檔時間', clsAction: '操作', clsDownloadLoading: '下載中…', clsDownloadStarted: '畢業歸檔已開始下載', clsCreate: '建立', clsSave: '儲存', clsCancel: '取消', clsClassNameRequired: '班級名稱不能為空', clsGradYearInvalid: '畢業年份須為 2000–2100 的整數，或留空', clsSaved: '已儲存', clsCreated: '班級建立成功', clsNewGroupModal: '新增年級組', clsGroupName: '組名', clsOptional: '（可選）', clsNoLeader: '暫不設組長', clsGroupNameRequired: '組名不能為空', clsGroupCreated: '年級組建立成功', clsSetLeaderModal: '設組長', clsRevokeLeader: '撤銷組長', clsLeaderSet: '組長已設定', clsLeaderRevoked: '已撤銷組長', clsAddPrepLeader: '新增備課組長', clsMemberRequired: '成員 *', clsChooseMember: '選擇成員…', clsConfirm: '確定', clsMemberRequiredToast: '請選擇成員', clsPrepLeaderSet: '已設定備課組長', clsAddSubjectTeacher: '新增任課老師', clsSubjectOptional: '科目（選填）', clsAdd: '新增', clsTeacherAdded: '已新增任課老師', clsTeacherUpdated: '班主任已更新', clsNoSubjectTeachers: '暫無任課老師', clsDone: '完成', clsRemoveConfirm: '確定移除任課老師「{name}」嗎？', clsPrepRemoveConfirm: '確定移除備課組長「{name}」嗎？', clsDeleteClassConfirm: '確定刪除班級「{name}」嗎？刪除後不可恢復。', clsDeleteGroupConfirm: '確定刪除年級組「{name}」嗎？組內 {count} 個班級將移出該組（班級本身不刪除）。', clsDeleted: '已刪除', clsOperationFailed: '操作失敗', clsGroupUpdated: '「{name}」年級組已更新', clsTeacherChanged: '「{name}」班主任已更新', clsNamePlaceholder: '如：高三 6 班', clsGradePlaceholder: '如：高三', clsGradYearPlaceholder: '如：2027，留空 = 未設定', clsArchiveHint: '設定畢業年份後，該班級將在對應學年開學時自動歸檔，平台內不再保留其資料。',
     },
     en: {
       appTitle: 'English Teacher Workbench', dashboard: 'Workbench Home',
@@ -95,6 +183,15 @@
       students: 'Students', assignments: 'Assignments', dictations: 'Dictations', exams: 'Exams',
       todos: 'Todos', ai: 'AI Assistant', recycle: 'Recycle Bin', settings: 'Settings', admin: 'Platform Admin',
       logout: 'Log out', language: 'Language', loading: 'Loading', quota: 'Quota',
+      dashLoading: 'Loading…', dashTodaySchedule: "Today's Schedule", dashLessonTodo: 'Lesson Planning Tasks', dashRecentAssignments: 'Recent Assignments',
+      dashNoSchedule: 'No classes scheduled today. Add one in Schedule.', dashNoLessonTodo: 'No lesson planning tasks. All set ✓', dashNoAssignments: 'No recent assignments',
+      dashMarkDone: 'Mark complete', dashUnnamedLesson: 'Untitled lesson', dashUnnamedAssignment: 'Untitled assignment', dashWholeGrade: 'All grades', dashSubmitted: 'Submitted',
+      clsLoading: 'Loading…', clsLoadFailed: 'Loading failed. Please try again.', clsGroups: 'Grade Groups', clsGroupsCount: 'Grade Groups ({count})', clsMyGroups: 'My Grade Groups', clsMyGroupsCount: 'My Grade Groups ({count})', clsNewGroup: 'New grade group',
+      clsNoGroups: 'No grade groups yet. Grade group leaders can help manage class teacher assignments.', clsTotal: '{count} classes', clsNewClass: 'New class',
+      clsGradeGroup: 'Grade group', clsUngrouped: 'Ungrouped', clsHeadTeacher: 'Class teacher', clsUnassigned: 'Unassigned', clsTeacherAdjust: 'Class teachers can be changed by space administrators or grade group leaders', clsPrepLeader: 'Lesson team leader', clsSetLeader: 'Set leader', clsLeader: 'Leader', clsGroupClasses: '{count} classes in group', clsNoGroupClasses: '(No classes)', clsImportHint: 'You can also bulk import classes and students via “Settings → Data import”',
+      clsSubjectTeacher: 'Subject teachers', clsAddTeacher: 'Add teacher', clsRemoveTeacher: 'Remove subject teacher', clsEdit: 'Edit', clsDelete: 'Delete', clsViewStudents: 'View students',
+      clsGraduated: 'Graduated {year}', clsNotSet: 'Grade/academic year not set', clsGroupLabel: 'Grade group: ', clsHeadTeacherLabel: 'Class teacher: ', clsStudents: ' students',
+      clsMyClasses: 'My Classes ({count})', clsOtherClasses: 'Other Classes ({count})', clsNoClasses: 'No classes yet. Click “New class” above to create one', clsTrend: 'Class average trend', clsDownload: 'Download', clsGradArchive: 'Graduated class archive ({count})', clsGradLoadFailed: 'Failed to load graduation archive. Please try again.', clsGradLoading: 'Loading…', clsGradEmpty: 'No graduation archives', clsClassName: 'Class', clsGradYear: 'Graduation year', clsAcademicYear: 'Academic year', clsArchiveTime: 'Archived at', clsAction: 'Action', clsDownloadLoading: 'Downloading…', clsDownloadStarted: 'Graduation archive download started', clsCreate: 'Create', clsSave: 'Save', clsCancel: 'Cancel', clsClassNameRequired: 'Class name is required', clsGradYearInvalid: 'Graduation year must be an integer from 2000 to 2100, or blank', clsSaved: 'Saved', clsCreated: 'Class created', clsNewGroupModal: 'New grade group', clsGroupName: 'Group name', clsOptional: '(optional)', clsNoLeader: 'No leader', clsGroupNameRequired: 'Group name is required', clsGroupCreated: 'Grade group created', clsSetLeaderModal: 'Set leader', clsRevokeLeader: 'Remove leader', clsLeaderSet: 'Leader set', clsLeaderRevoked: 'Leader removed', clsAddPrepLeader: 'Add lesson team leader', clsMemberRequired: 'Member *', clsChooseMember: 'Choose a member…', clsConfirm: 'Confirm', clsMemberRequiredToast: 'Please choose a member', clsPrepLeaderSet: 'Lesson team leader set', clsAddSubjectTeacher: 'Add subject teacher', clsSubjectOptional: 'Subject (optional)', clsAdd: 'Add', clsTeacherAdded: 'Subject teacher added', clsTeacherUpdated: 'Class teacher updated', clsNoSubjectTeachers: 'No subject teachers', clsDone: 'Done', clsRemoveConfirm: 'Remove subject teacher “{name}”?', clsPrepRemoveConfirm: 'Remove lesson team leader “{name}”?', clsDeleteClassConfirm: 'Delete class “{name}”? This cannot be undone.', clsDeleteGroupConfirm: 'Delete grade group “{name}”? Its {count} classes will be ungrouped.', clsDeleted: 'Deleted', clsOperationFailed: 'Operation failed', clsGroupUpdated: 'Grade group for “{name}” updated', clsTeacherChanged: 'Class teacher for “{name}” updated', clsNamePlaceholder: 'e.g. Grade 12 Class 6', clsGradePlaceholder: 'e.g. Grade 12', clsGradYearPlaceholder: 'e.g. 2027, blank = not set', clsArchiveHint: 'After a graduation year is set, this class will be archived at the start of that academic year and its data will no longer remain on the platform.',
     },
   };
 
@@ -111,6 +208,12 @@
     locale: detectLocale(),
     t(key, fallback) {
       return messages[this.locale]?.[key] ?? messages['zh-CN'][key] ?? fallback ?? key;
+    },
+    format(key, values = {}, fallback) {
+      return Object.entries(values).reduce(
+        (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
+        this.t(key, fallback)
+      );
     },
     text(source, fallback) {
       const value = UI_TEXT[source];
@@ -148,6 +251,15 @@
       select('[data-i18n-placeholder]').forEach((el) => {
         el.placeholder = this.t(el.dataset.i18nPlaceholder, el.placeholder);
       });
+      select('input[placeholder], textarea[placeholder], [title], [aria-label], option').forEach((el) => {
+        ['placeholder', 'title', 'aria-label'].forEach((attr) => {
+          const value = el.getAttribute(attr);
+          if (value && UI_TEXT[value]) el.setAttribute(attr, this.text(value));
+        });
+        if (el.tagName === 'OPTION' && UI_TEXT[el.textContent.trim()]) {
+          el.textContent = this.text(el.textContent.trim());
+        }
+      });
       this.translateTextNodes(root);
     },
     translateTextNodes(root = document) {
@@ -156,13 +268,16 @@
       while (walker.nextNode()) nodes.push(walker.currentNode);
       nodes.forEach((node) => {
         const parent = node.parentElement;
-        if (!parent || /^(SCRIPT|STYLE|TEXTAREA|OPTION)$/i.test(parent.tagName)) return;
+        if (!parent || /^(SCRIPT|STYLE|TEXTAREA)$/i.test(parent.tagName)) return;
         const source = node.nodeValue.trim();
-        if (!source || !UI_TEXT[source]) return;
-        const translated = this.text(source);
-        if (translated !== source) {
-          node.nodeValue = node.nodeValue.replace(source, translated);
-        }
+        if (!source) return;
+        const phrases = Object.keys(UI_TEXT).filter((phrase) => source.includes(phrase)).sort((a, b) => b.length - a.length);
+        if (!phrases.length) return;
+        let translated = node.nodeValue;
+        phrases.forEach((phrase) => {
+          translated = translated.split(phrase).join(this.text(phrase));
+        });
+        if (translated !== node.nodeValue) node.nodeValue = translated;
       });
     },
   };
