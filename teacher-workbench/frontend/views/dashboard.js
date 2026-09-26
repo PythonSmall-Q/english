@@ -90,19 +90,16 @@ App.registerView('dashboard', {
     // 加载中占位
     el.innerHTML = '<div class="card"><div class="card-title">工作台首页</div><div class="muted">加载中…</div></div>';
 
-    let data;
+    let data = {};
     try {
       data = await api.dashboard.get();
     } catch (err) {
-      el.innerHTML = `<div class="card"><div class="card-title">工作台首页</div><div class="muted">加载失败，请稍后重试</div></div>`;
       App.toast((err && err.message) || '加载失败');
-      return;
     }
 
     const todaySchedules = data.todaySchedules || [];
     const lessonTodo = data.lessonTodo || [];
     const recentAssignments = data.recentAssignments || [];
-
     // —— 快捷入口通栏 ——
     const quickHtml = `
       <div class="card">

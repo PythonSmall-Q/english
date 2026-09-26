@@ -20,8 +20,8 @@ const LANDING_FEATURES = [
 ];
 
 /** 定价（元/月） */
-// 付费版仍通过微信联系开通，微信号见 CONTACT_WECHAT
-const CONTACT_WECHAT = '19512002721';
+// 付费版仍通过微信联系开通；工作台首页的管理员升级卡片复用此联系方式。
+const CONTACT_WECHAT = (window.WB_CONTACT_WECHAT = '19512002721');
 const LANDING_PRICING = {
   free: { amount: '¥5', contact: true },
   pro: { amount: '¥30', contact: true },
@@ -41,8 +41,8 @@ const LANDING_COMPARE = [
   { name: '班级数量', free: '1', pro: '10', school: '不限', custom: '不限' },
   { name: '学生数量', free: '30', pro: '300', school: '不限', custom: '不限' },
   { name: '教案/作业/默写/考试', free: '基础额度', pro: '不限', school: '不限', custom: '不限' },
-  { name: 'AI 助手（次/月）', free: '20', pro: '500', school: '5000', custom: '不限' },
-  { name: '文件存储', free: '—', pro: '5GB', school: '50GB', custom: '不限' },
+  { name: 'AI Credit/月', free: '10', pro: '100', school: '500', custom: '按约定' },
+  { name: '文件存储', free: '10MB', pro: '5GB', school: '50GB', custom: '按约定' },
   { name: '学年压缩归档', free: '—', pro: '✓', school: '✓', custom: '✓' },
   { name: '毕业班级归档下载', free: '—', pro: '—', school: '✓', custom: '✓' },
   { name: '年级组/备课组权限', free: '—', pro: '—', school: '✓', custom: '✓' },
@@ -99,7 +99,7 @@ App.showLanding = function () {
             <ul class="landing-price-list">
               <li>1 个班级</li>
               <li>30 名学生</li>
-              <li>每月 20 次 AI</li>
+              <li>每月 10 AI Credit</li>
               <li>基础功能</li>
             </ul>
             <button class="btn landing-price-cta" type="button" data-copy-wechat>联系我们</button>
@@ -112,7 +112,7 @@ App.showLanding = function () {
             <ul class="landing-price-list">
               <li>10 个班级</li>
               <li>300 名学生</li>
-              <li>每月 500 次 AI</li>
+              <li>每月 100 AI Credit</li>
               <li>5GB 文件存储</li>
               <li>学年归档</li>
             </ul>
@@ -124,7 +124,7 @@ App.showLanding = function () {
             <div class="landing-price-yearly muted">微信 ${CONTACT_WECHAT}（点击复制）</div>
             <ul class="landing-price-list">
               <li>不限班级与学生</li>
-              <li>每月 5000 次 AI</li>
+              <li>每月 500 AI Credit</li>
               <li>50GB 存储</li>
               <li>毕业归档下载</li>
               <li>年级组/备课组权限</li>
