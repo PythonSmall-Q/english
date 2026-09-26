@@ -289,6 +289,11 @@ window.App = {
       ready = await App.ensureView(name);
     } catch (e) {
       App.toast((e && e.message) || '视图加载失败');
+      const failedContainer = document.getElementById('view-container');
+      if (failedContainer) {
+        failedContainer.innerHTML = `<div class="card"><div class="card-title">${App.esc(e?.message || '页面加载失败')}</div><button class="btn btn-primary" type="button" id="view-retry-btn">重新加载</button></div>`;
+        document.getElementById('view-retry-btn')?.addEventListener('click', () => App.showView(name));
+      }
       return;
     }
     if (!ready) return;
@@ -313,8 +318,14 @@ window.App = {
     if (location.hash !== '#/' + name) {
       try { history.pushState(null, '', '#/' + name); } catch (e) { /* 忽略 */ }
     }
-    await def.render(container);
-    def.init?.();
+    try {
+      await def.render(container);
+      def.init?.();
+    } catch (e) {
+      container.innerHTML = `<div class="card"><div class="card-title">${App.esc(e?.message || '页面加载失败')}</div><button class="btn btn-primary" type="button" id="view-retry-btn">重新加载</button></div>`;
+      document.getElementById('view-retry-btn')?.addEventListener('click', () => App.showView(name));
+      App.toast(e?.message || '页面加载失败');
+    }
     window.I18n?.apply(container);
     container.scrollTop = 0;
   },
@@ -331,7 +342,7 @@ window.App = {
       <div class="modal-mask">
         <div class="modal" role="dialog">
           <div class="modal-header">
-            <span class="modal-title">${App.esc(window.I18n?.text(title, title) || title)}</span>
+            <span class="modal-title">${App.esc(window.I18n?.t(title, title) || title)}</span>
             <button class="modal-close" type="button" aria-label="关闭">×</button>
           </div>
           <div class="modal-body">${html}</div>
@@ -361,7 +372,7 @@ window.App = {
     const root = document.getElementById('toast-root');
     const el = document.createElement('div');
     el.className = 'toast';
-    el.textContent = window.I18n?.text(msg, msg) || msg;
+    el.textContent = window.I18n?.t(msg, msg) || msg;
     root.appendChild(el);
     setTimeout(() => el.classList.add('show'), 10);
     setTimeout(() => {
@@ -384,7 +395,7 @@ window.App = {
     const loaderImg = b && b.loaderUrl
       ? `<img class="brand-loader ${App.esc(b.loaderAnim || 'spin')}" src="${App.esc(b.loaderUrl)}" alt="">`
       : '<span class="default-loader" aria-hidden="true"></span>';
-    wrap.innerHTML = `${loaderImg}<span class="up-label">${App.esc(window.I18n?.text(label, label) || label)}</span>
+    wrap.innerHTML = `${loaderImg}<span class="up-label">${App.esc(window.I18n?.t(label, label) || label)}</span>
       <span class="up-track"><span class="up-fill" style="width:0%"></span></span>
       <span class="up-pct">0%</span>`;
     wrap.classList.add('has-brand-loader');
@@ -1044,11 +1055,18 @@ window.App = {
 // 启动前先应用本机保存的设备模式与主题（避免闪烁；未选择过则按默认渲染）
 App.applyDeviceMode(App.currentDeviceMode() || 'desktop');
 App.applyTheme(localStorage.getItem(App.THEME_KEY) || 'light');
-// 注册本地静态缓存 Service Worker（品牌图片/词库/静态资源缓存到本机）
+// 浏览器版注册静态缓存；Electron/Capacitor 的 file/localhost 资源不走 SW，避免 file:// 缓存未命中报错。
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(() => {
-    /* 不支持或注册失败：不影响使用 */
-  });
+  const standalone = Boolean(window.WB_RUNTIME || location.protocol === 'file:');
+  if (standalone) {
+    navigator.serviceWorker.getRegistrations?.().then((registrations) => {
+      registrations.forEach((registration) => registration.unregister());
+    }).catch(() => {});
+  } else {
+    navigator.serviceWorker.register('sw.js').catch(() => {
+      /* 不支持或注册失败：不影响使用 */
+    });
+  }
 }
 document.addEventListener('DOMContentLoaded', () => App.boot());
 

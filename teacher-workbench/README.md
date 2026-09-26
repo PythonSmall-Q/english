@@ -53,6 +53,33 @@ npx serve .          # 或 node/python 任意静态服务器，如 http://localh
 前端会根据当前 hostname 自动推导 API 地址：localhost/127.0.0.1 → `http://localhost:8787/api/v1`，
 其余走同源 `/api/v1`；也可用 `localStorage.API_BASE` 覆盖。
 
+## 独立应用（Windows / macOS / Android）
+
+仓库根目录已提供跨平台应用壳层：桌面端使用 Electron，Android 使用 Capacitor；业务前端仍共用本目录的静态 SPA。
+
+```bash
+# 根目录安装依赖
+npm install
+
+# 桌面开发运行（默认连接生产 API；本地开发可设置 WB_API_BASE）
+$env:WB_API_BASE = 'http://localhost:8787/api/v1' # PowerShell
+npm run desktop:dev
+
+# 生成 Windows 安装包 / 便携版
+npm run desktop:dist:win
+
+# 在 macOS 上生成 DMG / ZIP
+npm run desktop:dist:mac
+
+# Android：需安装 Android Studio、SDK 和 JDK 17+
+npm run mobile:open       # 在 Android Studio 中打开
+npm run mobile:apk        # 生成 android/app/build/outputs/apk/release/app-release.apk
+```
+
+桌面应用通过 `WB_API_BASE` 注入 API 地址，未设置时使用生产 API。Android 构建使用
+`capacitor.config.json` 的 `webDir` 直接打包 `frontend/`，如需本地 Worker，请在设备可访问的地址上配置 API
+覆盖（不能使用 Android 模拟器不可达的 `localhost`）。应用包名为 `cn.xmoj.teacherworkbench`。
+
 Worker 已接入 D1 Sessions API。启用 Global Read Replication 后，API 会按数据库 binding
 （主库、试用库、归档库）分别维护 session bookmark；前端 API Client 会自动透传并保存 bookmark，
 保证跨请求的顺序一致性。旧版客户端不携带 bookmark 时仍会从 `first-unconstrained` 开始会话。
@@ -141,6 +168,11 @@ wrangler deploy
 部署后在 Pages 上把前端域名加入 Worker 的 `ALLOWED_ORIGINS`（CORS 白名单，生产禁 `*`），
 前端默认走同源 `/api/v1`；如前后端不同域，在前端页面控制台设置
 `localStorage.API_BASE = 'https://<worker域名>/api/v1'`。
+
+Electron 启动时会检查 `https://fff.xmoj-script.dev/update-manifest.json`。当清单版本高于安装包时，
+会自动下载清单中的前端程序文件到用户数据目录并从覆盖目录启动；网络不可用时继续使用本地版本。
+发布前请更新 `frontend/update-manifest.json` 的 `version`，并确保 `files` 包含完整前端程序文件。
+该机制只更新 HTML/JS/CSS/静态资源，不覆盖登录信息、业务数据或用户设置。
 
 ## R2 文件存储
 

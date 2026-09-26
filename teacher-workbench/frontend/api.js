@@ -17,7 +17,13 @@
   function resolveBase() {
     const override = localStorage.getItem('API_BASE');
     if (override) return override.replace(/\/$/, '');
+    const runtimeBase = window.WB_RUNTIME?.apiBase;
+    if (runtimeBase) return runtimeBase.replace(/\/$/, '');
     const host = location.hostname;
+    // Capacitor Android serves the bundled SPA from https://localhost without a port.
+    if (location.protocol === 'capacitor:' || (location.protocol === 'https:' && host === 'localhost' && !location.port)) {
+      return 'https://fff-api.xmoj-script.uk/api/v1';
+    }
     if (host === 'localhost' || host === '127.0.0.1') {
       // 本地开发：wrangler dev 默认端口 8787
       return 'http://localhost:8787/api/v1';
@@ -109,10 +115,26 @@
     }
 
     let payload = null;
+    let rawResponse = '';
     try {
-      payload = await res.json();
+      rawResponse = await res.text();
+      payload = rawResponse ? JSON.parse(rawResponse) : null;
     } catch (e) {
+      if (res.status === 429) {
+        const retryAfter = res.headers.get('Retry-After');
+        throw {
+          code: 'RATE_LIMITED',
+          message: retryAfter ? `请求过于频繁，请 ${retryAfter} 秒后重试` : '请求过于频繁，请稍后重试',
+        };
+      }
       throw { code: 'INTERNAL_ERROR', message: `服务响应异常（HTTP ${res.status}）` };
+    }
+    if (res.status === 429) {
+      const retryAfter = res.headers.get('Retry-After');
+      throw {
+        code: 'RATE_LIMITED',
+        message: payload?.error?.message || (retryAfter ? `请求过于频繁，请 ${retryAfter} 秒后重试` : '请求过于频繁，请稍后重试'),
+      };
     }
     if (payload && payload.success) return payload.data;
     const err = payload?.error || {};

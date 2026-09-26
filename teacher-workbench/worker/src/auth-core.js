@@ -143,12 +143,12 @@ export async function destroySession(env, token) {
   await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(tokenHash).run();
 }
 
-/** Session Cookie 串（Set-Cookie 值），HttpOnly + SameSite=Lax + 7 天 */
+/** Session Cookie 串（跨前端域名/App 使用），HttpOnly + Secure + SameSite=None + 7 天 */
 export function sessionCookie(token) {
-  return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_SECONDS}`;
+  return `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${SESSION_TTL_SECONDS}`;
 }
 
 /** 清除 Session Cookie 串 */
 export function clearSessionCookie() {
-  return `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
+  return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0`;
 }

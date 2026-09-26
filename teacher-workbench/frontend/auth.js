@@ -10,6 +10,11 @@
 /** 渲染登录/注册屏（含表单切换） */
 App.showAuthScreen = function (mode = 'login') {
   const screen = document.getElementById('auth-screen');
+  const AUTO_LOGIN_KEY = 'wb.app.auto_login';
+  const isStandaloneApp = Boolean(
+    window.WB_RUNTIME ||
+      (location.protocol === 'https:' && location.hostname === 'localhost' && !location.port)
+  );
   document.getElementById('app-frame').classList.add('hidden');
   screen.classList.remove('hidden');
   render(mode);
@@ -38,6 +43,18 @@ App.showAuthScreen = function (mode = 'login') {
 
     window.I18n?.apply(screen);
 
+    const remembered = isStandaloneApp && current === 'login'
+      ? (() => {
+          try { return JSON.parse(localStorage.getItem(AUTO_LOGIN_KEY) || 'null'); } catch (e) { return null; }
+        })()
+      : null;
+    if (remembered?.email && remembered?.password && !window.__wbAutoLoginAttempted) {
+      window.__wbAutoLoginAttempted = true;
+      document.getElementById('auth-email').value = remembered.email;
+      document.getElementById('auth-password').value = remembered.password;
+      setTimeout(() => document.getElementById('auth-form')?.requestSubmit(), 0);
+    }
+
     screen.querySelectorAll('.auth-tab').forEach((tab) => {
       tab.addEventListener('click', () => render(tab.dataset.mode));
     });
@@ -63,9 +80,16 @@ App.showAuthScreen = function (mode = 'login') {
         } else {
           await api.auth.register(body);
         }
+        if (isStandaloneApp) {
+          localStorage.setItem(AUTO_LOGIN_KEY, JSON.stringify({ email: body.email, password: body.password }));
+        }
+        // 登录成功后统一回到工作台首页，避免沿用登录前残留的 hash 或 redirect。
+        sessionStorage.removeItem('wb.redirect');
+        history.replaceState(null, '', '#/dashboard');
         // 成功：重新走启动流程（加载租户并进入主框架）
         await App.boot();
       } catch (err) {
+        if (isStandaloneApp && isLogin) localStorage.removeItem(AUTO_LOGIN_KEY);
         errEl.textContent = (err && err.message) || '操作失败，请重试';
         errEl.classList.remove('hidden');
       } finally {

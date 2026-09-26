@@ -5,6 +5,12 @@
 **/dist/
 **/build/
 **/coverage/
+**/.gradle/
+**/local.properties
+**/*.apk
+**/*.aab
+**/*.jks
+**/*.keystore
 
 # Cloudflare Wrangler local state
 **/.wrangler/

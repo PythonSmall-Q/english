@@ -1,0 +1,30 @@
+{
+  "version": "3.0.0",
+  "files": [
+    "index.html",
+    "styles.css",
+    "favicon.svg",
+    "i18n.js",
+    "app.js",
+    "api.js",
+    "auth.js",
+    "landing.js",
+    "dict.js",
+    "views/admin.js",
+    "views/ai.js",
+    "views/assignments.js",
+    "views/classes.js",
+    "views/dashboard.js",
+    "views/dictations.js",
+    "views/exams.js",
+    "views/lessons.js",
+    "views/quota.js",
+    "views/recycle.js",
+    "views/schedule.js",
+    "views/settings.js",
+    "views/students.js",
+    "views/todos.js",
+    "assets/dict-featured.json",
+    "assets/dict-gaokao.json"
+  ]
+}

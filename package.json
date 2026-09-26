@@ -1,5 +1,59 @@
 {
+  "name": "english-teacher-workbench",
+  "private": true,
+  "version": "3.0.0",
+  "description": "英语教师教学工作台的 Windows、macOS 与 Android 独立应用壳层",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "desktop:dev": "electron .",
+    "desktop:dist": "electron-builder",
+    "desktop:dist:win": "electron-builder --win",
+    "desktop:dist:mac": "electron-builder --mac",
+    "mobile:sync": "cap sync android",
+    "mobile:open": "cap open android",
+    "mobile:run": "cap run android",
+    "mobile:apk": "cap sync android && cd android && gradlew.bat assembleRelease",
+    "worker": "cd teacher-workbench/worker && wrangler dev --local --port 8787"
+  },
   "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
     "wrangler": "^4.131.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.3",
+    "electron": "^38.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "cn.xmoj.teacherworkbench",
+    "productName": "英语教师教学工作台",
+    "icon": "teacher-workbench/frontend/favicon.svg",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "desktop/**/*",
+      "teacher-workbench/frontend/**/*",
+      "!node_modules/**/*",
+      "!android/**/*",
+      "!teacher-workbench/worker/**/*",
+      "!teacher-workbench/docs/**/*",
+      "!**/*.map",
+      "!package-lock.json",
+      "!capacitor.config.json"
+    ],
+    "compression": "maximum",
+    "win": {
+      "target": ["nsis", "portable"]
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.education"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
