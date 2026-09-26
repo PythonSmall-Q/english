@@ -194,6 +194,7 @@
   }
 
   function renderContent() {
+    if (App.deferWhileSelectOpen(renderContent)) return;
     const content = containerEl.querySelector('#stu-content');
     // 「添加学生」仅存在可管理班级且未被管理员关闭 create_students 权限时显示
     const addBtn = containerEl.querySelector('#stu-btn-add');

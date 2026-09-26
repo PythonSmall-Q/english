@@ -242,6 +242,7 @@ App.registerView('classes', {
    * render 首屏加载完成后调用；各写操作就地 patch 本地状态后调用。
    */
   rerender() {
+    if (App.deferWhileSelectOpen(() => this.rerender())) return;
     const el = clsEl;
     const isAdmin = clsIsAdmin;
     const myId = clsMyId;

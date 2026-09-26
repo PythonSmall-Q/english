@@ -281,6 +281,7 @@ App.registerView('lessons', {
 
   /** 渲染任务卡列表 */
   _renderList(el, lessons) {
+    if (App.deferWhileSelectOpen(() => this._renderList(el, lessons))) return;
     this._lessons = lessons;
     const wrap = el.querySelector('#lsn-list-wrap');
     if (!wrap) return;

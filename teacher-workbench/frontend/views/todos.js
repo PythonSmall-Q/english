@@ -134,6 +134,7 @@
   // ===== 渲染 =====
 
   function renderContent() {
+    if (App.deferWhileSelectOpen(renderContent)) return;
     const content = containerEl.querySelector('#todo-content');
     if (!todos.length) {
       content.innerHTML = `<div class="card"><div class="muted">暂无待办，在上面添加</div></div>`;

@@ -364,6 +364,7 @@
   }
 
   function renderContent() {
+    if (App.deferWhileSelectOpen(renderContent)) return;
     const content = containerEl.querySelector('#dct-content');
     // 「下载归档」（§63 新版：仅历史学年 + 本学年已归档 + owner/admin 可见）
     const dlBtn = containerEl.querySelector('#dct-btn-download-archive');

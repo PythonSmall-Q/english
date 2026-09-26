@@ -82,6 +82,28 @@ window.App = {
   /** §66 页面状态 */
   state: { user: null, tenants: [], tenant: null, quota: null, view: null, academicYear: null, currentAcademicYear: null, academicYears: [], viewAs: null },
 
+  _pendingSelectRender: null,
+  _selectRenderGuardBound: false,
+
+  /** 下拉菜单打开时暂缓会替换其 DOM 的局部重绘，失焦后只执行最后一次。 */
+  deferWhileSelectOpen(render) {
+    const active = document.activeElement;
+    if (!active || active.tagName !== 'SELECT') return false;
+    App._pendingSelectRender = render;
+    if (!App._selectRenderGuardBound) {
+      App._selectRenderGuardBound = true;
+      document.addEventListener('focusout', () => {
+        setTimeout(() => {
+          if (document.activeElement?.tagName === 'SELECT') return;
+          const pending = App._pendingSelectRender;
+          App._pendingSelectRender = null;
+          pending?.();
+        }, 0);
+      }, true);
+    }
+    return true;
+  },
+
   /** 设备模式：tablet=大字体大按钮适合触控；desktop=默认。本机 localStorage 持久化 */
   DEVICE_MODE_KEY: 'wb_device_mode',
   applyDeviceMode(mode) {
@@ -492,6 +514,7 @@ window.App = {
     // 菜单：当前学年置顶标「当前」，其余按后端降序
     const ordered = [...years].sort((a, b) => (a === current ? -1 : b === current ? 1 : 0));
     const menu = document.getElementById('ys-menu');
+    const wasOpen = !menu.classList.contains('hidden');
     menu.innerHTML = ordered
       .map((y) => {
         const active = selected === y;
@@ -506,6 +529,8 @@ window.App = {
     menu.querySelectorAll('[data-ys-year]').forEach((item) => {
       item.addEventListener('click', () => App.setAcademicYear(item.dataset.ysYear));
     });
+    menu.classList.toggle('hidden', !wasOpen);
+    document.getElementById('ys-btn')?.classList.toggle('open', wasOpen);
   },
 
   /** 选中学年：历史学年显示只读提示条，并重渲染当前视图（列表自动按学年过滤） */
@@ -620,6 +645,7 @@ window.App = {
       menuTenants = menuTenants.concat(extra.map((t) => ({ ...t, managed: true })));
     }
     const menu = document.getElementById('ts-menu');
+    const wasOpen = !menu.classList.contains('hidden');
     menu.innerHTML = menuTenants
       .map((t) => {
         const active = current.id === t.id;
@@ -637,6 +663,8 @@ window.App = {
     menu.querySelectorAll('[data-ts-id]').forEach((item) => {
       item.addEventListener('click', () => App.setTenant(item.dataset.tsId));
     });
+    menu.classList.toggle('hidden', !wasOpen);
+    document.getElementById('ts-btn')?.classList.toggle('open', wasOpen);
   },
 
   /** 切换器交互：点击按钮开合、点击外部/ESC 关闭（只绑一次） */
