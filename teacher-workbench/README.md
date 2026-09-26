@@ -169,7 +169,7 @@ wrangler deploy
 前端默认走同源 `/api/v1`；如前后端不同域，在前端页面控制台设置
 `localStorage.API_BASE = 'https://<worker域名>/api/v1'`。
 
-Electron 启动时会检查 `https://fff.xmoj-script.dev/update-manifest.json`。当清单版本高于安装包时，
+Electron 启动时会检查 `https://fff.xmoj-script.uk/update-manifest.json`。当清单版本高于安装包时，
 会自动下载清单中的前端程序文件到用户数据目录并从覆盖目录启动；网络不可用时继续使用本地版本。
 发布前请更新 `frontend/update-manifest.json` 的 `version`，并确保 `files` 包含完整前端程序文件。
 该机制只更新 HTML/JS/CSS/静态资源，不覆盖登录信息、业务数据或用户设置。

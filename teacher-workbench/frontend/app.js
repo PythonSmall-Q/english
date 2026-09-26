@@ -1055,10 +1055,10 @@ window.App = {
 // 启动前先应用本机保存的设备模式与主题（避免闪烁；未选择过则按默认渲染）
 App.applyDeviceMode(App.currentDeviceMode() || 'desktop');
 App.applyTheme(localStorage.getItem(App.THEME_KEY) || 'light');
-// 浏览器版注册静态缓存；Electron/Capacitor 的 file/localhost 资源不走 SW，避免 file:// 缓存未命中报错。
+// 浏览器和 Capacitor 使用静态缓存；Electron 由主进程负责覆盖更新。
 if ('serviceWorker' in navigator) {
-  const standalone = Boolean(window.WB_RUNTIME || location.protocol === 'file:');
-  if (standalone) {
+  const electron = Boolean(window.WB_RUNTIME || location.protocol === 'file:');
+  if (electron) {
     navigator.serviceWorker.getRegistrations?.().then((registrations) => {
       registrations.forEach((registration) => registration.unregister());
     }).catch(() => {});

@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 
 const apiBase = process.env.WB_API_BASE || 'https://fff-api.xmoj-script.uk/api/v1';
-const frontendUpdateBase = process.env.WB_FRONTEND_UPDATE_BASE || 'https://fff.xmoj-script.dev';
+const frontendUpdateBase = process.env.WB_FRONTEND_UPDATE_BASE || 'https://fff.xmoj-script.uk';
 
 function isNewerVersion(remote, local) {
   const remoteParts = String(remote || '0').split('.').map(Number);

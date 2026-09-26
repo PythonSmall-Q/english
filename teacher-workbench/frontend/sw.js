@@ -11,6 +11,8 @@
  * 缓存名带版本号；sw.js 内容变更即触发 activate 清理旧版缓存。
  */
 const CACHE = 'wb-static-v13';
+const UPDATE_BASE = 'https://fff.xmoj-script.uk';
+const UPDATE_MANIFEST = `${UPDATE_BASE}/update-manifest.json`;
 
 const STATIC_PREFIXES = ['/assets/', '/vendor/', '/views/'];
 const STATIC_EXT = /\.(js|css|svg|png|jpe?g|gif|webp|ico|json|woff2?)(\?.*)?$/i;
@@ -27,9 +29,32 @@ self.addEventListener('activate', (e) => {
     caches
       .keys()
       .then((keys) => Promise.all(keys.filter((k) => k.startsWith('wb-static-') && k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => updateRemoteCache())
       .then(() => self.clients.claim())
   );
 });
+
+async function updateRemoteCache() {
+  try {
+    const manifestResponse = await fetch(`${UPDATE_MANIFEST}?t=${Date.now()}`, { cache: 'no-store' });
+    if (!manifestResponse.ok) return;
+    const manifest = await manifestResponse.json();
+    if (!manifest.version || !Array.isArray(manifest.files)) return;
+    const cacheName = `wb-static-remote-${manifest.version}`;
+    const cache = await caches.open(cacheName);
+    await Promise.all(manifest.files.map(async (file) => {
+      const remote = await fetch(`${UPDATE_BASE}/${file}`, { cache: 'no-store' });
+      if (!remote.ok) throw new Error(`update failed: ${file}`);
+      await cache.put(new URL(file, self.registration.scope).href, remote);
+    }));
+    const keys = await caches.keys();
+    await Promise.all(keys
+      .filter((key) => key.startsWith('wb-static-remote-') && key !== cacheName)
+      .map((key) => caches.delete(key)));
+  } catch (_) {
+    // 云端不可用时继续使用 APK 内置资源和已有缓存。
+  }
+}
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
@@ -61,6 +86,14 @@ self.addEventListener('fetch', (e) => {
     if (!isStatic) return;
     e.respondWith(
       caches.open(CACHE).then(async (cache) => {
+        const remoteCaches = (await caches.keys())
+          .filter((key) => key.startsWith('wb-static-remote-'))
+          .sort()
+          .reverse();
+        for (const remoteCacheName of remoteCaches) {
+          const remoteHit = await caches.open(remoteCacheName).then((remoteCache) => remoteCache.match(e.request));
+          if (remoteHit) return remoteHit;
+        }
         const hit = await cache.match(e.request);
         const refresh = fetch(e.request)
           .then((resp) => {

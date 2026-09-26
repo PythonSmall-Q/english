@@ -1,0 +1,6 @@
+/update-manifest.json
+  Access-Control-Allow-Origin: *
+  Cache-Control: no-store
+
+/*
+  Access-Control-Allow-Origin: *
