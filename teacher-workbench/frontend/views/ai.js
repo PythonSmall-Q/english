@@ -52,6 +52,7 @@
 .aiw-provider-row { display: flex; gap: 8px; align-items: center; }
 .aiw-provider-row .form-input { min-width: 0; flex: 1; }
 .aiw-provider-status { font-size: 12px; color: #8a94a6; }
+.aiw-credit-status { font-size: 12px; color: #53627a; }
 .aiw-data-consent { border: 1px solid #dfe5ee; background: #fff; color: #53627a; border-radius: 7px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
 .aiw-data-consent.is-on { border-color: #62b58b; background: #eefaf3; color: #28784e; }
 .aiw-auto-scopes { display: grid; gap: 6px; color: #53627a; font-size: 12px; }
@@ -260,11 +261,15 @@
           return `<div class="aiw-msg aiw-msg-user"><div class="aiw-bubble">${esc(m.text)}</div></div>`;
         }
         const tag = m.mock === true ? '内置演示' : m.mock === false ? 'AI 模型' : '';
+        const creditMeta = m.credits !== null && m.credits !== undefined
+          ? `<span class="aiw-type-tag">消耗 ${Number(m.credits).toFixed(3)} credit · 用户剩余 ${m.userCreditsLeft === null || m.userCreditsLeft === undefined ? '不限' : Number(m.userCreditsLeft).toFixed(3)} credit</span>`
+          : '';
         return `<div class="aiw-msg aiw-msg-ai"><div class="aiw-bubble">
           <div class="aiw-markdown">${renderMarkdown(m.text)}</div>
           <div class="aiw-bubble-foot">
             ${tag ? `<span class="badge badge-info">${tag}</span>` : ''}
             <span class="aiw-type-tag">${esc(TYPE_LABEL[m.type] || m.type || '')}</span>
+            ${creditMeta}
             <button class="aiw-md-copy" type="button" data-copy-text="${esc(m.text)}">复制</button>
           </div>
         </div></div>`;
@@ -328,7 +333,7 @@
         if (QUICK.some((q) => q.type === it.type)) state.type = it.type;
         state.messages = [
           { role: 'user', type: it.type, text: prompt },
-          { role: 'ai', type: it.type, text: String(it.result || ''), mock: false },
+          { role: 'ai', type: it.type, text: String(it.result || ''), mock: false, credits: it.credits, creditsLeft: it.creditsLeft, userCreditsLeft: it.userCreditsLeft },
         ];
         state.context = null;
         state.pendingDataScopes = null;
@@ -390,6 +395,12 @@
         data = await api.ai.generate({ type: state.type, prompt: contextPrompt });
       }
       if (!streamedMessage) await revealResponse(data);
+      const responseMessage = streamedMessage || [...state.messages].reverse().find((message) => message.role === 'ai');
+      if (responseMessage && data) {
+        responseMessage.credits = data.credits;
+        responseMessage.creditsLeft = data.creditsLeft;
+        responseMessage.userCreditsLeft = data.userCreditsLeft;
+      }
       const completedText = streamedMessage?.text || data?.result || '';
       const requestedScopes = dataRequestFrom(completedText);
       if (requestedScopes) {
@@ -399,6 +410,9 @@
           type: state.type,
           text: `为了准确回答，我需要查看：${requestedScopes.join('、')}。请点击下方“允许提供数据”，确认后再发送。`,
           mock: false,
+          credits: data?.credits,
+          creditsLeft: data?.creditsLeft,
+          userCreditsLeft: data?.userCreditsLeft,
         });
         state.pendingDataScopes = requestedScopes;
         state.pendingPrompt = prompt;
@@ -482,6 +496,7 @@
               </div>
               <select class="form-input hidden" id="aiw-cf-model" aria-label="Cloudflare AI 模型"></select>
               <div class="aiw-provider-status" id="aiw-provider-status">加载中…</div>
+              <div class="aiw-credit-status" id="aiw-credit-status"></div>
             </div>
             <div class="card">
               <div class="card-title">快捷指令</div>
@@ -510,6 +525,7 @@
         cfModel: el.querySelector('#aiw-cf-model'),
         providerSave: el.querySelector('#aiw-provider-save'),
         providerStatus: el.querySelector('#aiw-provider-status'),
+        creditStatus: el.querySelector('#aiw-credit-status'),
         data: el.querySelector('#aiw-data'),
         autoScopes: el.querySelector('#aiw-auto-scopes'),
       };
@@ -561,22 +577,39 @@
       const renderProviderSettings = () => {
         const mode = dom.mode.value;
         const cf = providerSettings?.cf || {};
-        const cfUnavailable = cf.available === false && cf.enabled !== true;
+        const platformDisabled = providerSettings?.platformEnabled === false;
+        const cfUnavailable = !cf.available;
+        const userCredits = providerSettings?.userCredits || {};
+        const creditText = userCredits.quota === null || userCredits.quota === undefined
+          ? `${Number(userCredits.remaining || 0).toFixed(3)}（租户剩余）`
+          : `${Number(userCredits.remaining || 0).toFixed(3)} / ${Number(userCredits.quota).toFixed(3)}`;
+        dom.creditStatus.textContent = `Cloudflare AI 剩余额度：${creditText} credit`;
         dom.cfModel.classList.toggle('hidden', mode !== 'cloudflare');
         dom.cfModel.disabled = mode === 'cloudflare' && cfUnavailable;
+        const platformOption = dom.mode.querySelector('option[value="platform"]');
+        if (platformOption) {
+          platformOption.hidden = platformDisabled;
+          platformOption.disabled = platformDisabled;
+        }
+        if (platformDisabled && mode === 'platform') {
+          dom.mode.value = 'cloudflare';
+        }
         if (mode === 'cloudflare' && cfUnavailable) {
           dom.providerStatus.textContent = 'Cloudflare AI 尚未启用，请联系平台管理员';
           return;
         }
-        dom.providerStatus.textContent = mode === 'cloudflare' ? '按空间 credit 额度计费' : '可在设置页配置详细参数';
+        dom.providerStatus.textContent = mode === 'cloudflare' ? '按用户 credit 配额及空间余额计费' : '可在设置页配置详细参数';
       };
       const loadProviderSettings = async () => {
         try {
           providerSettings = await api.ai.getSettings();
-          dom.mode.value = providerSettings.mode || 'platform';
+          dom.mode.value = providerSettings.mode || 'cloudflare';
+          if (providerSettings.platformEnabled === false && dom.mode.value === 'platform') dom.mode.value = 'cloudflare';
           const models = providerSettings.cf?.models || [];
+          const remaining = providerSettings.userCredits?.remaining;
+          const remainingLabel = remaining === null || remaining === undefined ? '不限' : `${Number(remaining).toFixed(3)} credit 剩余`;
           dom.cfModel.innerHTML = models
-            .map((model) => `<option value="${App.esc(model.id)}">${App.esc(model.label)}</option>`)
+            .map((model) => `<option value="${App.esc(model.id)}">${App.esc(model.label)}（${remainingLabel}）</option>`)
             .join('');
           if (providerSettings.cfModel) dom.cfModel.value = providerSettings.cfModel;
           renderProviderSettings();
@@ -590,7 +623,11 @@
       dom.providerSave.addEventListener('click', async () => {
         const mode = dom.mode.value;
         const cf = providerSettings?.cf || {};
-        if (mode === 'cloudflare' && cf.available === false && cf.enabled !== true) {
+        if (mode === 'platform' && providerSettings?.platformEnabled === false) {
+          App.toast('平台 AI 接口已关闭，请选择 Cloudflare AI 或自定义接口');
+          return;
+        }
+        if (mode === 'cloudflare' && !cf.available) {
           App.toast('Cloudflare AI 尚未启用，请联系平台管理员');
           return;
         }

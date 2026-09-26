@@ -141,6 +141,10 @@ app.post('/generate-stream', requireAuth, requireTenant, requireRole(['teacher']
   await ensureMonthlyReplenish(db, tenantId);
   const balanceRow = await db.prepare('SELECT ai_credits, ai_credits_bonus FROM tenants WHERE id = ?').bind(tenantId).first();
   if (!balanceRow || !(balanceRow.ai_credits > 0)) return sendError('AI 额度不足，请联系平台管理员', 'QUOTA_EXCEEDED');
+  const userCreditQuota = await resolveUserCreditQuota(c, user.id);
+  if (userCreditQuota.remaining !== null && userCreditQuota.remaining <= 0) {
+    return sendError('已达到你的 AI credit 配额', 'QUOTA_EXCEEDED');
+  }
 
   let upstream;
   try {
@@ -189,6 +193,9 @@ app.post('/generate-stream', requireAuth, requireTenant, requireRole(['teacher']
         }
         if (!result.trim()) throw new Error('AI 服务未返回有效内容');
         const credits = estimateCredits(model, null);
+        if (userCreditQuota.remaining !== null && userCreditQuota.remaining < credits) {
+          throw new Error('已达到你的 AI credit 配额');
+        }
         const basePart = Math.max(0, balanceRow.ai_credits - (balanceRow.ai_credits_bonus || 0));
         const bonusTake = Math.max(0, credits - basePart);
         const upd = await db.prepare(`UPDATE tenants SET ai_credits = ai_credits - ?, ai_credits_bonus = ai_credits_bonus - ? WHERE id = ? AND ai_credits >= ? AND ai_credits_bonus >= ?`)
@@ -197,7 +204,8 @@ app.post('/generate-stream', requireAuth, requireTenant, requireRole(['teacher']
         const row = await db.prepare('SELECT ai_credits FROM tenants WHERE id = ?').bind(tenantId).first();
         const id = newId();
         await db.prepare(`INSERT INTO ai_generations (id, tenant_id, user_id, type, prompt, result, billed, credits, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`).bind(id, tenantId, user.id, type, prompt, result, credits, now()).run();
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, result, id, credits, creditsLeft: row?.ai_credits ?? null })}\n\n`));
+        const userCreditsLeft = (await resolveUserCreditQuota(c, user.id)).remaining;
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, result, id, credits, creditsLeft: row?.ai_credits ?? null, userCreditsLeft })}\n\n`));
         controller.close();
       } catch (err) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: String(err?.message || err) })}\n\n`));
@@ -217,7 +225,7 @@ async function getPlatformAiConfig(mainDb) {
   if (!row || !row.value) return null;
   try {
     const cfg = JSON.parse(row.value);
-    return cfg && cfg.apiKey ? cfg : null;
+    return cfg && (cfg.apiKey || cfg.enabled === false) ? cfg : null;
   } catch {
     return null;
   }
@@ -257,6 +265,38 @@ async function resolveTenantCredits(c) {
     .first();
   if (!fresh) return null;
   return { credits: fresh.ai_credits, monthly: fresh.ai_credits_monthly, bonus: fresh.ai_credits_bonus };
+}
+
+/** 当前用户的 Cloudflare AI 月度 credit 配额与已用额度。 */
+async function resolveUserCreditQuota(c, userId) {
+  let db = c.get('tenantDb') || c.env.DB;
+  const tenantId = c.get('tenantId') || c.req.header('X-Tenant-Id');
+  if (!tenantId || !userId) return { quota: null, used: 0, remaining: null };
+  if (!c.get('tenantDb')) {
+    const mainTenant = await c.env.DB.prepare('SELECT id FROM tenants WHERE id = ?').bind(tenantId).first();
+    if (!mainTenant && c.env.TRIAL_DB) db = c.env.TRIAL_DB;
+  }
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  const [quotaRow, usageRow, tenantUsageRow, tenantBalanceRow] = await db.batch([
+    db.prepare("SELECT quota FROM user_quotas WHERE tenant_id = ? AND user_id = ? AND resource = 'ai_credits'").bind(tenantId, userId),
+    db.prepare('SELECT COALESCE(SUM(credits), 0) AS used FROM ai_generations WHERE tenant_id = ? AND user_id = ? AND substr(created_at, 1, 7) = ? AND credits IS NOT NULL').bind(tenantId, userId, monthPrefix),
+    db.prepare('SELECT COALESCE(SUM(credits), 0) AS used FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ? AND credits IS NOT NULL').bind(tenantId, monthPrefix),
+    db.prepare('SELECT ai_credits, ai_credits_monthly, ai_credits_bonus FROM tenants WHERE id = ?').bind(tenantId),
+  ]);
+  const quota = quotaRow.results?.[0]?.quota ?? null;
+  const used = Number(usageRow.results?.[0]?.used || 0);
+  const tenantUsed = Number(tenantUsageRow.results?.[0]?.used || 0);
+  const tenantBalance = tenantBalanceRow.results?.[0] || {};
+  const tenantRemaining = tenantBalance.ai_credits_monthly === null || tenantBalance.ai_credits_monthly === undefined
+    ? Number(tenantBalance.ai_credits ?? 0)
+    : Math.max(0, Number(tenantBalance.ai_credits_monthly || 0) + Number(tenantBalance.ai_credits_bonus || 0) - tenantUsed);
+  const quotaRemaining = quota === null ? null : Math.max(0, quota - used);
+  return {
+    quota,
+    used,
+    tenantRemaining,
+    remaining: quotaRemaining === null ? tenantRemaining : Math.min(quotaRemaining, tenantRemaining),
+  };
 }
 
 /** 无 AI_API_KEY 时的内置 mock 回复（按 type 模板，含 prompt 关键词，保证可演示） */
@@ -328,7 +368,13 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
   // 服务方式（§42 扩展）：own=自配接口（不计配额）/ cloudflare=Workers AI（按 credit 扣租户额度）/
   //   platform=平台接口或环境变量或 mock（计配额）；旧数据无 mode 列 → 默认 'own'，按 api_key 有无兼容回退原逻辑
   const userSettings = await getUserAiSettings(mainDb, user.id);
-  const mode = userSettings?.mode || 'own';
+  const mode = userSettings?.mode === 'own' && userSettings?.api_key
+    ? 'own'
+    : userSettings?.mode === 'platform'
+      ? 'platform'
+      : userSettings?.mode === 'cloudflare' || !userSettings?.api_key
+        ? 'cloudflare'
+        : 'own';
   let result;
   let mock = false;
   let cf = false;
@@ -361,6 +407,10 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
     if (!balanceRow || !(balanceRow.ai_credits > 0)) {
       throw new ApiError('QUOTA_EXCEEDED', 'AI 额度不足，请联系平台管理员充值', 403);
     }
+    const userCreditQuota = await resolveUserCreditQuota(c, user.id);
+    if (userCreditQuota.remaining !== null && userCreditQuota.remaining <= 0) {
+      throw new ApiError('QUOTA_EXCEEDED', '已达到你的 AI credit 配额', 403);
+    }
 
     let usage = null;
     try {
@@ -387,6 +437,9 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
     // 计费：按 usage 估算 credits 并原子扣减租户额度（试用库 tenants 同样有 ai_credits 列）
     // 扣减顺序：基础池先用、加赠池后用——基础池下月补足到限额，加赠池只减不补
     credits = estimateCredits(cfModel, usage);
+    if (userCreditQuota.remaining !== null && userCreditQuota.remaining < credits) {
+      throw new ApiError('QUOTA_EXCEEDED', '本次 AI 请求所需 credit 超出你的剩余额度', 403);
+    }
     const balance = balanceRow.ai_credits;
     const bonus = balanceRow.ai_credits_bonus || 0;
     const basePart = Math.max(0, balance - bonus); // 基础池剩余
@@ -407,10 +460,12 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
     creditsLeft = tenantRow ? tenantRow.ai_credits : null;
     cf = true;
   } else {
-    // Provider 优先级：用户自配（主库 user_ai_settings 表，不计配额）>
-    //   平台接口（platform_settings，平台管理员配置，计配额）> 环境变量 AI_API_KEY（计配额）> 内置 mock（计配额）
-    const platformCfg = userSettings?.api_key ? null : await getPlatformAiConfig(mainDb);
-    const apiKey = userSettings?.api_key || platformCfg?.apiKey || c.env.AI_API_KEY || '';
+    // 仅 own 使用用户自配接口；platform 使用平台配置；默认 Cloudflare 已在上方处理。
+    const platformCfg = await getPlatformAiConfig(mainDb);
+    if (mode === 'platform' && platformCfg?.enabled === false) {
+      throw new ApiError('PRECONDITION_FAILED', '平台 AI 接口已关闭，请选择 Cloudflare AI 或自定义接口', 403);
+    }
+    const apiKey = mode === 'own' ? userSettings?.api_key || '' : platformCfg?.apiKey || c.env.AI_API_KEY || '';
     // billed=1：走平台侧（平台接口/环境变量/mock），计入 AI 月度配额；billed=0：用户自配接口，不计配额
     const billed = userSettings?.api_key ? 0 : 1;
 
@@ -422,12 +477,11 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
     if (apiKey) {
       // 真实 Provider：Workers 代理调用（§42），30 秒超时，非 2xx 视为内部错误
       const baseUrl = normalizeAiBaseUrl(
-        userSettings?.base_url ||
-        platformCfg?.baseUrl ||
+        mode === 'own' ? userSettings?.base_url : platformCfg?.baseUrl ||
         c.env.AI_BASE_URL ||
         'https://api.openai.com/v1'
       );
-      const model = userSettings?.model || platformCfg?.model || c.env.AI_MODEL || 'gpt-4o-mini';
+      const model = mode === 'own' ? userSettings?.model : platformCfg?.model || c.env.AI_MODEL || 'gpt-4o-mini';
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
       try {
@@ -490,7 +544,8 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
     .bind(id, tenantId, user.id, type, prompt, result, cf ? 1 : userSettings?.api_key ? 0 : 1, credits, now())
     .run();
 
-  return c.json({ success: true, data: { id, type, result, mock, cf, credits, creditsLeft } }, 201);
+  const userCreditsLeft = cf ? (await resolveUserCreditQuota(c, user.id)).remaining : null;
+  return c.json({ success: true, data: { id, type, result, mock, cf, credits, creditsLeft, userCreditsLeft } }, 201);
 });
 
 /**
@@ -499,14 +554,24 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
 app.get('/history', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
   const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
+  const user = c.get('user');
   const rows = await db
     .prepare(
-      `SELECT id, type, prompt, result, created_at FROM ai_generations
+      `SELECT id, user_id, type, prompt, result, credits, created_at FROM ai_generations
         WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 20`
     )
     .bind(tenantId)
     .all();
-  return c.json({ success: true, data: { items: rows.results } });
+  const balance = await db.prepare('SELECT ai_credits FROM tenants WHERE id = ?').bind(tenantId).first();
+  const userCreditQuota = await resolveUserCreditQuota(c, user.id);
+  return c.json({
+    success: true,
+    data: { items: rows.results.map((item) => ({
+      ...item,
+      creditsLeft: item.credits === null ? null : balance?.ai_credits ?? null,
+      userCreditsLeft: item.user_id === user.id ? userCreditQuota.remaining : null,
+    })) },
+  });
 });
 
 /**
@@ -526,6 +591,10 @@ app.get('/settings', requireAuth, async (c) => {
   const cfSetting = await getCfAiSetting(db);
   const cfAvailable = !!c.env.AI && cfSetting.enabled === true;
   const tenantCredits = await resolveTenantCredits(c);
+  const userCredits = await resolveUserCreditQuota(c, user.id);
+  const defaultMode = row?.api_key ? 'own' : 'cloudflare';
+  const platformEnabled = platformCfg?.enabled !== false;
+  const mode = row?.mode === 'platform' && !platformEnabled ? 'cloudflare' : row?.mode || defaultMode;
   return c.json({
     success: true,
     data: {
@@ -534,12 +603,14 @@ app.get('/settings', requireAuth, async (c) => {
       hasKey: !!row?.api_key,
       keyMasked: maskKey(row?.api_key),
       source: row?.api_key ? 'user' : platformCfg || c.env.AI_API_KEY ? 'platform' : 'mock',
-      mode: row?.mode || 'own',
+      mode,
       cfModel: row?.cf_model || '',
       cf: { available: cfAvailable, enabled: cfSetting.enabled, models: CF_MODELS },
       tenantCredits: tenantCredits ? tenantCredits.credits : null,
       tenantCreditsMonthly: tenantCredits ? tenantCredits.monthly : null,
       tenantCreditsBonus: tenantCredits ? tenantCredits.bonus : null,
+      userCredits,
+      platformEnabled,
     },
   });
 });
@@ -559,11 +630,11 @@ app.put('/settings', requireAuth, async (c) => {
 
   if (body.clear) {
     await db.prepare('DELETE FROM user_ai_settings WHERE user_id = ?').bind(user.id).run();
-    return c.json({ success: true, data: { cleared: true, mode: 'platform', cfModel: '' } });
+    return c.json({ success: true, data: { cleared: true, mode: 'cloudflare', cfModel: '' } });
   }
 
   const row = await getUserAiSettings(db, user.id);
-  const mode = body.mode !== undefined ? String(body.mode).trim() : row?.mode || 'own';
+  const mode = body.mode !== undefined ? String(body.mode).trim() : row?.mode || (row?.api_key ? 'own' : 'cloudflare');
   if (!['own', 'platform', 'cloudflare'].includes(mode)) {
     throw new ApiError('VALIDATION_ERROR', "mode 必须是 'own' | 'platform' | 'cloudflare'");
   }

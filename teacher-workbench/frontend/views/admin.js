@@ -177,6 +177,10 @@ App.registerView('admin', {
           </div>
         </div>
         <div id="pai-status" class="muted" style="font-size:12.5px;margin:6px 0 10px">加载中…</div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin:6px 0 10px">
+          <input type="checkbox" id="pai-enabled" checked>
+          启用平台 AI 接口（关闭后仅保留 Cloudflare AI 和用户自定义接口）
+        </label>
         <div class="modal-actions">
           <button class="btn" id="pai-clear" type="button">清除平台配置</button>
           <button class="btn btn-primary" id="pai-save" type="button">保存</button>
@@ -336,6 +340,7 @@ async function bindPlatformAi() {
   }
   document.getElementById('pai-base-url').value = current.baseUrl || '';
   document.getElementById('pai-model').value = current.model || '';
+  document.getElementById('pai-enabled').checked = current.enabled !== false;
   statusEl.textContent = current.configured
     ? `已配置（密钥 ${current.apiKeyMasked}），重新输入可更换；留空保持不变`
     : '未配置：成员将使用内置演示回复（或环境变量 AI_API_KEY）';
@@ -345,6 +350,7 @@ async function bindPlatformAi() {
     const baseUrl = document.getElementById('pai-base-url').value.trim();
     const model = document.getElementById('pai-model').value.trim();
     const apiKey = keyInput.value.trim();
+    const enabled = document.getElementById('pai-enabled').checked;
     if (!apiKey && !(current && current.configured)) {
       App.toast('请填写 API 密钥（或点「清除平台配置」）');
       return;
@@ -352,8 +358,8 @@ async function bindPlatformAi() {
     const btn = document.getElementById('pai-save');
     btn.disabled = true;
     try {
-      const data = await api.admin.updateAiSettings({ baseUrl, model, apiKey });
-      current = { configured: data.configured, baseUrl: data.baseUrl, model: data.model, apiKeyMasked: data.apiKeyMasked };
+      const data = await api.admin.updateAiSettings({ baseUrl, model, apiKey, enabled });
+      current = { configured: data.configured, enabled: data.enabled, baseUrl: data.baseUrl, model: data.model, apiKeyMasked: data.apiKeyMasked };
       statusEl.textContent = data.configured
         ? `已配置（密钥 ${data.apiKeyMasked}），重新输入可更换；留空保持不变`
         : '已清除平台配置';
@@ -371,13 +377,14 @@ async function bindPlatformAi() {
     const ok = await App.confirmDialog('清除平台 AI 接口配置？未自配接口的成员将回退到内置演示回复。');
     if (!ok) return;
     try {
-      await api.admin.updateAiSettings({ baseUrl: '', model: '', apiKey: '' });
-      current = { configured: false };
+      await api.admin.updateAiSettings({ baseUrl: '', model: '', apiKey: '', enabled: false, clear: true });
+      current = { configured: false, enabled: false };
       document.getElementById('pai-base-url').value = '';
       document.getElementById('pai-model').value = '';
       keyInput.value = '';
       keyInput.placeholder = '未配置';
       statusEl.textContent = '未配置：成员将使用内置演示回复（或环境变量 AI_API_KEY）';
+      document.getElementById('pai-enabled').checked = false;
       App.toast('已清除平台配置');
     } catch (err) {
       App.toast((err && err.message) || '清除失败');
@@ -885,7 +892,8 @@ async function renderTenants() {
                 <td class="muted">${expired ? `<span style="color:var(--danger)">${App.esc((t.expires_at || '').slice(0, 10))}</span>` : App.esc((t.expires_at || '').slice(0, 10) || '—')}</td>
                 <td>${t.memberCount ?? t.member_count ?? '-'}</td>
                 <td>
-                  <button class="btn btn-sm" data-quota="${t.id}" data-name="${App.esc(t.name)}" data-ai-credits="${t.ai_credits ?? 0}" data-ai-monthly="${t.ai_credits_monthly ?? ''}" data-ai-bonus="${t.ai_credits_bonus ?? 0}" type="button">配额/到期</button>
+                  <button class="btn btn-sm" data-quota="${t.id}" data-name="${App.esc(t.name)}" type="button">配额/到期</button>
+                  <button class="btn btn-sm" data-ai-quota="${t.id}" data-name="${App.esc(t.name)}" data-ai-credits="${t.ai_credits ?? 0}" data-ai-monthly="${t.ai_credits_monthly ?? ''}" data-ai-bonus="${t.ai_credits_bonus ?? 0}" type="button">AI 配额</button>
                   <button class="btn btn-sm" data-plan="${t.id}" data-name="${App.esc(t.name)}" data-current="${App.esc(t.plan || 'custom')}" type="button">套餐</button>
                   <button class="btn btn-sm" data-branding="${t.id}" data-name="${App.esc(t.name)}" type="button">品牌</button>
                   <button class="btn btn-sm ${t.status === 'active' ? 'btn-danger' : ''}" data-toggle-status="${t.id}" data-status="${t.status === 'active' ? 'disabled' : 'active'}" type="button">
@@ -913,13 +921,14 @@ async function renderTenants() {
       });
     });
     box.querySelectorAll('[data-quota]').forEach((btn) => {
-      btn.addEventListener('click', () =>
-        openQuotaModal(btn.dataset.quota, btn.dataset.name, {
-          credits: Number(btn.dataset.aiCredits || 0),
-          monthly: btn.dataset.aiMonthly === '' ? null : Number(btn.dataset.aiMonthly),
-          bonus: Number(btn.dataset.aiBonus || 0),
-        })
-      );
+      btn.addEventListener('click', () => openQuotaModal(btn.dataset.quota, btn.dataset.name));
+    });
+    box.querySelectorAll('[data-ai-quota]').forEach((btn) => {
+      btn.addEventListener('click', () => openAiQuotaModal(btn.dataset.aiQuota, btn.dataset.name, {
+        credits: Number(btn.dataset.aiCredits || 0),
+        monthly: btn.dataset.aiMonthly === '' ? null : Number(btn.dataset.aiMonthly),
+        bonus: Number(btn.dataset.aiBonus || 0),
+      }));
     });
     box.querySelectorAll('[data-branding]').forEach((btn) => {
       btn.addEventListener('click', () => openBrandingModal(btn.dataset.branding, btn.dataset.name));
@@ -950,9 +959,8 @@ async function renderTenants() {
   }
 }
 
-/** 配额编辑弹窗：数字输入，留空表示不限（NULL）；含到期日期与 AI 额度（月度限额 + 手动加赠） */
-function openQuotaModal(tenantId, name, aiState) {
-  const ai = aiState || { credits: 0, monthly: null, bonus: 0 };
+/** 配额编辑弹窗：数字输入，留空表示不限（NULL）；仅处理资源配额与到期日期。 */
+function openQuotaModal(tenantId, name) {
   App.modal(
     `配额与到期 — ${name}`,
     `
@@ -962,20 +970,7 @@ function openQuotaModal(tenantId, name, aiState) {
           <input class="form-input" id="quota-expires" type="date">
         </div>
       </div>
-      <div class="form-row" style="margin-bottom:8px">
-        <div>
-          <label class="form-label">AI 月度限额（每月自动补足到「限额 + 加赠余额」；留空 = 不自动补足）</label>
-          <input class="form-input" id="quota-ai-monthly" type="number" min="0" step="1" placeholder="不自动补足"
-            value="${ai.monthly == null ? '' : Number(ai.monthly)}">
-        </div>
-        <div>
-          <label class="form-label">手动增加额度（credits &gt; 0 才生效，累计加赠；当前余额 ${Number(ai.credits) || 0} · 加赠池 ${Number(ai.bonus) || 0}）</label>
-          <input class="form-input" id="quota-ai-add" type="number" min="0" step="1" placeholder="本次增加，如 10">
-        </div>
-      </div>
-      <div class="muted" style="font-size:12px;margin-bottom:6px">
-        扣费先用月度基础池、后用加赠池；下月基础池补足到限额，加赠池只减不补（管理员加的用完即消失）。
-      </div>` +
+      ` +
       QUOTA_FIELDS.map(
         ([key, label]) => `
         <div class="form-row" style="margin-bottom:4px">
@@ -1011,18 +1006,6 @@ function openQuotaModal(tenantId, name, aiState) {
           quotas[input.dataset.quotaField] = v === '' ? null : Number(v);
         });
         quotas.expiresAt = modal.querySelector('#quota-expires').value || null;
-        const monthlyRaw = modal.querySelector('#quota-ai-monthly').value.trim();
-        const monthly = monthlyRaw === '' ? null : Number(monthlyRaw);
-        if (monthly !== null && (!Number.isFinite(monthly) || monthly < 0)) {
-          App.toast('AI 月度限额须为 ≥ 0 的数字或留空');
-          return;
-        }
-        const addRaw = modal.querySelector('#quota-ai-add').value.trim();
-        const addVal = addRaw === '' ? 0 : Number(addRaw);
-        if (!Number.isFinite(addVal) || addVal < 0) {
-          App.toast('手动增加额度须为 ≥ 0 的数字');
-          return;
-        }
         const saveBtn = modal.querySelector('#quota-save');
         saveBtn.disabled = true;
         try {
@@ -1032,25 +1015,57 @@ function openQuotaModal(tenantId, name, aiState) {
           App.toast(e.message || '配额保存失败');
           return;
         }
-        try {
-          await api.admin.setAiMonthly(tenantId, monthly);
-        } catch (e) {
-          saveBtn.disabled = false;
-          App.toast(`配额已保存；AI 月度限额保存失败：${(e && e.message) || '未知错误'}`);
-          return;
-        }
-        if (addVal > 0) {
-          try {
-            await api.admin.setAiCredits(tenantId, addVal);
-          } catch (e) {
-            saveBtn.disabled = false;
-            App.toast(`配额已保存；AI 加赠失败：${(e && e.message) || '未知错误'}`);
-            return;
-          }
-        }
         App.closeModal();
         App.toast('配额已更新');
         await renderTenants();
+      };
+    }
+  );
+}
+
+/** AI 配额独立弹窗：Cloudflare 月度补足与手动加赠。 */
+function openAiQuotaModal(tenantId, name, aiState) {
+  const ai = aiState || { credits: 0, monthly: null, bonus: 0 };
+  App.modal(
+    `AI 配额 — ${name}`,
+    `<div class="form-row" style="margin-bottom:8px">
+       <div>
+         <label class="form-label">AI 月度限额（每月自动补足；留空 = 不自动补足）</label>
+         <input class="form-input" id="ai-quota-monthly" type="number" min="0" step="1" placeholder="不自动补足" value="${ai.monthly == null ? '' : Number(ai.monthly)}">
+       </div>
+       <div>
+         <label class="form-label">手动增加 credit（当前余额 ${Number(ai.credits) || 0} · 加赠池 ${Number(ai.bonus) || 0}）</label>
+         <input class="form-input" id="ai-quota-add" type="number" min="0" step="1" placeholder="本次增加，如 10">
+       </div>
+     </div>
+     <div class="muted" style="font-size:12px;margin-bottom:6px">月度额度自动补足，加赠 credit 只减不补。</div>
+     <div class="modal-actions">
+       <button class="btn" id="ai-quota-cancel" type="button">取消</button>
+       <button class="btn btn-primary" id="ai-quota-save" type="button">保存</button>
+     </div>`,
+    (modal) => {
+      modal.querySelector('#ai-quota-cancel').onclick = () => App.closeModal();
+      modal.querySelector('#ai-quota-save').onclick = async () => {
+        const monthlyRaw = modal.querySelector('#ai-quota-monthly').value.trim();
+        const monthly = monthlyRaw === '' ? null : Number(monthlyRaw);
+        const addRaw = modal.querySelector('#ai-quota-add').value.trim();
+        const add = addRaw === '' ? 0 : Number(addRaw);
+        if ((monthly !== null && (!Number.isFinite(monthly) || monthly < 0)) || !Number.isFinite(add) || add < 0) {
+          App.toast('AI 配额必须是非负数字');
+          return;
+        }
+        const save = modal.querySelector('#ai-quota-save');
+        save.disabled = true;
+        try {
+          await api.admin.setAiMonthly(tenantId, monthly);
+          if (add > 0) await api.admin.setAiCredits(tenantId, add);
+          App.closeModal();
+          App.toast('AI 配额已更新');
+          await renderTenants();
+        } catch (e) {
+          save.disabled = false;
+          App.toast(e.message || 'AI 配额保存失败');
+        }
       };
     }
   );

@@ -625,7 +625,7 @@ app.delete('/:id/members/:userId', requireAuth, requireTenant, requireRole(['own
 async function getUserUsage(db, tenantId, userId) {
   const monthPrefix = new Date().toISOString().slice(0, 7);
   // 6 条统计一次 batch（单往返），避免逐条串行
-  const [lessons, assignments, dictations, files, aiMonth, storage] = await db.batch([
+  const [lessons, assignments, dictations, files, aiMonth, aiCredits, storage] = await db.batch([
     db.prepare('SELECT COUNT(*) AS n FROM lessons WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId),
     db.prepare('SELECT COUNT(*) AS n FROM assignments WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId),
     db.prepare('SELECT COUNT(*) AS n FROM dictations WHERE tenant_id = ? AND teacher_id = ?').bind(tenantId, userId),
@@ -633,6 +633,7 @@ async function getUserUsage(db, tenantId, userId) {
     db
       .prepare('SELECT COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND user_id = ? AND substr(created_at, 1, 7) = ?')
       .bind(tenantId, userId, monthPrefix),
+    db.prepare('SELECT COALESCE(SUM(credits), 0) AS n FROM ai_generations WHERE tenant_id = ? AND user_id = ? AND substr(created_at, 1, 7) = ? AND credits IS NOT NULL').bind(tenantId, userId, monthPrefix),
     db.prepare('SELECT COALESCE(SUM(size), 0) AS n FROM files WHERE tenant_id = ? AND created_by = ?').bind(tenantId, userId),
   ]);
   const n = (r) => (r.results && r.results[0] ? r.results[0].n : 0);
@@ -642,6 +643,7 @@ async function getUserUsage(db, tenantId, userId) {
     dictations: n(dictations),
     files: n(files),
     aiMonth: n(aiMonth),
+    aiCredits: n(aiCredits) || 0,
     storageBytes: n(storage) || 0,
   };
 }
@@ -650,7 +652,7 @@ async function getUserUsage(db, tenantId, userId) {
  *  成员配额明细页用，避免 per-member 的 N+1。 */
 async function getAllUsersUsage(db, tenantId) {
   const monthPrefix = new Date().toISOString().slice(0, 7);
-  const [lessons, assignments, dictations, files, aiMonth, storage] = await db.batch([
+  const [lessons, assignments, dictations, files, aiMonth, aiCredits, storage] = await db.batch([
     db.prepare('SELECT teacher_id AS uid, COUNT(*) AS n FROM lessons WHERE tenant_id = ? GROUP BY teacher_id').bind(tenantId),
     db.prepare('SELECT teacher_id AS uid, COUNT(*) AS n FROM assignments WHERE tenant_id = ? GROUP BY teacher_id').bind(tenantId),
     db.prepare('SELECT teacher_id AS uid, COUNT(*) AS n FROM dictations WHERE tenant_id = ? GROUP BY teacher_id').bind(tenantId),
@@ -658,10 +660,11 @@ async function getAllUsersUsage(db, tenantId) {
     db
       .prepare('SELECT user_id AS uid, COUNT(*) AS n FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ? GROUP BY user_id')
       .bind(tenantId, monthPrefix),
+    db.prepare('SELECT user_id AS uid, COALESCE(SUM(credits), 0) AS n FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ? AND credits IS NOT NULL GROUP BY user_id').bind(tenantId, monthPrefix),
     db.prepare('SELECT created_by AS uid, COALESCE(SUM(size), 0) AS n FROM files WHERE tenant_id = ? GROUP BY created_by').bind(tenantId),
   ]);
   const map = new Map();
-  const empty = () => ({ lessons: 0, assignments: 0, dictations: 0, files: 0, aiMonth: 0, storageBytes: 0 });
+  const empty = () => ({ lessons: 0, assignments: 0, dictations: 0, files: 0, aiMonth: 0, aiCredits: 0, storageBytes: 0 });
   const merge = (res, field) => {
     for (const r of res.results) {
       if (!r.uid) continue;
@@ -674,12 +677,13 @@ async function getAllUsersUsage(db, tenantId) {
   merge(dictations, 'dictations');
   merge(files, 'files');
   merge(aiMonth, 'aiMonth');
+  merge(aiCredits, 'aiCredits');
   merge(storage, 'storageBytes');
   return map;
 }
 
 /** 按用户配额覆盖支持的资源（files 按数量） */
-const USER_QUOTA_RESOURCES = ['lessons', 'assignments', 'dictations', 'ai', 'files'];
+const USER_QUOTA_RESOURCES = ['lessons', 'assignments', 'dictations', 'ai', 'ai_credits', 'files'];
 
 /**
  * GET /api/v1/tenants/:id/quota-detail — 成员用量与配额明细（owner/admin）
@@ -717,7 +721,7 @@ app.get('/:id/quota-detail', requireAuth, requireTenant, requireRole(['owner', '
   const users = [];
   for (const m of members) {
     const userId = m.user_id;
-    const usage = usageMap.get(userId) || { lessons: 0, assignments: 0, dictations: 0, files: 0, aiMonth: 0, storageBytes: 0 };
+    const usage = usageMap.get(userId) || { lessons: 0, assignments: 0, dictations: 0, files: 0, aiMonth: 0, aiCredits: 0, storageBytes: 0 };
     const quotas = quotaByUser.get(userId) || {};
     const denied = deniedPerms.get(userId) || new Set();
     const permissions = {};
@@ -744,7 +748,7 @@ app.get('/:id/quota-detail', requireAuth, requireTenant, requireRole(['owner', '
 
 /**
  * PUT /api/v1/tenants/:id/members/:userId/quota — 设置按用户配额（owner/admin）
- * body: { resource: lessons|assignments|dictations|ai|files, quota: ≥0 整数 | null }
+ * body: { resource: lessons|assignments|dictations|ai|ai_credits|files, quota: ≥0 整数 | null }
  * quota 为 null 时删除该覆盖（不限）。
  */
 app.put('/:id/members/:userId/quota', requireAuth, requireTenant, requireRole(['owner', 'admin']), async (c) => {

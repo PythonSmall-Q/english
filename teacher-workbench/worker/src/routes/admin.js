@@ -710,6 +710,7 @@ app.get('/ai-settings', requireAuth, async (c) => {
     success: true,
     data: {
       configured: !!(cfg && cfg.apiKey),
+      enabled: cfg?.enabled !== false,
       baseUrl: cfg?.baseUrl || '',
       model: cfg?.model || '',
       apiKeyMasked: cfg?.apiKey ? maskKey(cfg.apiKey) : '',
@@ -728,12 +729,30 @@ app.put('/ai-settings', requireAuth, async (c) => {
   const baseUrl = String(body.baseUrl || '').trim().replace(/\/$/, '');
   const model = String(body.model || '').trim();
   const apiKey = String(body.apiKey || '').trim();
+  const enabled = body.enabled !== false;
+  const clear = body.clear === true;
+
+  if (!apiKey && !clear && body.enabled !== undefined) {
+    const existing = await c.env.DB.prepare("SELECT value FROM platform_settings WHERE key = 'ai_provider'").first();
+    let cfg = null;
+    try { cfg = existing?.value ? JSON.parse(existing.value) : null; } catch { cfg = null; }
+    if (cfg?.apiKey) {
+      const value = JSON.stringify({
+        baseUrl: baseUrl || cfg.baseUrl || 'https://api.openai.com/v1',
+        apiKey: cfg.apiKey,
+        model: model || cfg.model || 'gpt-4o-mini',
+        enabled,
+      });
+      await c.env.DB.prepare("UPDATE platform_settings SET value = ?, updated_at = ? WHERE key = 'ai_provider'").bind(value, now()).run();
+      return c.json({ success: true, data: { configured: true, enabled, baseUrl: baseUrl || cfg.baseUrl || '', model: model || cfg.model || '', apiKeyMasked: maskKey(cfg.apiKey) } });
+    }
+  }
 
   if (apiKey) {
     if (baseUrl && !/^https?:\/\//.test(baseUrl)) {
       throw new ApiError('VALIDATION_ERROR', '接口地址必须是 http(s) URL');
     }
-    const value = JSON.stringify({ baseUrl: baseUrl || 'https://api.openai.com/v1', apiKey, model: model || 'gpt-4o-mini' });
+    const value = JSON.stringify({ baseUrl: baseUrl || 'https://api.openai.com/v1', apiKey, model: model || 'gpt-4o-mini', enabled });
     await c.env.DB
       .prepare(
         `INSERT INTO platform_settings (key, value, updated_at) VALUES ('ai_provider', ?, ?)
@@ -742,12 +761,23 @@ app.put('/ai-settings', requireAuth, async (c) => {
       .bind(value, now())
       .run();
   } else {
-    await c.env.DB.prepare("DELETE FROM platform_settings WHERE key = 'ai_provider'").run();
+    if (body.enabled === false) {
+      const value = JSON.stringify({ baseUrl, model, apiKey: '', enabled: false });
+      await c.env.DB
+        .prepare(
+          `INSERT INTO platform_settings (key, value, updated_at) VALUES ('ai_provider', ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+        )
+        .bind(value, now())
+        .run();
+    } else {
+      await c.env.DB.prepare("DELETE FROM platform_settings WHERE key = 'ai_provider'").run();
+    }
   }
   console.log(`[admin] 平台 AI 接口已${apiKey ? '更新' : '清除'}（操作者 ${user.email}）`);
   return c.json({
     success: true,
-    data: { configured: !!apiKey, baseUrl, model, apiKeyMasked: apiKey ? maskKey(apiKey) : '' },
+    data: { configured: !!apiKey, enabled, baseUrl, model, apiKeyMasked: apiKey ? maskKey(apiKey) : '' },
   });
 });
 
