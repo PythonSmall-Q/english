@@ -98,7 +98,7 @@
     throw { code: err.code || 'INTERNAL_ERROR', message: err.message || '请求失败' };
   }
 
-  async function requestStream(path, body, onDelta) {
+  async function requestStream(path, body, onDelta, onStatus) {
     const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
     const tenantId = window.App?.state?.tenant?.id;
     if (tenantId) headers['X-Tenant-Id'] = tenantId;
@@ -122,6 +122,7 @@
         if (!line) continue;
         const data = JSON.parse(line.slice(5).trim());
         if (data.error) throw { code: data.code || 'INTERNAL_ERROR', message: data.error };
+        if (data.status && onStatus) onStatus(data.message || data.status);
         if (data.delta) onDelta(data.delta);
         if (data.done) doneData = data;
       }
@@ -300,7 +301,8 @@
   // —— AI 教学助手（§42）——
   const ai = {
     generate: (body) => request('/ai/generate', { method: 'POST', body }),
-    generateStream: (body, onDelta) => requestStream('/ai/generate-stream', body, onDelta),
+    generateStream: (body, onDelta, onStatus) => requestStream('/ai/generate-stream', body, onDelta, onStatus),
+    context: (body) => request('/ai/context', { method: 'POST', body }),
     history: (query) => request('/ai/history', { query }),
     /** 用户 AI 配置（密钥仅返回掩码） */
     getSettings: () => request('/ai/settings'),

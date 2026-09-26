@@ -52,6 +52,10 @@
 .aiw-provider-row { display: flex; gap: 8px; align-items: center; }
 .aiw-provider-row .form-input { min-width: 0; flex: 1; }
 .aiw-provider-status { font-size: 12px; color: #8a94a6; }
+.aiw-data-consent { border: 1px solid #dfe5ee; background: #fff; color: #53627a; border-radius: 7px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+.aiw-data-consent.is-on { border-color: #62b58b; background: #eefaf3; color: #28784e; }
+.aiw-auto-scopes { display: grid; gap: 6px; color: #53627a; font-size: 12px; }
+.aiw-auto-scope { display: flex; gap: 6px; align-items: center; cursor: pointer; }
 .aiw-hist { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
 .aiw-hist-item { border: 1px solid #eef1f6; border-radius: 8px; padding: 8px 10px; cursor: pointer; font-size: 13px; }
 .aiw-hist-item:hover { border-color: #4f8ef7; background: #f6f9ff; }
@@ -94,11 +98,22 @@
     { type: 'translate', label: '中英互译', template: '' },
   ];
   const TYPE_LABEL = Object.fromEntries(QUICK.map((q) => [q.type, q.label]));
+  const DATA_SCOPE_OPTIONS = [
+    ['classes', '班级'], ['students', '学生'], ['assignments', '作业'],
+    ['dictations', '听写'], ['exams', '考试'], ['lessons', '教案'],
+  ];
+  const AUTO_SCOPE_KEY = 'aiw-auto-consent-scopes';
 
   /** 模块级对话状态（切换视图后保留） */
   const state = {
     messages: [], // { role:'user'|'ai', type, text, mock? }
     type: 'practice',
+    context: null,
+    pendingDataScopes: null,
+    pendingPrompt: '',
+    autoConsentScopes: (() => {
+      try { return JSON.parse(localStorage.getItem(AUTO_SCOPE_KEY) || '[]'); } catch (_) { return []; }
+    })(),
   };
 
   /** DOM 引用（render 时填充） */
@@ -213,6 +228,14 @@
     }
   }
 
+  function dataRequestFrom(text) {
+    const match = String(text || '').match(/\[\[REQUEST_DATA:([^\]]+)\]\]/i);
+    if (!match) return null;
+    const allowed = ['classes', 'students', 'assignments', 'dictations', 'exams', 'lessons'];
+    const scopes = match[1].split(',').map((item) => item.trim()).filter((item) => allowed.includes(item));
+    return scopes.length ? scopes : null;
+  }
+
   /** 渲染消息列表并自动滚动到底 */
   function renderMsgs() {
     const box = dom.msgs;
@@ -230,7 +253,7 @@
       .map((m) => {
         if (m.role === 'thinking') {
           const elapsed = Math.floor((Date.now() - m.startedAt) / 1000);
-          const phase = elapsed >= 25 ? '仍在等待模型响应' : elapsed >= 10 ? '正在组织答案' : '正在分析问题';
+          const phase = m.status || (elapsed >= 25 ? '仍在等待模型响应' : elapsed >= 10 ? '正在组织答案' : '正在分析问题');
           return `<div class="aiw-msg aiw-msg-ai"><div class="aiw-bubble aiw-thinking"><span class="aiw-spinner"></span> ${phase}（${elapsed}s）</div></div>`;
         }
         if (m.role === 'user') {
@@ -301,10 +324,21 @@
         <div class="aiw-hist-prompt" title="${esc(prompt)}">${esc(prompt)}</div>
         <div class="aiw-hist-meta">${esc(TYPE_LABEL[it.type] || it.type || '')} · ${esc(String(it.created_at || '').slice(0, 16))}</div>`;
       el.addEventListener('click', () => {
-        // 回填对话：恢复 type 与 prompt，由老师确认后再发送
+        // 点击历史记录直接恢复原始提问和生成结果，不重复消耗 AI 配额。
         if (QUICK.some((q) => q.type === it.type)) state.type = it.type;
-        dom.text.value = prompt;
+        state.messages = [
+          { role: 'user', type: it.type, text: prompt },
+          { role: 'ai', type: it.type, text: String(it.result || ''), mock: false },
+        ];
+        state.context = null;
+        state.pendingDataScopes = null;
+        dom.text.value = '';
+        dom.data.disabled = true;
+        dom.data.textContent = '🔒 等待 AI 请求数据';
+        dom.data.classList.remove('is-on');
         renderChips();
+        renderMsgs();
+        renderProvider();
         dom.text.focus();
       });
       wrap.appendChild(el);
@@ -317,6 +351,14 @@
   async function send() {
     const prompt = dom.text.value.trim();
     if (!prompt) return App.toast('请输入内容');
+    const contextPrompt = state.context
+      ? `${prompt}\n\n【用户已同意提供的本空间教学数据】\n${JSON.stringify(state.context)}`
+      : prompt;
+    state.context = null;
+    state.pendingDataScopes = null;
+    dom.data.disabled = true;
+    dom.data.textContent = '🔒 等待 AI 请求数据';
+    dom.data.classList.remove('is-on');
     state.messages.push({ role: 'user', type: state.type, text: prompt });
     dom.text.value = '';
     renderMsgs();
@@ -327,23 +369,46 @@
     dom.send.disabled = true;
     const thinkingTimer = setInterval(renderMsgs, 1000);
     try {
-      state.messages = state.messages.filter((m) => m.role !== 'thinking');
       let streamedMessage = null;
       let data;
       try {
-        data = await api.ai.generateStream({ type: state.type, prompt }, (delta) => {
+        data = await api.ai.generateStream({ type: state.type, prompt: contextPrompt }, (delta) => {
+          state.messages = state.messages.filter((m) => m.role !== 'thinking');
           if (!streamedMessage) {
             streamedMessage = { role: 'ai', type: state.type, text: '', mock: false };
             state.messages.push(streamedMessage);
           }
           streamedMessage.text += delta;
           renderMsgs();
+        }, (status) => {
+          thinking.status = status;
+          renderMsgs();
         });
       } catch (streamErr) {
         if (streamErr?.code !== 'STREAM_UNSUPPORTED') throw streamErr;
-        data = await api.ai.generate({ type: state.type, prompt });
+        state.messages = state.messages.filter((m) => m.role !== 'thinking');
+        data = await api.ai.generate({ type: state.type, prompt: contextPrompt });
       }
       if (!streamedMessage) await revealResponse(data);
+      const completedText = streamedMessage?.text || data?.result || '';
+      const requestedScopes = dataRequestFrom(completedText);
+      if (requestedScopes) {
+        state.messages = state.messages.filter((m) => m !== streamedMessage);
+        state.messages.push({
+          role: 'ai',
+          type: state.type,
+          text: `为了准确回答，我需要查看：${requestedScopes.join('、')}。请点击下方“允许提供数据”，确认后再发送。`,
+          mock: false,
+        });
+        state.pendingDataScopes = requestedScopes;
+        state.pendingPrompt = prompt;
+        dom.data.disabled = false;
+        dom.data.textContent = '🔐 允许 AI 提供请求的数据';
+        dom.data.classList.remove('is-on');
+        if (requestedScopes.every((scope) => state.autoConsentScopes.includes(scope))) {
+          dom.data.click();
+        }
+      }
     } catch (err) {
       state.messages = state.messages.filter((m) => m.role !== 'thinking');
       reportErr(err);
@@ -399,6 +464,7 @@
               <textarea class="form-input" id="aiw-text" rows="3" placeholder="请输入内容，Ctrl+Enter 发送"></textarea>
               <div class="aiw-input-bar">
                 <button class="btn" id="aiw-attach" type="button">📎 上传附件</button>
+                <button class="aiw-data-consent" id="aiw-data" type="button" disabled>🔒 等待 AI 请求数据</button>
                 <button class="btn btn-primary" id="aiw-send" type="button">发送</button>
               </div>
             </div>
@@ -422,6 +488,11 @@
               <div class="aiw-chips" id="aiw-chips"></div>
             </div>
             <div class="card">
+              <div class="card-title">自动同意数据范围</div>
+              <div class="muted" style="margin-bottom:8px">仅对勾选的数据类别自动授权，其他请求仍需确认。</div>
+              <div class="aiw-auto-scopes" id="aiw-auto-scopes"></div>
+            </div>
+            <div class="card">
               <div class="card-title">最近生成</div>
               <div id="aiw-history"></div>
             </div>
@@ -439,7 +510,51 @@
         cfModel: el.querySelector('#aiw-cf-model'),
         providerSave: el.querySelector('#aiw-provider-save'),
         providerStatus: el.querySelector('#aiw-provider-status'),
+        data: el.querySelector('#aiw-data'),
+        autoScopes: el.querySelector('#aiw-auto-scopes'),
       };
+
+      DATA_SCOPE_OPTIONS.forEach(([scope, label]) => {
+        const item = document.createElement('label');
+        item.className = 'aiw-auto-scope';
+        item.innerHTML = `<input type="checkbox" value="${scope}"> ${label}`;
+        const checkbox = item.querySelector('input');
+        checkbox.checked = state.autoConsentScopes.includes(scope);
+        checkbox.addEventListener('change', () => {
+          state.autoConsentScopes = [...dom.autoScopes.querySelectorAll('input:checked')].map((input) => input.value);
+          try { localStorage.setItem(AUTO_SCOPE_KEY, JSON.stringify(state.autoConsentScopes)); } catch (_) { /* 无持久化权限时仍可在本次会话使用 */ }
+        });
+        dom.autoScopes.appendChild(item);
+      });
+
+      dom.data.addEventListener('click', async () => {
+        if (!state.pendingDataScopes) return;
+        const requestedScopes = state.pendingDataScopes;
+        const autoApproved = requestedScopes.every((scope) => state.autoConsentScopes.includes(scope));
+        if (!autoApproved) {
+          const ok = await App.confirmDialog(
+            `AI 请求使用以下数据：${requestedScopes.join('、')}。\n\n允许后仅提供本空间必要字段，每类最多 100 条；不会提供密码、密钥、备注或文件内容。`
+          );
+          if (!ok) return;
+        }
+        dom.data.disabled = true;
+        dom.data.textContent = autoApproved ? '正在自动准备数据…' : '正在准备数据…';
+        try {
+          const result = await api.ai.context({ scopes: requestedScopes });
+          state.context = result.data || {};
+          dom.data.textContent = '🔓 数据已准备，请点击发送';
+          dom.data.classList.add('is-on');
+          dom.data.disabled = true;
+          dom.text.value = state.pendingPrompt;
+          state.pendingDataScopes = null;
+          App.toast('数据已准备，请确认后发送');
+        } catch (err) {
+          dom.data.textContent = '允许提供数据';
+          App.toast((err && err.message) || '数据准备失败');
+        } finally {
+          if (state.pendingDataScopes) dom.data.disabled = false;
+        }
+      });
 
       // 服务方式在助手页直接可切换；详细密钥配置仍保留在设置页。
       let providerSettings = null;

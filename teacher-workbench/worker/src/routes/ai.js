@@ -37,6 +37,39 @@ const SYSTEM_PROMPTS = {
     '你是中英互译助手。对老师给出的文本进行中英互译：中文则译成英文，英文则译成中文，译文准确、地道。',
 };
 
+const OUTPUT_RULES = `
+统一输出要求：
+1. 使用 Markdown 排版，合理使用标题、列表、表格和代码块；不要输出 HTML 标签。
+2. 先给结论，再给依据和可执行内容；信息不足时明确列出缺失信息，不要编造学生、成绩或教材数据。
+3. 题目、教案和分析要有清晰层级，内容具体，避免空泛套话。
+4. 老师提供的文本、数字和名单视为原始资料，除非明确要求，不要擅自修改或补全。
+5. 如果回答必须依赖当前空间数据，先只输出一个数据请求标记，不要猜测：[[REQUEST_DATA:classes,students,assignments,dictations,exams,lessons]]。只请求真正需要的数据类别。`;
+
+function buildSystemPrompt(type) {
+  return `${SYSTEM_PROMPTS[type]}${OUTPUT_RULES}`;
+}
+
+/**
+ * POST /api/v1/ai/context — 用户明确同意后读取当前租户的有限教学上下文。
+ * 只返回业务分析所需字段，所有查询都限定 tenant_id 并限制数量。
+ */
+app.post('/context', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+  const db = c.get('tenantDb') || c.env.DB;
+  const tenantId = c.get('tenantId');
+  const body = await c.req.json().catch(() => ({}));
+  const requested = Array.isArray(body.scopes) ? body.scopes : [];
+  const scopes = new Set(requested.filter((scope) => ['classes', 'students', 'assignments', 'dictations', 'exams', 'lessons'].includes(scope)));
+  const data = {};
+  const limited = (rows) => rows.results.slice(0, 100);
+  if (scopes.has('classes')) data.classes = limited(await db.prepare('SELECT id, name, grade, academic_year FROM classes WHERE tenant_id = ? ORDER BY name LIMIT 100').bind(tenantId).all());
+  if (scopes.has('students')) data.students = limited(await db.prepare('SELECT id, class_id, student_no, name, gender, status FROM students WHERE tenant_id = ? ORDER BY name LIMIT 100').bind(tenantId).all());
+  if (scopes.has('assignments')) data.assignments = limited(await db.prepare('SELECT id, class_id, title, deadline, status, created_at FROM assignments WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 100').bind(tenantId).all());
+  if (scopes.has('dictations')) data.dictations = limited(await db.prepare('SELECT id, class_id, title, scope, dictation_date FROM dictations WHERE tenant_id = ? ORDER BY dictation_date DESC LIMIT 100').bind(tenantId).all());
+  if (scopes.has('exams')) data.exams = limited(await db.prepare('SELECT id, name, subject, exam_date FROM exams WHERE tenant_id = ? ORDER BY exam_date DESC LIMIT 100').bind(tenantId).all());
+  if (scopes.has('lessons')) data.lessons = limited(await db.prepare('SELECT id, class_id, title, lesson_type, objective, status, created_at FROM lessons WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 100').bind(tenantId).all());
+  return c.json({ success: true, data: { consented: true, scopes: [...scopes], data } });
+});
+
 const AI_TIMEOUT_MS = 30000;
 
 function streamDelta(payload) {
@@ -112,7 +145,7 @@ app.post('/generate-stream', requireAuth, requireTenant, requireRole(['teacher']
   let upstream;
   try {
     upstream = await c.env.AI.run(model, {
-      messages: [{ role: 'system', content: SYSTEM_PROMPTS[type] }, { role: 'user', content: prompt }],
+      messages: [{ role: 'system', content: buildSystemPrompt(type) }, { role: 'user', content: prompt }],
       stream: true,
       signal: AbortSignal.timeout(AI_TIMEOUT_MS),
     });
@@ -129,6 +162,7 @@ app.post('/generate-stream', requireAuth, requireTenant, requireRole(['teacher']
       const reader = source.getReader();
       let buffer = '';
       let result = '';
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ status: 'connected', message: '模型已连接，正在生成内容' })}\n\n`));
       try {
         while (true) {
           const part = await reader.read();
@@ -332,7 +366,7 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
     try {
       const resp = await c.env.AI.run(cfModel, {
         messages: [
-          { role: 'system', content: SYSTEM_PROMPTS[type] },
+          { role: 'system', content: buildSystemPrompt(type) },
           { role: 'user', content: prompt },
         ],
         signal: AbortSignal.timeout(AI_TIMEOUT_MS),
@@ -406,7 +440,7 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
           body: JSON.stringify({
             model,
             messages: [
-              { role: 'system', content: SYSTEM_PROMPTS[type] },
+              { role: 'system', content: buildSystemPrompt(type) },
               { role: 'user', content: prompt },
             ],
           }),
