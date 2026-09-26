@@ -13,7 +13,7 @@
 (function () {
   // ===== 模块内样式（自包含，类名前缀 asg-）=====
   const CSS = `
-    .asg-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 620px), 1fr)); gap: 16px; align-items: start; }
+    .asg-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; align-items: start; }
     .asg-class-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
     .asg-class-count { color: var(--text-muted); font-size: 12px; }
     .asg-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }

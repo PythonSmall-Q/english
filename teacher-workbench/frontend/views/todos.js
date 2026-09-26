@@ -18,7 +18,7 @@
     .todo-create-input { flex: 1; min-width: 220px; }
     .todo-create-date { width: 150px; }
     .todo-create-scope { width: 140px; }
-    .todo-sections { display: grid; gap: 16px; align-items: start; }
+    .todo-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; align-items: start; }
     .todo-section { }
     .todo-section-title {
       display: flex; align-items: center; gap: 8px;

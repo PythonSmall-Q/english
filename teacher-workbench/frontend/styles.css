@@ -437,7 +437,7 @@ body {
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: 16px;
 }
 
@@ -868,7 +868,7 @@ select.form-input {
 /* 功能介绍：4 列（2 行），窄屏降列 */
 .landing-features-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 14px;
 }
 
@@ -905,7 +905,7 @@ select.form-input {
 /* 定价四档卡片 */
 .landing-pricing-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 16px;
   align-items: stretch;
   margin-bottom: 32px;
@@ -2213,5 +2213,181 @@ html[data-theme='dark'] .table tr:hover td {
   .topbar {
     background: var(--card-bg);
     backdrop-filter: none;
+  }
+}
+
+/* 侧栏最终主题覆盖：浅色模式使用雾白青灰，深色模式保持独立深色层级。 */
+.sidebar {
+  background: linear-gradient(180deg, rgba(246, 250, 248, 0.96), rgba(231, 241, 239, 0.96));
+  border-right-color: rgba(132, 167, 166, 0.36);
+  color: #234850;
+  box-shadow: 8px 0 26px rgba(36, 82, 87, 0.06);
+}
+
+.sidebar-user {
+  border-bottom-color: rgba(132, 167, 166, 0.28);
+}
+
+.sidebar-user-name {
+  color: #234850;
+}
+
+.sidebar-user-sub {
+  color: #6b8585;
+}
+
+.nav-item {
+  color: #48676b;
+}
+
+.nav-item:hover {
+  background: rgba(45, 137, 136, 0.09);
+  color: #1b6469;
+}
+
+.nav-item.active {
+  background: linear-gradient(90deg, rgba(55, 157, 151, 0.18), rgba(55, 157, 151, 0.06));
+  color: #145d64;
+  box-shadow: inset 3px 0 0 #29918e, 0 5px 16px rgba(42, 111, 109, 0.08);
+}
+
+.sidebar-footer {
+  border-top-color: rgba(132, 167, 166, 0.28);
+}
+
+.sidebar-footer .btn {
+  background: rgba(255, 255, 255, 0.46);
+  border-color: rgba(132, 167, 166, 0.42);
+  color: #48676b;
+}
+
+.sidebar-footer .btn:hover {
+  background: rgba(255, 255, 255, 0.82);
+  border-color: #70aaa6;
+  color: #145d64;
+}
+
+html[data-theme='dark'] .sidebar {
+  background: linear-gradient(180deg, #123d4c 0%, #164b59 52%, #123846 100%);
+  border-right-color: rgba(188, 224, 218, 0.18);
+  color: #e8f1f5;
+  box-shadow: 8px 0 26px rgba(7, 25, 31, 0.22);
+}
+
+html[data-theme='dark'] .sidebar-user {
+  border-bottom-color: rgba(232, 241, 245, 0.14);
+}
+
+html[data-theme='dark'] .sidebar-user-name {
+  color: #f5fafc;
+}
+
+html[data-theme='dark'] .sidebar-user-sub {
+  color: #a9c1cd;
+}
+
+html[data-theme='dark'] .nav-item {
+  color: #c4d5de;
+}
+
+html[data-theme='dark'] .nav-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+html[data-theme='dark'] .nav-item.active {
+  background: linear-gradient(90deg, rgba(117, 210, 195, 0.22), rgba(117, 210, 195, 0.08));
+  color: #fff;
+  box-shadow: inset 3px 0 0 #83d6c5, 0 5px 16px rgba(7, 38, 47, 0.12);
+}
+
+html[data-theme='dark'] .sidebar-footer {
+  border-top-color: rgba(232, 241, 245, 0.14);
+}
+
+html[data-theme='dark'] .sidebar-footer .btn {
+  background: transparent;
+  border-color: rgba(232, 241, 245, 0.24);
+  color: #c4d5de;
+}
+
+html[data-theme='dark'] .sidebar-footer .btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(232, 241, 245, 0.45);
+  color: #fff;
+}
+
+/* 平台管理：默认收起，展开后才展示并加载区块内容。 */
+.admin-section {
+  margin-bottom: 14px;
+  border: 1px solid rgba(162, 187, 188, 0.48);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  backdrop-filter: blur(12px);
+}
+
+.admin-section-summary {
+  display: flex;
+  align-items: center;
+  min-height: 58px;
+  padding: 16px 20px;
+  cursor: pointer;
+  list-style: none;
+  color: #164451;
+  font-size: 15px;
+  font-weight: 700;
+  user-select: none;
+}
+
+.admin-section-summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-section-summary::after {
+  content: '＋';
+  margin-left: auto;
+  color: var(--primary);
+  font-size: 20px;
+  font-weight: 400;
+  transition: transform 0.18s ease;
+}
+
+.admin-section[open] .admin-section-summary {
+  border-bottom: 1px solid rgba(162, 187, 188, 0.36);
+  background: rgba(218, 237, 234, 0.28);
+}
+
+.admin-section[open] .admin-section-summary::after {
+  transform: rotate(45deg);
+}
+
+.admin-section-body {
+  padding: 18px 20px 20px;
+}
+
+html[data-theme='dark'] .admin-section {
+  background: var(--card-bg);
+  border-color: var(--border);
+}
+
+html[data-theme='dark'] .admin-section-summary {
+  color: #d8efeb;
+}
+
+html[data-theme='dark'] .admin-section[open] .admin-section-summary {
+  background: rgba(64, 126, 123, 0.14);
+  border-bottom-color: var(--border);
+}
+
+@media (max-width: 760px) {
+  .admin-section-summary {
+    min-height: 52px;
+    padding: 14px 16px;
+  }
+
+  .admin-section-body {
+    padding: 14px 16px 16px;
   }
 }

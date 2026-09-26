@@ -52,8 +52,7 @@ function dashInjectStyles() {
   style.textContent = `
     .dash-quick { display: flex; gap: 10px; flex-wrap: wrap; }
     .dash-quick .btn { flex: 1; min-width: 110px; text-align: center; white-space: nowrap; }
-    .dash-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    @media (max-width: 760px) { .dash-row { grid-template-columns: 1fr; } }
+    .dash-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 16px; }
     .dash-list { display: flex; flex-direction: column; gap: 8px; }
     .dash-item {
       display: flex; align-items: center; gap: 10px;
@@ -72,7 +71,7 @@ function dashInjectStyles() {
     .dash-tick.done { background: var(--success); border-color: var(--success); color: #fff; }
     .dash-title-done { text-decoration: line-through; color: var(--text-muted); }
     .dash-empty { padding: 24px 10px; text-align: center; color: var(--text-muted); }
-    .dash-hw-row { display: grid; grid-template-columns: 1fr 130px 150px; gap: 10px; align-items: center; padding: 9px 10px; border-bottom: 1px solid var(--border); }
+    .dash-hw-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(120px, 150px) minmax(130px, 1fr); gap: 10px; align-items: center; padding: 9px 10px; border-bottom: 1px solid var(--border); }
     .dash-hw-row:last-child { border-bottom: none; }
     @media (max-width: 760px) { .dash-hw-row { grid-template-columns: 1fr; gap: 4px; } }
     .dash-hw-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

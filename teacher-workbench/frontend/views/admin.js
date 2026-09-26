@@ -203,15 +203,57 @@ App.registerView('admin', {
         <div id="admin-users"><div class="muted">加载中…</div></div>
       </div>`;
 
+      setupAdminSections(el);
     bindCreate(el);
-    bindMigrate(el);
-    await renderPlatformSettings();
-    await bindPlatformAi();
-    await bindCfAi();
-    await bindGithubCfg();
-    await Promise.all([renderTenants(), renderUsers()]);
+      // 各管理区块在首次展开时才绑定事件并请求数据，避免进入页面即并发加载全部平台数据。
   },
 });
+
+  /** 平台管理区块：默认折叠，首次展开时才初始化对应数据。 */
+  function setupAdminSections(el) {
+    const cards = [...el.querySelectorAll(':scope > .card')];
+    cards.forEach((card) => {
+      const title = card.querySelector(':scope > .card-title');
+      if (!title) return;
+
+      const details = document.createElement('details');
+      details.className = 'admin-section';
+      const summary = document.createElement('summary');
+      summary.className = 'admin-section-summary';
+      summary.textContent = title.textContent.trim();
+      const body = document.createElement('div');
+      body.className = 'admin-section-body';
+
+      [...card.childNodes].forEach((node) => {
+        if (node !== title) body.appendChild(node);
+      });
+      details.append(summary, body);
+      card.replaceWith(details);
+
+      let initialized = false;
+      details.addEventListener('toggle', async () => {
+        if (!details.open || initialized) return;
+        initialized = true;
+        try {
+          if (body.querySelector('#mig-tenant')) {
+            bindMigrate(el);
+          } else if (body.querySelector('#platform-settings')) {
+            await renderPlatformSettings();
+          } else if (body.querySelector('#gh-status')) {
+            await bindGithubCfg();
+          } else if (body.querySelector('#pai-status')) {
+            await Promise.all([bindPlatformAi(), bindCfAi()]);
+          } else if (body.querySelector('#admin-tenants')) {
+            await renderTenants();
+          } else if (body.querySelector('#admin-users')) {
+            await renderUsers();
+          }
+        } catch (err) {
+          App.toast((err && err.message) || '平台管理数据加载失败');
+        }
+      });
+    });
+  }
 
 /** GitHub 品牌图床配置：加载/保存/清除（token 只存服务端） */
 async function bindGithubCfg() {
