@@ -299,7 +299,7 @@ window.App = {
     const crumb = document.getElementById('breadcrumb');
     if (crumb) {
       const title = def.title || name;
-      crumb.textContent = window.I18n?.text(title, window.I18n.t(name, title)) || title;
+      crumb.textContent = window.I18n?.t(name, title) || title;
     }
     // 导航高亮
     document.querySelectorAll('.nav-item').forEach((item) => {

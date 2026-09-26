@@ -10,7 +10,7 @@
  *
  * 缓存名带版本号；sw.js 内容变更即触发 activate 清理旧版缓存。
  */
-const CACHE = 'wb-static-v12';
+const CACHE = 'wb-static-v13';
 
 const STATIC_PREFIXES = ['/assets/', '/vendor/', '/views/'];
 const STATIC_EXT = /\.(js|css|svg|png|jpe?g|gif|webp|ico|json|woff2?)(\?.*)?$/i;
