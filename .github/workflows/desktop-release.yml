@@ -45,7 +45,7 @@ jobs:
         run: npm ci
 
       - name: Build desktop packages
-        run: npm run ${{ matrix.script }}
+        run: npm run ${{ matrix.script }} -- --publish never
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -67,7 +67,10 @@ jobs:
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
         with:
+          token: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           tag_name: ${{ inputs.tag }}
           name: 英语教师教学工作台 ${{ inputs.tag }}
           generate_release_notes: true
