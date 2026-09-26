@@ -155,6 +155,10 @@ window.App = {
     el.classList.remove('is-hidden');
   },
   hideAppLoading() {
+    if (window.__startupFallbackTimer) {
+      clearTimeout(window.__startupFallbackTimer);
+      window.__startupFallbackTimer = null;
+    }
     const el = document.getElementById('app-loading');
     if (!el) return;
     el.classList.add('is-hidden');
@@ -1063,11 +1067,32 @@ if ('serviceWorker' in navigator) {
       registrations.forEach((registration) => registration.unregister());
     }).catch(() => {});
   } else {
-    navigator.serviceWorker.register('sw.js').catch(() => {
-      /* 不支持或注册失败：不影响使用 */
-    });
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {
+        /* 不支持或注册失败：不影响使用 */
+      });
+    }, { once: true });
   }
 }
+
+App.showStartupError = function (error) {
+  const message = error?.message || String(error || I18n?.t('加载失败', 'Loading failed'));
+  const screen = document.getElementById('auth-screen');
+  const frame = document.getElementById('app-frame');
+  if (frame) frame.classList.add('hidden');
+  if (screen) {
+    screen.classList.remove('hidden', 'landing-mode');
+    screen.innerHTML = `<div class="auth-card card"><h2>${App.esc(I18n?.t('加载失败', 'Loading failed'))}</h2><p class="auth-error">${App.esc(message)}</p><button class="btn btn-primary btn-block" type="button" id="startup-retry">${App.esc(I18n?.t('重试', 'Retry'))}</button></div>`;
+    screen.querySelector('#startup-retry')?.addEventListener('click', () => location.reload());
+  }
+  App.hideAppLoading();
+};
+window.addEventListener('error', (event) => {
+  if (event.error) App.showStartupError(event.error);
+});
+window.addEventListener('unhandledrejection', (event) => {
+  App.showStartupError(event.reason);
+});
 document.addEventListener('DOMContentLoaded', () => App.boot());
 
 // hash 路由（#/name）：前进/后退（遍历历史时 popstate 与 hashchange 都会触发）

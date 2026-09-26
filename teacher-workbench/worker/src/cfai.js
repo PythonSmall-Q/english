@@ -4,7 +4,7 @@
  * 约定：
  * - 模型目录 CF_MODELS 为本服务支持的全部 Workers AI 文本模型（id/label/标签/单价）
  * - tag：low=低 / efficient=经济 / high=高 / extra-high=极高（前端徽标四色同构）
- * - 计费：creditsUsed = usage.credits ?? ceil(totalTokens / 1000 × creditsPer1k)
+ * - 计费：优先使用 Workers AI 的 usage.neurons，再兼容 usage.credits/token 字段
  * - 目录为前后端共享契约：frontend 持有同构常量，改动须同步
  */
 
@@ -41,6 +41,10 @@ export const CF_MODELS = [
 /** tag 中文（错误提示/前端徽标映射同源） */
 export const CF_TAG_LABELS = { low: '低', efficient: '经济', high: '高', 'extra-high': '极高' };
 
+// 本系统内部计费口径：1 neuron = 0.01 credit。
+// 使用独立常量，避免把 Cloudflare 官方美元价格与平台 credit 混用。
+export const CREDITS_PER_NEURON = 0.01;
+
 /** 按 id 查目录项，未命中返回 null */
 export function getCfModel(id) {
   return CF_MODELS.find((m) => m.id === id) || null;
@@ -62,13 +66,18 @@ export function parseCfAiSetting(value) {
 
 /**
  * 估算/读取一次生成消耗的 credits。
- * usage 支持两种形态：{credits}（CF 显式回传，直接采用）或
- * {prompt_tokens, completion_tokens[, total_tokens]}（按官方输入/输出分列单价精确计算）。
+ * usage 支持 Workers AI 的 {neurons}，以及兼容旧响应的 {credits} 或 token 字段。
  * @param {string} modelId 模型 id（须在目录内；未命中按 low 档平均价兜底）
  * @param {object|null|undefined} usage Workers AI run 的 response.usage
- * @returns {number} credits（向上取整到 0.001，最小 0.001；1 credit = $0.01）
+ * @returns {number} credits（按平台规则向上取整到 0.001，最小 0.001）
  */
 export function estimateCredits(modelId, usage) {
+  const neurons = usage
+    ? Number(usage.neurons ?? usage.total_neurons ?? usage.totalNeurons ?? 0) || 0
+    : 0;
+  if (neurons > 0) {
+    return Math.max(0.001, Math.ceil(neurons * CREDITS_PER_NEURON * 1000) / 1000);
+  }
   if (usage && typeof usage.credits === 'number' && Number.isFinite(usage.credits)) {
     return Math.max(0.001, Math.ceil(usage.credits * 1000) / 1000);
   }

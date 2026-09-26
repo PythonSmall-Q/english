@@ -12,9 +12,9 @@ const TENANT_STATUS_LABELS = { active: '正常', disabled: '已停用' };
 /** 定价套餐（创建租户三选一预设，缺省 custom=商议/手动配额） */
 const PLAN_LABELS = { free: '基础版', pro: '专业版', school: '学校版', custom: '商议' };
 const PLAN_SUMMARIES = {
-  free: '1 个班级 · 30 名学生 · 10 AI Credit/月 · $0.01/Credit · 10MB 存储 · 最多 5 名成员',
-  pro: '10 个班级 · 300 名学生 · 100 AI Credit/月 · $0.01/Credit · 5GB 存储 · 最多 30 名成员',
-  school: '班级 / 学生 / 教案等不限 · 500 AI Credit/月 · $0.01/Credit · 50GB 存储 · 成员不限',
+  free: '1 个班级 · 30 名学生 · 100 AI Credit/月 · $0.01/Credit · 10MB 存储 · 最多 5 名成员',
+  pro: '10 个班级 · 300 名学生 · 1,000 AI Credit/月 · $0.01/Credit · 5GB 存储 · 最多 30 名成员',
+  school: '班级 / 学生 / 教案等不限 · 5,000 AI Credit/月 · $0.01/Credit · 50GB 存储 · 成员不限',
 };
 /** 可编辑配额字段（§20 + 成员数上限） */
 const QUOTA_FIELDS = [
@@ -202,8 +202,6 @@ App.registerView('admin', {
         <div id="admin-users"><div class="muted">加载中…</div></div>
       </div>`;
 
-      // 平台 AI 已弃用：保留 bindPlatformAi/bindCfAi 等旧实现，但不再提供旧平台接口入口。
-      el.querySelector('#platform-ai-card')?.remove();
       setupAdminSections(el);
     bindCreate(el);
       // 各管理区块在首次展开时才绑定事件并请求数据，避免进入页面即并发加载全部平台数据。

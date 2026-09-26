@@ -30,7 +30,7 @@ export const PLAN_PRESETS = {
       max_storage_bytes: 10485760, // 10MB
       max_ai_requests_month: null,
     },
-    aiCreditsMonthly: 10,
+    aiCreditsMonthly: 100,
     maxMembers: 5,
   },
   pro: {
@@ -45,7 +45,7 @@ export const PLAN_PRESETS = {
       max_storage_bytes: 5368709120, // 5GB
       max_ai_requests_month: null,
     },
-    aiCreditsMonthly: 100,
+    aiCreditsMonthly: 1000,
     maxMembers: 30,
   },
   school: {
@@ -60,7 +60,7 @@ export const PLAN_PRESETS = {
       max_storage_bytes: 53687091200, // 50GB
       max_ai_requests_month: null,
     },
-    aiCreditsMonthly: 500,
+    aiCreditsMonthly: 5000,
     maxMembers: null,
   },
   custom: {
@@ -80,7 +80,7 @@ export const PERSONAL_DEFAULTS = {
   max_exams: 10,
   max_storage_bytes: 10485760,
   max_ai_requests_month: null,
-  aiCreditsMonthly: 10,
+  aiCreditsMonthly: 100,
 };
 
 /** resource → { table, quotaColumn }；'ai' 为特例：按自然月统计 ai_generations */

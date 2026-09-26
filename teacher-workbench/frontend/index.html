@@ -14,7 +14,13 @@
   </div>
 
   <!-- 登录/注册屏（未认证时显示，由 auth.js 渲染） -->
-  <div id="auth-screen" class="auth-screen hidden"></div>
+  <div id="auth-screen" class="auth-screen">
+    <div class="auth-card card" id="startup-fallback">
+      <div class="auth-logo">英语教师教学工作台</div>
+      <p class="muted" style="text-align:center">正在启动应用 / Starting application...</p>
+      <button class="btn btn-primary btn-block" type="button" onclick="location.reload()">重试 / Retry</button>
+    </div>
+  </div>
 
   <!-- 应用主框架（认证后显示） -->
   <div id="app-frame" class="app-frame hidden">
@@ -89,6 +95,16 @@
   <!-- 弹窗 / 轻提示容器 -->
   <div id="modal-root"></div>
   <div id="toast-root"></div>
+
+  <script>
+    // Keep a visible recovery surface even when a later script cannot load.
+    window.__startupFallbackTimer = setTimeout(function () {
+      var loading = document.getElementById('app-loading');
+      var auth = document.getElementById('auth-screen');
+      if (loading) loading.classList.add('is-hidden');
+      if (auth) auth.classList.remove('hidden');
+    }, 8000);
+  </script>
 
   <!-- 全局框架先加载（创建 window.App），视图文件随后注册 -->
   <script src="i18n.js"></script>
