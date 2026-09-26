@@ -234,5 +234,23 @@ export async function getQuotaUsage(db, tenantId) {
     const used = rows && rows.length ? rows[0].n : 0;
     result[resource] = { quota, used };
   });
+  const [creditUsage, creditBalance] = await db.batch([
+    db
+      .prepare(
+        'SELECT COALESCE(SUM(credits), 0) AS n FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ? AND credits IS NOT NULL'
+      )
+      .bind(tenantId, monthPrefix),
+    db.prepare('SELECT ai_credits, ai_credits_monthly, ai_credits_bonus FROM tenants WHERE id = ?').bind(tenantId),
+  ]);
+  const creditRow = creditBalance.results?.[0] || {};
+  const creditTotal = creditRow.ai_credits_monthly == null
+    ? null
+    : Number(creditRow.ai_credits_monthly || 0) + Number(creditRow.ai_credits_bonus || 0);
+  result.ai_credits = {
+    quota: null,
+    used: Number(creditUsage.results?.[0]?.n || 0),
+    total: creditTotal,
+    available: Number(creditRow.ai_credits || 0),
+  };
   return result;
 }
