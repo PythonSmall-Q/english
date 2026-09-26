@@ -98,6 +98,37 @@
     throw { code: err.code || 'INTERNAL_ERROR', message: err.message || '请求失败' };
   }
 
+  async function requestStream(path, body, onDelta) {
+    const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
+    const tenantId = window.App?.state?.tenant?.id;
+    if (tenantId) headers['X-Tenant-Id'] = tenantId;
+    const res = await fetch(BASE + path, { method: 'POST', credentials: 'include', headers, body: JSON.stringify(body) });
+    if (!res.ok || !res.body) {
+      let payload = null;
+      try { payload = await res.json(); } catch { /* non-json error */ }
+      throw { code: payload?.error?.code || 'INTERNAL_ERROR', message: payload?.error?.message || `流式请求失败（HTTP ${res.status}）` };
+    }
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = '';
+    let doneData = null;
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      buffer += part.value;
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';
+      for (const event of events) {
+        const line = event.split('\n').find((item) => item.startsWith('data:'));
+        if (!line) continue;
+        const data = JSON.parse(line.slice(5).trim());
+        if (data.error) throw { code: data.code || 'INTERNAL_ERROR', message: data.error };
+        if (data.delta) onDelta(data.delta);
+        if (data.done) doneData = data;
+      }
+    }
+    return doneData || {};
+  }
+
   // —— Auth（§53）——
   const auth = {
     register: (body) => request('/auth/register', { method: 'POST', body }),
@@ -269,6 +300,7 @@
   // —— AI 教学助手（§42）——
   const ai = {
     generate: (body) => request('/ai/generate', { method: 'POST', body }),
+    generateStream: (body, onDelta) => requestStream('/ai/generate-stream', body, onDelta),
     history: (query) => request('/ai/history', { query }),
     /** 用户 AI 配置（密钥仅返回掩码） */
     getSettings: () => request('/ai/settings'),

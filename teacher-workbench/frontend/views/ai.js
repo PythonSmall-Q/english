@@ -327,9 +327,23 @@
     dom.send.disabled = true;
     const thinkingTimer = setInterval(renderMsgs, 1000);
     try {
-      const data = await api.ai.generate({ type: state.type, prompt });
       state.messages = state.messages.filter((m) => m.role !== 'thinking');
-      await revealResponse(data);
+      let streamedMessage = null;
+      let data;
+      try {
+        data = await api.ai.generateStream({ type: state.type, prompt }, (delta) => {
+          if (!streamedMessage) {
+            streamedMessage = { role: 'ai', type: state.type, text: '', mock: false };
+            state.messages.push(streamedMessage);
+          }
+          streamedMessage.text += delta;
+          renderMsgs();
+        });
+      } catch (streamErr) {
+        if (streamErr?.code !== 'STREAM_UNSUPPORTED') throw streamErr;
+        data = await api.ai.generate({ type: state.type, prompt });
+      }
+      if (!streamedMessage) await revealResponse(data);
     } catch (err) {
       state.messages = state.messages.filter((m) => m.role !== 'thinking');
       reportErr(err);

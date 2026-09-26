@@ -39,6 +39,13 @@ const SYSTEM_PROMPTS = {
 
 const AI_TIMEOUT_MS = 30000;
 
+function streamDelta(payload) {
+  if (typeof payload === 'string') return payload;
+  if (!payload || typeof payload !== 'object') return '';
+  const value = payload.response ?? payload.output_text ?? payload.text ?? payload.choices?.[0]?.delta?.content;
+  return typeof value === 'string' ? value : '';
+}
+
 /** 将基础端点或完整聊天端点统一为 OpenAI 兼容的基础端点。 */
 function normalizeAiBaseUrl(value) {
   return String(value || '')
@@ -72,6 +79,100 @@ async function getUserAiSettings(db, userId) {
     .bind(userId)
     .first();
 }
+
+/**
+ * POST /api/v1/ai/generate-stream — Cloudflare AI token 流。
+ * 只负责 cloudflare 模式；其它模式由 /generate 回退，流结束后统一落库与扣费。
+ */
+app.post('/generate-stream', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+  const db = c.get('tenantDb') || c.env.DB;
+  const mainDb = c.env.DB;
+  const user = c.get('user');
+  const tenantId = c.get('tenantId');
+  const body = await c.req.json().catch(() => ({}));
+  const type = String(body.type || '');
+  const prompt = String(body.prompt || '').trim();
+  const sendError = (message, code = 'INTERNAL_ERROR') =>
+    c.json({ success: false, error: { code, message } }, 400);
+  if (!AI_TYPES.includes(type)) return sendError(`type 必须是 ${AI_TYPES.join('|')}`, 'VALIDATION_ERROR');
+  if (!prompt) return sendError('prompt 不能为空', 'VALIDATION_ERROR');
+  if (c.get('tenant').plan === 'trial' || db === c.env.TRIAL_DB) return sendError('试用空间不支持 AI 助手', 'FORBIDDEN');
+
+  const settings = await getUserAiSettings(mainDb, user.id);
+  if ((settings?.mode || 'own') !== 'cloudflare') return sendError('当前服务方式不支持流式输出', 'STREAM_UNSUPPORTED');
+  const cfSetting = await getCfAiSetting(mainDb);
+  const model = settings?.cf_model;
+  if (!cfSetting.enabled || !c.env.AI) return sendError('Cloudflare AI 未启用或未绑定', 'PRECONDITION_FAILED');
+  if (!getCfModel(model)) return sendError('请先选择 Cloudflare AI 模型', 'VALIDATION_ERROR');
+  await checkQuota(db, tenantId, 'ai', user.id);
+  await ensureMonthlyReplenish(db, tenantId);
+  const balanceRow = await db.prepare('SELECT ai_credits, ai_credits_bonus FROM tenants WHERE id = ?').bind(tenantId).first();
+  if (!balanceRow || !(balanceRow.ai_credits > 0)) return sendError('AI 额度不足，请联系平台管理员', 'QUOTA_EXCEEDED');
+
+  let upstream;
+  try {
+    upstream = await c.env.AI.run(model, {
+      messages: [{ role: 'system', content: SYSTEM_PROMPTS[type] }, { role: 'user', content: prompt }],
+      stream: true,
+      signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+    });
+  } catch (err) {
+    return sendError(`Cloudflare AI 调用失败：${String(err?.message || err)}`);
+  }
+  const source = upstream instanceof ReadableStream ? upstream : upstream?.body;
+  if (!source) return sendError('Cloudflare AI 未返回流', 'INTERNAL_ERROR');
+
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const reader = source.getReader();
+      let buffer = '';
+      let result = '';
+      try {
+        while (true) {
+          const part = await reader.read();
+          if (part.done) break;
+          buffer += decoder.decode(part.value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            const raw = line.trim().replace(/^data:\s*/, '');
+            if (!raw || raw === '[DONE]') continue;
+            let parsed = raw;
+            try { parsed = JSON.parse(raw); } catch { /* plain text chunk */ }
+            const delta = streamDelta(parsed);
+            if (!delta) continue;
+            result += delta;
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta })}\n\n`));
+          }
+        }
+        if (buffer.trim()) {
+          let parsed = buffer.trim();
+          try { parsed = JSON.parse(parsed); } catch { /* plain text chunk */ }
+          const delta = streamDelta(parsed);
+          if (delta) { result += delta; controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta })}\n\n`)); }
+        }
+        if (!result.trim()) throw new Error('AI 服务未返回有效内容');
+        const credits = estimateCredits(model, null);
+        const basePart = Math.max(0, balanceRow.ai_credits - (balanceRow.ai_credits_bonus || 0));
+        const bonusTake = Math.max(0, credits - basePart);
+        const upd = await db.prepare(`UPDATE tenants SET ai_credits = ai_credits - ?, ai_credits_bonus = ai_credits_bonus - ? WHERE id = ? AND ai_credits >= ? AND ai_credits_bonus >= ?`)
+          .bind(credits, bonusTake, tenantId, credits, bonusTake).run();
+        if (upd.meta?.changes !== 1) throw new Error('AI 额度不足，请联系平台管理员');
+        const row = await db.prepare('SELECT ai_credits FROM tenants WHERE id = ?').bind(tenantId).first();
+        const id = newId();
+        await db.prepare(`INSERT INTO ai_generations (id, tenant_id, user_id, type, prompt, result, billed, credits, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`).bind(id, tenantId, user.id, type, prompt, result, credits, now()).run();
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, result, id, credits, creditsLeft: row?.ai_credits ?? null })}\n\n`));
+        controller.close();
+      } catch (err) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: String(err?.message || err) })}\n\n`));
+        controller.close();
+      } finally { reader.releaseLock(); }
+    },
+  });
+  return new Response(stream, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive' } });
+});
 
 /**
  * 读取平台级 AI 接口配置（platform_settings.ai_provider，JSON {baseUrl, apiKey, model}）
