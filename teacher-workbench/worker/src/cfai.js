@@ -95,7 +95,7 @@ export function currentCreditMonth() {
 
 /**
  * 月度补足（惰性：在新月首次使用时触发一次）：
- * 余额补足到「月度限额 + 加赠余额」；加赠池不动；已耗尽的管理员加赠不会复活。
+ * 正常余额补足到「月度限额 + 加赠余额」；上周期负余额会从本周期补足中抵扣。
  * @returns {Promise<boolean>} 是否执行了补足
  */
 export async function ensureMonthlyReplenish(db, tenantId) {
@@ -107,7 +107,13 @@ export async function ensureMonthlyReplenish(db, tenantId) {
   const ym = currentCreditMonth();
   if (row.ai_credits_period === ym) return false;
   await db
-    .prepare('UPDATE tenants SET ai_credits = ai_credits_monthly + ai_credits_bonus, ai_credits_period = ? WHERE id = ?')
+    .prepare(`UPDATE tenants
+      SET ai_credits = CASE
+        WHEN ai_credits < 0 THEN ai_credits + ai_credits_monthly + ai_credits_bonus
+        ELSE ai_credits_monthly + ai_credits_bonus
+      END,
+      ai_credits_period = ?
+      WHERE id = ?`)
     .bind(ym, tenantId)
     .run();
   return true;

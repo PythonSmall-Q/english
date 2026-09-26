@@ -4,7 +4,7 @@
  * 约定：
  * - 快捷指令 type：practice 生成练习题 / lesson_plan 写教案 / essay_feedback 批改作文
  *   / analysis 学情解读 / translate 中英互译
- * - 流程（§42）：身份/租户/角色校验 → checkQuota('ai')（仅平台侧）→ 构造 system prompt
+ * - 流程（§42）：身份/租户/角色校验 → 构造 system prompt
  *   → 按用户服务方式 mode 路由：own=自配 Provider（不计配额）/ platform=平台接口或
  *     环境变量 AI_API_KEY（计配额）/ cloudflare=Workers AI（按 credit 扣租户额度）→ 写 ai_generations
  * - cloudflare 模式：前置校验平台开关与 [ai] binding → env.AI.run(cfModel, {messages})
@@ -16,7 +16,6 @@
 import { Hono } from 'hono';
 import { ApiError, newId, now } from '../db.js';
 import { requireAuth, requireTenant, requireRole } from '../middleware.js';
-import { checkQuota } from '../quota.js';
 import { CF_MODELS, getCfModel, parseCfAiSetting, estimateCredits, ensureMonthlyReplenish } from '../cfai.js';
 
 const app = new Hono();
@@ -137,7 +136,6 @@ app.post('/generate-stream', requireAuth, requireTenant, requireRole(['teacher']
   const model = settings?.cf_model;
   if (!cfSetting.enabled || !c.env.AI) return sendError('Cloudflare AI 未启用或未绑定', 'PRECONDITION_FAILED');
   if (!getCfModel(model)) return sendError('请先选择 Cloudflare AI 模型', 'VALIDATION_ERROR');
-  await checkQuota(db, tenantId, 'ai', user.id);
   await ensureMonthlyReplenish(db, tenantId);
   const balanceRow = await db.prepare('SELECT ai_credits, ai_credits_bonus FROM tenants WHERE id = ?').bind(tenantId).first();
   if (!balanceRow || !(balanceRow.ai_credits > 0)) return sendError('AI 额度不足，请联系平台管理员', 'QUOTA_EXCEEDED');
@@ -197,9 +195,9 @@ app.post('/generate-stream', requireAuth, requireTenant, requireRole(['teacher']
           throw new Error('已达到你的 AI credit 配额');
         }
         const basePart = Math.max(0, balanceRow.ai_credits - (balanceRow.ai_credits_bonus || 0));
-        const bonusTake = Math.max(0, credits - basePart);
+        const bonusTake = Math.min(balanceRow.ai_credits_bonus || 0, Math.max(0, credits - basePart));
         const upd = await db.prepare(`UPDATE tenants SET ai_credits = ai_credits - ?, ai_credits_bonus = ai_credits_bonus - ? WHERE id = ? AND ai_credits >= ? AND ai_credits_bonus >= ?`)
-          .bind(credits, bonusTake, tenantId, credits, bonusTake).run();
+          .bind(credits, bonusTake, tenantId, 0.001, bonusTake).run();
         if (upd.meta?.changes !== 1) throw new Error('AI 额度不足，请联系平台管理员');
         const row = await db.prepare('SELECT ai_credits FROM tenants WHERE id = ?').bind(tenantId).first();
         const id = newId();
@@ -277,19 +275,16 @@ async function resolveUserCreditQuota(c, userId) {
     if (!mainTenant && c.env.TRIAL_DB) db = c.env.TRIAL_DB;
   }
   const monthPrefix = new Date().toISOString().slice(0, 7);
-  const [quotaRow, usageRow, tenantUsageRow, tenantBalanceRow] = await db.batch([
+  const [quotaRow, usageRow, tenantBalanceRow] = await db.batch([
     db.prepare("SELECT quota FROM user_quotas WHERE tenant_id = ? AND user_id = ? AND resource = 'ai_credits'").bind(tenantId, userId),
     db.prepare('SELECT COALESCE(SUM(credits), 0) AS used FROM ai_generations WHERE tenant_id = ? AND user_id = ? AND substr(created_at, 1, 7) = ? AND credits IS NOT NULL').bind(tenantId, userId, monthPrefix),
-    db.prepare('SELECT COALESCE(SUM(credits), 0) AS used FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ? AND credits IS NOT NULL').bind(tenantId, monthPrefix),
     db.prepare('SELECT ai_credits, ai_credits_monthly, ai_credits_bonus FROM tenants WHERE id = ?').bind(tenantId),
   ]);
   const quota = quotaRow.results?.[0]?.quota ?? null;
   const used = Number(usageRow.results?.[0]?.used || 0);
-  const tenantUsed = Number(tenantUsageRow.results?.[0]?.used || 0);
   const tenantBalance = tenantBalanceRow.results?.[0] || {};
-  const tenantRemaining = tenantBalance.ai_credits_monthly === null || tenantBalance.ai_credits_monthly === undefined
-    ? Number(tenantBalance.ai_credits ?? 0)
-    : Math.max(0, Number(tenantBalance.ai_credits_monthly || 0) + Number(tenantBalance.ai_credits_bonus || 0) - tenantUsed);
+  // ai_credits 是实际可用余额，包含跨周期结转的负债；不能用当月 usage 重新推算覆盖它。
+  const tenantRemaining = Number(tenantBalance.ai_credits ?? 0);
   const quotaRemaining = quota === null ? null : Math.max(0, quota - used);
   return {
     quota,
@@ -395,9 +390,6 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
       throw new ApiError('VALIDATION_ERROR', '请先在设置页选择 Cloudflare AI 模型');
     }
 
-    // §43：cloudflare 走平台侧，计入 AI 月度请求配额；credits 按实际消耗另计
-    await checkQuota(db, tenantId, 'ai', user.id);
-
     // 预检：新月先惰性补足（限额 + 加赠池），额度已耗尽则拒绝，避免白白消耗一次 Cloudflare 调用
     await ensureMonthlyReplenish(db, tenantId);
     const balanceRow = await db
@@ -443,7 +435,7 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
     const balance = balanceRow.ai_credits;
     const bonus = balanceRow.ai_credits_bonus || 0;
     const basePart = Math.max(0, balance - bonus); // 基础池剩余
-    const bonusTake = Math.max(0, credits - basePart); // 超出基础池的部分从加赠池扣
+    const bonusTake = Math.min(bonus, Math.max(0, credits - basePart)); // 加赠池不足时，差额形成下周期负余额
     const upd = await db
       .prepare(
         `UPDATE tenants
@@ -451,7 +443,7 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
                 ai_credits_bonus = ai_credits_bonus - ?
           WHERE id = ? AND ai_credits >= ? AND ai_credits_bonus >= ?`
       )
-      .bind(credits, bonusTake, tenantId, credits, bonusTake)
+        .bind(credits, bonusTake, tenantId, 0.001, bonusTake)
       .run();
     if (upd.meta?.changes !== 1) {
       throw new ApiError('QUOTA_EXCEEDED', 'AI 额度不足，请联系平台管理员充值');
@@ -466,13 +458,8 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
       throw new ApiError('PRECONDITION_FAILED', '平台 AI 接口已关闭，请选择 Cloudflare AI 或自定义接口', 403);
     }
     const apiKey = mode === 'own' ? userSettings?.api_key || '' : platformCfg?.apiKey || c.env.AI_API_KEY || '';
-    // billed=1：走平台侧（平台接口/环境变量/mock），计入 AI 月度配额；billed=0：用户自配接口，不计配额
+    // billed=1：走平台侧（平台接口/环境变量/mock）；billed=0：用户自配接口
     const billed = userSettings?.api_key ? 0 : 1;
-
-    // §43：只有走平台侧的调用才校验/占用 AI 月度配额（租户级，按所在库统计）
-    if (billed) {
-      await checkQuota(db, tenantId, 'ai', user.id);
-    }
 
     if (apiKey) {
       // 真实 Provider：Workers 代理调用（§42），30 秒超时，非 2xx 视为内部错误

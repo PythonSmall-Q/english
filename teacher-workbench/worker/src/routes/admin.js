@@ -953,7 +953,16 @@ app.put('/tenants/:id/plan', requireAuth, async (c) => {
       )
       .run();
   }
-  await c.env.DB.prepare('UPDATE tenants SET plan = ?, updated_at = ? WHERE id = ?').bind(plan, ts, tenantId).run();
+  if (preset.quotas) {
+    await c.env.DB
+      .prepare(
+        'UPDATE tenants SET plan = ?, ai_credits_monthly = ?, ai_credits = ? + ai_credits_bonus, ai_credits_period = NULL, updated_at = ? WHERE id = ?'
+      )
+      .bind(plan, preset.aiCreditsMonthly, preset.aiCreditsMonthly, ts, tenantId)
+      .run();
+  } else {
+    await c.env.DB.prepare('UPDATE tenants SET plan = ?, updated_at = ? WHERE id = ?').bind(plan, ts, tenantId).run();
+  }
   console.log(`[admin] 空间「${tenant.name}」套餐 ${tenant.plan} → ${plan}（操作者 ${user.email}）`);
   return c.json({ success: true, data: { id: tenantId, plan, label: preset.label || plan } });
 });

@@ -16,7 +16,6 @@ const QUOTA_LABELS = {
   assignments: '作业',
   dictations: '默写',
   exams: '考试',
-  ai: 'AI Credit',
 };
 
 /**
@@ -782,13 +781,13 @@ async function renderSpace() {
   }
 }
 
-/** 我的配额：usage 键 → [显示名, quotas 中对应的按用户上限键]（usage.aiMonth 对应 quotas.ai） */
+/** 我的配额：usage 键 → [显示名, quotas 中对应的按用户 Credit 上限键] */
 const MY_QUOTA_ITEMS = [
   ['lessons', '教案', 'lessons'],
   ['assignments', '作业', 'assignments'],
   ['dictations', '默写', 'dictations'],
   ['files', '文件数', 'files'],
-  ['aiMonth', 'AI Credit', 'ai'],
+  ['aiCredits', 'AI Credit（消耗）', 'ai_credits'],
 ];
 
 /** 字节 → 人类可读（KB/MB） */

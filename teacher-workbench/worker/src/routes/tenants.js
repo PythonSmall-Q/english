@@ -216,10 +216,22 @@ app.post('/', requireAuth, async (c) => {
   const statements = [
     db
       .prepare(
-        `INSERT INTO tenants (id, name, slug, type, status, plan, created_by, expires_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)`
+        `INSERT INTO tenants (id, name, slug, type, status, plan, created_by, expires_at, ai_credits, ai_credits_monthly, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)`
       )
-      .bind(tenantId, name, slug, type, planKey, user.id, expiresAt, ts, ts),
+      .bind(
+        tenantId,
+        name,
+        slug,
+        type,
+        planKey,
+        user.id,
+        expiresAt,
+        planPreset.aiCreditsMonthly ?? 0,
+        planPreset.aiCreditsMonthly ?? null,
+        ts,
+        ts
+      ),
     db
       .prepare(
         `INSERT INTO tenant_quotas (tenant_id, max_classes, max_students, max_lessons, max_assignments,

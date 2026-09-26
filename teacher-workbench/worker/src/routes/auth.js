@@ -80,10 +80,19 @@ app.post('/register', async (c) => {
     statements.push(
       db
         .prepare(
-          `INSERT INTO tenants (id, name, slug, type, status, created_by, created_at, updated_at)
-           VALUES (?, ?, ?, 'personal', 'active', ?, ?, ?)`
+          `INSERT INTO tenants (id, name, slug, type, status, created_by, ai_credits, ai_credits_monthly, created_at, updated_at)
+           VALUES (?, ?, ?, 'personal', 'active', ?, ?, ?, ?, ?)`
         )
-        .bind(tenantId, `${displayName}的空间`, `personal-${userId}`, userId, ts, ts),
+        .bind(
+          tenantId,
+          `${displayName}的空间`,
+          `personal-${userId}`,
+          userId,
+          PERSONAL_DEFAULTS.aiCreditsMonthly,
+          PERSONAL_DEFAULTS.aiCreditsMonthly,
+          ts,
+          ts
+        ),
       db
         .prepare(
           `INSERT INTO memberships (id, tenant_id, user_id, role, status, created_at)

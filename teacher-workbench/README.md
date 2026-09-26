@@ -82,7 +82,7 @@ AI_MODEL=gpt-4o-mini
 
 浏览器不直连 AI Provider，全部经 Worker 代理（OpenAI 兼容 `/chat/completions` 接口，30 秒超时）。
 点「恢复内置演示」清除个人配置后回退到环境变量或内置 mock（响应中 `mock: true`）。
-AI 用量按租户配额 `max_ai_requests_month` 限制（个人空间默认 20 次/自然月）。
+AI 不限制请求次数，仅按 Credit 实际消耗扣减；1 Credit = $0.01。基础版/个人空间每月 10 Credit，专业版每月 100 Credit，学校版每月 500 Credit。
 
 ## 平台管理员
 

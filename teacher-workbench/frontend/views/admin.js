@@ -12,9 +12,9 @@ const TENANT_STATUS_LABELS = { active: '正常', disabled: '已停用' };
 /** 定价套餐（创建租户三选一预设，缺省 custom=商议/手动配额） */
 const PLAN_LABELS = { free: '基础版', pro: '专业版', school: '学校版', custom: '商议' };
 const PLAN_SUMMARIES = {
-  free: '1 个班级 · 30 名学生 · AI 20 次/月 · 10MB 存储 · 最多 5 名成员',
-  pro: '10 个班级 · 300 名学生 · AI 500 次/月 · 5GB 存储 · 最多 30 名成员',
-  school: '班级 / 学生 / 教案等不限 · AI 5000 次/月 · 50GB 存储 · 成员不限',
+  free: '1 个班级 · 30 名学生 · 10 AI Credit/月 · $0.01/Credit · 10MB 存储 · 最多 5 名成员',
+  pro: '10 个班级 · 300 名学生 · 100 AI Credit/月 · $0.01/Credit · 5GB 存储 · 最多 30 名成员',
+  school: '班级 / 学生 / 教案等不限 · 500 AI Credit/月 · $0.01/Credit · 50GB 存储 · 成员不限',
 };
 /** 可编辑配额字段（§20 + 成员数上限） */
 const QUOTA_FIELDS = [
@@ -24,7 +24,6 @@ const QUOTA_FIELDS = [
   ['max_assignments', '作业上限'],
   ['max_dictations', '默写上限'],
   ['max_exams', '考试上限'],
-  ['max_ai_requests_month', 'AI Credit'],
   ['max_storage_bytes', '存储上限(字节)'],
   ['max_members', '成员上限'],
 ];
@@ -762,9 +761,9 @@ function openPlanModal(tenantId, tenantName, current) {
       选择预设档（基础版/专业版/学校版）会<b>立即按套餐覆盖该空间的配额与成员上限</b>；「商议」只改套餐名，配额保持现状。
     </div>
     ${[
-      ['free', '基础版', '1 班 · 30 学生 · AI 20 次/月 · 10MB · 5 成员'],
-      ['pro', '专业版', '10 班 · 300 学生 · AI 500 次/月 · 5GB · 30 成员'],
-      ['school', '学校版', '班级学生不限 · AI 5000 次/月 · 50GB · 成员不限'],
+      ['free', '基础版', '1 班 · 30 学生 · 10 Credit/月 · $0.01/Credit · 10MB · 5 成员'],
+      ['pro', '专业版', '10 班 · 300 学生 · 100 Credit/月 · $0.01/Credit · 5GB · 30 成员'],
+      ['school', '学校版', '班级学生不限 · 500 Credit/月 · $0.01/Credit · 50GB · 成员不限'],
       ['custom', '商议', '保持现有配额不变'],
     ]
       .map(
@@ -1082,7 +1081,7 @@ function openAiQuotaModal(tenantId, name, aiState) {
          <input class="form-input" id="ai-quota-add" type="number" min="0" step="1" placeholder="本次增加，如 10">
        </div>
      </div>
-     <div class="muted" style="font-size:12px;margin-bottom:6px">月度额度自动补足，加赠 credit 只减不补。</div>
+    <div class="muted" style="font-size:12px;margin-bottom:6px">价格：1 Credit = $0.01。月度额度自动补足，加赠 Credit 只减不补。</div>
      <div class="modal-actions">
        <button class="btn" id="ai-quota-cancel" type="button">取消</button>
        <button class="btn btn-primary" id="ai-quota-save" type="button">保存</button>

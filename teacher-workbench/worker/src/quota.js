@@ -9,6 +9,8 @@
 
 import { ApiError } from './db.js';
 
+export const AI_CREDIT_PRICE_USD = 0.01;
+
 /**
  * 定价套餐预设（§73 创建租户三选一）：
  * - free/pro/school：创建租户时以其 quotas 写入 tenant_quotas、maxMembers 写入 max_members（忽略 body 传入值）
@@ -26,8 +28,9 @@ export const PLAN_PRESETS = {
       max_dictations: 50,
       max_exams: 20,
       max_storage_bytes: 10485760, // 10MB
-      max_ai_requests_month: 20,
+      max_ai_requests_month: null,
     },
+    aiCreditsMonthly: 10,
     maxMembers: 5,
   },
   pro: {
@@ -40,8 +43,9 @@ export const PLAN_PRESETS = {
       max_dictations: 500,
       max_exams: 100,
       max_storage_bytes: 5368709120, // 5GB
-      max_ai_requests_month: 500,
+      max_ai_requests_month: null,
     },
+    aiCreditsMonthly: 100,
     maxMembers: 30,
   },
   school: {
@@ -54,8 +58,9 @@ export const PLAN_PRESETS = {
       max_dictations: null,
       max_exams: null,
       max_storage_bytes: 53687091200, // 50GB
-      max_ai_requests_month: 5000,
+      max_ai_requests_month: null,
     },
+    aiCreditsMonthly: 500,
     maxMembers: null,
   },
   custom: {
@@ -74,7 +79,8 @@ export const PERSONAL_DEFAULTS = {
   max_dictations: 50,
   max_exams: 10,
   max_storage_bytes: 10485760,
-  max_ai_requests_month: 20,
+  max_ai_requests_month: null,
+  aiCreditsMonthly: 10,
 };
 
 /** resource → { table, quotaColumn }；'ai' 为特例：按自然月统计 ai_generations */

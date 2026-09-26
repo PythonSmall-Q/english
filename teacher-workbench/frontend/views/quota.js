@@ -14,7 +14,6 @@ const TENANT_QUOTA_LABELS = {
   assignments: '作业',
   dictations: '默写',
   exams: '考试',
-  ai: 'AI Credit',
 };
 
 /** 支持按用户配额的资源（与后端 user_quotas resource 一致；files 按数量） */
@@ -22,7 +21,6 @@ const USER_QUOTA_RESOURCES = [
   ['lessons', '教案'],
   ['assignments', '作业'],
   ['dictations', '默写'],
-  ['ai', 'AI Credit'],
   ['ai_credits', 'AI Credit/月'],
   ['files', '文件数'],
 ];
@@ -121,7 +119,7 @@ function renderMembers(tenantId, users) {
       <thead>
         <tr>
           <th>成员</th><th>状态</th>
-          <th>教案</th><th>作业</th><th>默写</th><th>文件</th><th>AI Credit（消耗）</th><th>AI Credit（余额）</th><th>存储</th>
+          <th>教案</th><th>作业</th><th>默写</th><th>文件</th><th>AI Credit（消耗）</th><th>存储</th>
           <th>按用户配额（留空=不限）</th>
           <th>权限</th>
           <th>操作</th>
@@ -171,7 +169,6 @@ function renderMembers(tenantId, users) {
               <td>${usage.assignments ?? 0}</td>
               <td>${usage.dictations ?? 0}</td>
               <td>${usage.files ?? 0}</td>
-              <td>${usage.aiMonth ?? 0}</td>
               <td>${usage.aiCredits ?? 0}</td>
               <td class="muted">${formatBytes(usage.storageBytes)}</td>
               <td>${quotaInputs}</td>
