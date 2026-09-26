@@ -47,6 +47,24 @@ function normalizeAiBaseUrl(value) {
     .replace(/\/chat\/completions$/, '');
 }
 
+/** 兼容 Workers AI 与 OpenAI 兼容模型的文本响应结构。 */
+function extractAiText(payload) {
+  if (typeof payload === 'string') return payload.trim();
+  if (!payload || typeof payload !== 'object') return '';
+  const content = payload.response ?? payload.output_text ?? payload.text;
+  if (typeof content === 'string' && content.trim()) return content.trim();
+  const choice = payload.choices?.[0];
+  const choiceContent = choice?.message?.content ?? choice?.text;
+  if (typeof choiceContent === 'string') return choiceContent.trim();
+  if (Array.isArray(choiceContent)) {
+    return choiceContent
+      .map((part) => (typeof part === 'string' ? part : part?.text || ''))
+      .join('')
+      .trim();
+  }
+  return '';
+}
+
 /** 读取用户自配 AI Provider（无则返回 null；含 mode/cf_model） */
 async function getUserAiSettings(db, userId) {
   return db
@@ -218,8 +236,8 @@ app.post('/generate', requireAuth, requireTenant, requireRole(['teacher']), asyn
         ],
         signal: AbortSignal.timeout(AI_TIMEOUT_MS),
       });
-      result = typeof resp === 'string' ? resp : (resp?.response ?? '');
-      usage = resp && typeof resp === 'object' ? resp.usage : null;
+      result = extractAiText(resp);
+      usage = resp && typeof resp === 'object' ? resp.usage || resp.response?.usage : null;
     } catch (err) {
       if (err instanceof ApiError) throw err;
       const timedOut =

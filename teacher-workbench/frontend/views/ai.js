@@ -23,6 +23,18 @@
 .aiw-bubble { max-width: 82%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
 .aiw-msg-user .aiw-bubble { background: #4f8ef7; color: #fff; border-bottom-right-radius: 4px; }
 .aiw-msg-ai .aiw-bubble { background: #f2f5fa; color: #1f2d3d; border-bottom-left-radius: 4px; }
+.aiw-markdown { white-space: normal; }
+.aiw-markdown p { margin: 0 0 9px; }
+.aiw-markdown p:last-child { margin-bottom: 0; }
+.aiw-markdown h1, .aiw-markdown h2, .aiw-markdown h3 { margin: 10px 0 6px; line-height: 1.35; }
+.aiw-markdown h1 { font-size: 20px; } .aiw-markdown h2 { font-size: 17px; } .aiw-markdown h3 { font-size: 15px; }
+.aiw-markdown ul, .aiw-markdown ol { margin: 5px 0 9px 22px; padding: 0; }
+.aiw-markdown blockquote { border-left: 3px solid #9bbcf5; margin: 8px 0; padding: 3px 10px; color: #68758a; }
+.aiw-markdown pre { overflow-x: auto; margin: 8px 0; padding: 10px; border-radius: 7px; background: #202938; color: #e8eef8; }
+.aiw-markdown code { padding: 1px 4px; border-radius: 4px; background: #e6ebf3; font-size: .92em; }
+.aiw-markdown pre code { padding: 0; background: transparent; }
+.aiw-md-copy { border: 0; background: transparent; color: #718096; cursor: pointer; padding: 0; font-size: 12px; }
+.aiw-md-copy:hover { color: #397de8; }
 .aiw-bubble-foot { margin-top: 6px; display: flex; gap: 6px; align-items: center; }
 .aiw-type-tag { font-size: 11px; color: #8a94a6; }
 .aiw-thinking { display: inline-flex; align-items: center; gap: 8px; color: #8a94a6; }
@@ -36,6 +48,10 @@
 .aiw-chip { border: 1px solid #dfe5ee; background: #f8fafd; border-radius: 999px; padding: 5px 12px; font-size: 13px; cursor: pointer; color: #3c4b63; }
 .aiw-chip:hover { border-color: #4f8ef7; color: #4f8ef7; }
 .aiw-chip.aiw-chip-on { background: #4f8ef7; border-color: #4f8ef7; color: #fff; }
+.aiw-provider { display: flex; flex-direction: column; gap: 8px; }
+.aiw-provider-row { display: flex; gap: 8px; align-items: center; }
+.aiw-provider-row .form-input { min-width: 0; flex: 1; }
+.aiw-provider-status { font-size: 12px; color: #8a94a6; }
 .aiw-hist { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
 .aiw-hist-item { border: 1px solid #eef1f6; border-radius: 8px; padding: 8px 10px; cursor: pointer; font-size: 13px; }
 .aiw-hist-item:hover { border-color: #4f8ef7; background: #f6f9ff; }
@@ -88,6 +104,115 @@
   /** DOM 引用（render 时填充） */
   let dom = {};
 
+  const mdEscape = (value) => App.esc(String(value ?? ''));
+  const mdInline = (value) => {
+    let html = mdEscape(value);
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+    html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+    html = html.replace(/(?<!_)_([^_]+)_(?!_)/g, '<em>$1</em>');
+    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    return html;
+  };
+
+  /** 轻量、安全的 Markdown 渲染：先转义，再只生成白名单标签。 */
+  function renderMarkdown(value) {
+    const lines = String(value ?? '').replace(/\r\n?/g, '\n').split('\n');
+    const html = [];
+    let paragraph = [];
+    let list = null;
+    let code = null;
+    const flushParagraph = () => {
+      if (paragraph.length) html.push(`<p>${paragraph.map(mdInline).join('<br>')}</p>`);
+      paragraph = [];
+    };
+    const closeList = () => {
+      if (list) html.push(`</${list}>`);
+      list = null;
+    };
+    lines.forEach((line) => {
+      if (/^\s*```/.test(line)) {
+        flushParagraph();
+        closeList();
+        if (code === null) {
+          code = [];
+          html.push('<pre><code>');
+        } else {
+          html.push(`${mdEscape(code.join('\n'))}</code></pre>`);
+          code = null;
+        }
+        return;
+      }
+      if (code !== null) {
+        code.push(line);
+        return;
+      }
+      if (!line.trim()) {
+        flushParagraph();
+        closeList();
+        return;
+      }
+      const heading = line.match(/^\s{0,3}(#{1,3})\s+(.+)$/);
+      if (heading) {
+        flushParagraph(); closeList();
+        const level = heading[1].length;
+        html.push(`<h${level}>${mdInline(heading[2])}</h${level}>`);
+        return;
+      }
+      if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+        flushParagraph(); closeList(); html.push('<hr>'); return;
+      }
+      const quote = line.match(/^\s*>\s?(.*)$/);
+      if (quote) {
+        flushParagraph(); closeList(); html.push(`<blockquote>${mdInline(quote[1])}</blockquote>`); return;
+      }
+      const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
+      const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+      if (bullet || ordered) {
+        flushParagraph();
+        const kind = bullet ? 'ul' : 'ol';
+        if (list !== kind) { closeList(); html.push(`<${kind}>`); list = kind; }
+        html.push(`<li>${mdInline((bullet || ordered)[1])}</li>`);
+        return;
+      }
+      closeList();
+      paragraph.push(line);
+    });
+    if (code !== null) html.push(`${mdEscape(code.join('\n'))}</code></pre>`);
+    flushParagraph(); closeList();
+    return html.join('');
+  }
+
+  async function copyText(text, button) {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      else {
+        const area = document.createElement('textarea');
+        area.value = text; area.style.position = 'fixed'; area.style.opacity = '0';
+        document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove();
+      }
+      const old = button.textContent;
+      button.textContent = '已复制';
+      setTimeout(() => { button.textContent = old; }, 1200);
+    } catch {
+      App.toast('复制失败，请手动选择文本');
+    }
+  }
+
+  /** 完整响应到达后渐进呈现，避免长答案整段突然出现。 */
+  async function revealResponse(data) {
+    const text = String(data.result || '');
+    const message = { role: 'ai', type: state.type, text: '', mock: data.mock };
+    state.messages.push(message);
+    const step = text.length > 800 ? 24 : 12;
+    for (let index = 0; index < text.length; index += step) {
+      message.text = text.slice(0, index + step);
+      renderMsgs();
+      await new Promise((resolve) => setTimeout(resolve, 18));
+    }
+  }
+
   /** 渲染消息列表并自动滚动到底 */
   function renderMsgs() {
     const box = dom.msgs;
@@ -104,21 +229,27 @@
     box.innerHTML = state.messages
       .map((m) => {
         if (m.role === 'thinking') {
-          return `<div class="aiw-msg aiw-msg-ai"><div class="aiw-bubble aiw-thinking"><span class="aiw-spinner"></span> 思考中…</div></div>`;
+          const elapsed = Math.floor((Date.now() - m.startedAt) / 1000);
+          const phase = elapsed >= 25 ? '仍在等待模型响应' : elapsed >= 10 ? '正在组织答案' : '正在分析问题';
+          return `<div class="aiw-msg aiw-msg-ai"><div class="aiw-bubble aiw-thinking"><span class="aiw-spinner"></span> ${phase}（${elapsed}s）</div></div>`;
         }
         if (m.role === 'user') {
           return `<div class="aiw-msg aiw-msg-user"><div class="aiw-bubble">${esc(m.text)}</div></div>`;
         }
         const tag = m.mock === true ? '内置演示' : m.mock === false ? 'AI 模型' : '';
         return `<div class="aiw-msg aiw-msg-ai"><div class="aiw-bubble">
-          ${esc(m.text)}
+          <div class="aiw-markdown">${renderMarkdown(m.text)}</div>
           <div class="aiw-bubble-foot">
             ${tag ? `<span class="badge badge-info">${tag}</span>` : ''}
             <span class="aiw-type-tag">${esc(TYPE_LABEL[m.type] || m.type || '')}</span>
+            <button class="aiw-md-copy" type="button" data-copy-text="${esc(m.text)}">复制</button>
           </div>
         </div></div>`;
       })
       .join('');
+    box.querySelectorAll('.aiw-md-copy').forEach((button) => {
+      button.addEventListener('click', () => copyText(button.dataset.copyText || '', button));
+    });
     box.scrollTop = box.scrollHeight;
   }
 
@@ -190,17 +321,20 @@
     dom.text.value = '';
     renderMsgs();
 
-    state.messages.push({ role: 'thinking' });
+    const thinking = { role: 'thinking', startedAt: Date.now() };
+    state.messages.push(thinking);
     renderMsgs();
     dom.send.disabled = true;
+    const thinkingTimer = setInterval(renderMsgs, 1000);
     try {
       const data = await api.ai.generate({ type: state.type, prompt });
       state.messages = state.messages.filter((m) => m.role !== 'thinking');
-      state.messages.push({ role: 'ai', type: state.type, text: data.result, mock: data.mock });
+      await revealResponse(data);
     } catch (err) {
       state.messages = state.messages.filter((m) => m.role !== 'thinking');
       reportErr(err);
     } finally {
+      clearInterval(thinkingTimer);
       dom.send.disabled = false;
     }
     renderMsgs();
@@ -256,6 +390,19 @@
             </div>
           </div>
           <div class="aiw-side">
+            <div class="card aiw-provider">
+              <div class="card-title">AI 服务</div>
+              <div class="aiw-provider-row">
+                <select class="form-input" id="aiw-mode" aria-label="AI 服务方式">
+                  <option value="own">自定义接口</option>
+                  <option value="platform">平台接口</option>
+                  <option value="cloudflare">Cloudflare AI</option>
+                </select>
+                <button class="btn btn-primary" id="aiw-provider-save" type="button">保存</button>
+              </div>
+              <select class="form-input hidden" id="aiw-cf-model" aria-label="Cloudflare AI 模型"></select>
+              <div class="aiw-provider-status" id="aiw-provider-status">加载中…</div>
+            </div>
             <div class="card">
               <div class="card-title">快捷指令</div>
               <div class="aiw-chips" id="aiw-chips"></div>
@@ -274,7 +421,64 @@
         provider: el.querySelector('#aiw-provider'),
         chips: el.querySelector('#aiw-chips'),
         history: el.querySelector('#aiw-history'),
+        mode: el.querySelector('#aiw-mode'),
+        cfModel: el.querySelector('#aiw-cf-model'),
+        providerSave: el.querySelector('#aiw-provider-save'),
+        providerStatus: el.querySelector('#aiw-provider-status'),
       };
+
+      // 服务方式在助手页直接可切换；详细密钥配置仍保留在设置页。
+      let providerSettings = null;
+      const renderProviderSettings = () => {
+        const mode = dom.mode.value;
+        const cf = providerSettings?.cf || {};
+        const cfUnavailable = cf.available === false && cf.enabled !== true;
+        dom.cfModel.classList.toggle('hidden', mode !== 'cloudflare');
+        dom.cfModel.disabled = mode === 'cloudflare' && cfUnavailable;
+        if (mode === 'cloudflare' && cfUnavailable) {
+          dom.providerStatus.textContent = 'Cloudflare AI 尚未启用，请联系平台管理员';
+          return;
+        }
+        dom.providerStatus.textContent = mode === 'cloudflare' ? '按空间 credit 额度计费' : '可在设置页配置详细参数';
+      };
+      const loadProviderSettings = async () => {
+        try {
+          providerSettings = await api.ai.getSettings();
+          dom.mode.value = providerSettings.mode || 'platform';
+          const models = providerSettings.cf?.models || [];
+          dom.cfModel.innerHTML = models
+            .map((model) => `<option value="${App.esc(model.id)}">${App.esc(model.label)}</option>`)
+            .join('');
+          if (providerSettings.cfModel) dom.cfModel.value = providerSettings.cfModel;
+          renderProviderSettings();
+        } catch (err) {
+          dom.providerStatus.textContent = `加载失败：${(err && err.message) || '未知错误'}`;
+          dom.mode.disabled = true;
+          dom.providerSave.disabled = true;
+        }
+      };
+      dom.mode.addEventListener('change', renderProviderSettings);
+      dom.providerSave.addEventListener('click', async () => {
+        const mode = dom.mode.value;
+        const cf = providerSettings?.cf || {};
+        if (mode === 'cloudflare' && cf.available === false && cf.enabled !== true) {
+          App.toast('Cloudflare AI 尚未启用，请联系平台管理员');
+          return;
+        }
+        const body = { mode };
+        if (mode === 'cloudflare') body.cfModel = dom.cfModel.value;
+        dom.providerSave.disabled = true;
+        try {
+          providerSettings = await api.ai.updateSettings(body);
+          App.toast('AI 服务已切换');
+          renderProviderSettings();
+        } catch (err) {
+          App.toast((err && err.message) || 'AI 服务切换失败');
+        } finally {
+          dom.providerSave.disabled = false;
+        }
+      });
+      loadProviderSettings();
 
       // 快捷指令 chips：点击填入对应提示文案
       dom.chips.innerHTML = '';
