@@ -16,7 +16,7 @@ const QUOTA_LABELS = {
   assignments: '作业',
   dictations: '默写',
   exams: '考试',
-  ai: 'AI（本月）',
+  ai: 'AI Credit',
 };
 
 /**
@@ -252,7 +252,7 @@ App.registerView('settings', {
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
             <input type="radio" name="ai-mode" value="own"> <span>🧩 自定义接口（不计配额）</span>
           </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <label id="ai-mode-platform-label" style="display:flex;align-items:center;gap:6px;cursor:pointer">
             <input type="radio" name="ai-mode" value="platform"> <span>🏢 平台接口（计配额）</span>
           </label>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer" id="ai-mode-cf-label">
@@ -308,6 +308,9 @@ App.registerView('settings', {
       </div>`;
 
     bindProfile();
+    // 平台 AI 已弃用：保留旧逻辑与接口，仅移除用户可见入口。
+    document.getElementById('ai-mode-platform-label')?.remove();
+    document.getElementById('ai-panel-platform')?.remove();
     bindDeviceMode();
     await renderSpace();
     await renderMyQuota();
@@ -517,7 +520,7 @@ async function bindAiSettings() {
       bd.textContent =
         v === null || v === undefined
           ? ''
-          : `（月度限额 ${monthly == null ? '未设置' : monthly} · 加赠池 ${bonus || 0}）`;
+          : `（月度 AI Credit ${monthly == null ? '未设置' : monthly} · 加赠池 ${bonus || 0}）`;
     }
   };
   setCredits(current.tenantCredits, current.tenantCreditsMonthly, current.tenantCreditsBonus);
@@ -526,7 +529,7 @@ async function bindAiSettings() {
   const applyMode = (mode) => {
     document.getElementById('ai-panel-own').classList.toggle('hidden', mode !== 'own');
     document.getElementById('ai-panel-cf').classList.toggle('hidden', mode !== 'cloudflare');
-    document.getElementById('ai-panel-platform').classList.toggle('hidden', mode !== 'platform');
+    document.getElementById('ai-panel-platform')?.classList.toggle('hidden', mode !== 'platform');
   };
   let mode = current.mode || (current.source === 'user' ? 'own' : 'platform');
   if (mode === 'cloudflare' && !cfAvailable) mode = 'platform';
@@ -785,7 +788,7 @@ const MY_QUOTA_ITEMS = [
   ['assignments', '作业', 'assignments'],
   ['dictations', '默写', 'dictations'],
   ['files', '文件数', 'files'],
-  ['aiMonth', 'AI（本月）', 'ai'],
+  ['aiMonth', 'AI Credit', 'ai'],
 ];
 
 /** 字节 → 人类可读（KB/MB） */

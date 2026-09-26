@@ -24,7 +24,7 @@ const QUOTA_FIELDS = [
   ['max_assignments', '作业上限'],
   ['max_dictations', '默写上限'],
   ['max_exams', '考试上限'],
-  ['max_ai_requests_month', 'AI 月额度'],
+  ['max_ai_requests_month', 'AI Credit'],
   ['max_storage_bytes', '存储上限(字节)'],
   ['max_members', '成员上限'],
 ];
@@ -156,8 +156,8 @@ App.registerView('admin', {
         </div>
       </div>
 
-      <!-- 平台 AI 接口：未自配接口的成员默认走平台接口并计配额 -->
-      <div class="card">
+      <!-- 平台 AI 接口（已弃用）：代码与接口保留，前端入口在渲染后移除 -->
+      <div class="card" id="platform-ai-card">
         <div class="card-title">平台 AI 接口</div>
         <div class="muted" style="font-size:12.5px;margin-bottom:10px">
           为全平台配置默认 AI 接口：成员未在「设置 → AI 助手设置」配置自己的接口时，调用本平台接口并<b>计入其空间 AI 月度配额</b>；自配接口的成员<b>不计配额</b>。留空密钥并保存 = 清除平台配置（回退到内置演示）。
@@ -203,6 +203,8 @@ App.registerView('admin', {
         <div id="admin-users"><div class="muted">加载中…</div></div>
       </div>`;
 
+      // 平台 AI 已弃用：保留 bindPlatformAi/bindCfAi 等旧实现，但不再提供旧平台接口入口。
+      el.querySelector('#platform-ai-card')?.remove();
       setupAdminSections(el);
     bindCreate(el);
       // 各管理区块在首次展开时才绑定事件并请求数据，避免进入页面即并发加载全部平台数据。
@@ -935,7 +937,7 @@ async function renderTenants() {
                 <td>${t.memberCount ?? t.member_count ?? '-'}</td>
                 <td>
                   <button class="btn btn-sm" data-quota="${t.id}" data-name="${App.esc(t.name)}" type="button">配额/到期</button>
-                  <button class="btn btn-sm" data-ai-quota="${t.id}" data-name="${App.esc(t.name)}" data-ai-credits="${t.ai_credits ?? 0}" data-ai-monthly="${t.ai_credits_monthly ?? ''}" data-ai-bonus="${t.ai_credits_bonus ?? 0}" type="button">AI 配额</button>
+                  <button class="btn btn-sm" data-ai-quota="${t.id}" data-name="${App.esc(t.name)}" data-ai-credits="${t.ai_credits ?? 0}" data-ai-monthly="${t.ai_credits_monthly ?? ''}" data-ai-bonus="${t.ai_credits_bonus ?? 0}" type="button">AI Credit</button>
                   <button class="btn btn-sm" data-plan="${t.id}" data-name="${App.esc(t.name)}" data-current="${App.esc(t.plan || 'custom')}" type="button">套餐</button>
                   <button class="btn btn-sm" data-branding="${t.id}" data-name="${App.esc(t.name)}" type="button">品牌</button>
                   <button class="btn btn-sm ${t.status === 'active' ? 'btn-danger' : ''}" data-toggle-status="${t.id}" data-status="${t.status === 'active' ? 'disabled' : 'active'}" type="button">
@@ -1069,14 +1071,14 @@ function openQuotaModal(tenantId, name) {
 function openAiQuotaModal(tenantId, name, aiState) {
   const ai = aiState || { credits: 0, monthly: null, bonus: 0 };
   App.modal(
-    `AI 配额 — ${name}`,
+    `AI Credit — ${name}`,
     `<div class="form-row" style="margin-bottom:8px">
        <div>
-         <label class="form-label">AI 月度限额（每月自动补足；留空 = 不自动补足）</label>
+         <label class="form-label">AI Credit 月度补足（留空 = 不自动补足）</label>
          <input class="form-input" id="ai-quota-monthly" type="number" min="0" step="1" placeholder="不自动补足" value="${ai.monthly == null ? '' : Number(ai.monthly)}">
        </div>
        <div>
-         <label class="form-label">手动增加 credit（当前余额 ${Number(ai.credits) || 0} · 加赠池 ${Number(ai.bonus) || 0}）</label>
+         <label class="form-label">手动增加 AI Credit（当前余额 ${Number(ai.credits) || 0} · 加赠池 ${Number(ai.bonus) || 0}）</label>
          <input class="form-input" id="ai-quota-add" type="number" min="0" step="1" placeholder="本次增加，如 10">
        </div>
      </div>
