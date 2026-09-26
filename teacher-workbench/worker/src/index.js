@@ -55,6 +55,7 @@ app.use(
       return allowed.includes(origin) ? origin : undefined;
     },
     credentials: true,
+    exposeHeaders: ['x-d1-bookmark', 'x-trial-d1-bookmark', 'x-grad-d1-bookmark'],
   })
 );
 
@@ -94,7 +95,30 @@ app.notFound(notFoundHandler);
  *   三者分别 try/catch：9/1 任务因无 10 月任务数据 archiveAllTenants 通常 no-op，10/1 同理。
  */
 export default {
-  fetch: app.fetch,
+  async fetch(request, env, ctx) {
+    // 每个 D1 binding 使用自己的 session；不同数据库的 bookmark 不能混用。
+    const sessionEnv = { ...env };
+    const sessions = [];
+    for (const [binding, header] of [
+      ['DB', 'x-d1-bookmark'],
+      ['TRIAL_DB', 'x-trial-d1-bookmark'],
+      ['GRAD_DB', 'x-grad-d1-bookmark'],
+    ]) {
+      const database = env[binding];
+      if (!database?.withSession) continue;
+      const bookmark = request.headers.get(header) || 'first-unconstrained';
+      const session = database.withSession(bookmark);
+      sessionEnv[binding] = session;
+      sessions.push([header, session]);
+    }
+
+    const response = await app.fetch(request, sessionEnv, ctx);
+    for (const [header, session] of sessions) {
+      const bookmark = session.getBookmark?.();
+      if (bookmark) response.headers.set(header, bookmark);
+    }
+    return response;
+  },
   scheduled: async (event, env) => {
     try {
       await rolloverTenants(env);

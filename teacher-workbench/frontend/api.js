@@ -30,6 +30,25 @@
   }
 
   const BASE = resolveBase();
+  const BOOKMARK_KEYS = {
+    'x-d1-bookmark': 'd1-bookmark',
+    'x-trial-d1-bookmark': 'trial-d1-bookmark',
+    'x-grad-d1-bookmark': 'grad-d1-bookmark',
+  };
+
+  function addD1Bookmarks(headers) {
+    for (const [header, storageKey] of Object.entries(BOOKMARK_KEYS)) {
+      const bookmark = sessionStorage.getItem(storageKey);
+      if (bookmark) headers[header] = bookmark;
+    }
+  }
+
+  function saveD1Bookmarks(response) {
+    for (const [header, storageKey] of Object.entries(BOOKMARK_KEYS)) {
+      const bookmark = response.headers.get(header);
+      if (bookmark) sessionStorage.setItem(storageKey, bookmark);
+    }
+  }
 
   /**
    * 统一请求。query 为对象时拼到 URL 上。
@@ -74,6 +93,7 @@
     if (viewAs && viewAs.userId) headers['X-View-As'] = viewAs.userId;
     const tenantId = window.App?.state?.tenant?.id;
     if (tenantId) headers['X-Tenant-Id'] = tenantId;
+    addD1Bookmarks(headers);
 
     let res;
     try {
@@ -83,6 +103,7 @@
         headers,
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
+      saveD1Bookmarks(res);
     } catch (e) {
       throw { code: 'NETWORK_ERROR', message: '网络异常，请检查后端服务是否启动' };
     }
@@ -102,7 +123,9 @@
     const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
     const tenantId = window.App?.state?.tenant?.id;
     if (tenantId) headers['X-Tenant-Id'] = tenantId;
+    addD1Bookmarks(headers);
     const res = await fetch(BASE + path, { method: 'POST', credentials: 'include', headers, body: JSON.stringify(body) });
+    saveD1Bookmarks(res);
     if (!res.ok || !res.body) {
       let payload = null;
       try { payload = await res.json(); } catch { /* non-json error */ }

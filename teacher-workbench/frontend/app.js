@@ -252,6 +252,7 @@ window.App = {
     dictations: 'views/dictations.js',
     exams: 'views/exams.js',
     ai: 'views/ai.js',
+    todos: 'views/todos.js',
     recycle: 'views/recycle.js',
     settings: 'views/settings.js',
     quota: 'views/quota.js',

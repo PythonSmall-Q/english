@@ -53,6 +53,10 @@ npx serve .          # 或 node/python 任意静态服务器，如 http://localh
 前端会根据当前 hostname 自动推导 API 地址：localhost/127.0.0.1 → `http://localhost:8787/api/v1`，
 其余走同源 `/api/v1`；也可用 `localStorage.API_BASE` 覆盖。
 
+Worker 已接入 D1 Sessions API。启用 Global Read Replication 后，API 会按数据库 binding
+（主库、试用库、归档库）分别维护 session bookmark；前端 API Client 会自动透传并保存 bookmark，
+保证跨请求的顺序一致性。旧版客户端不携带 bookmark 时仍会从 `first-unconstrained` 开始会话。
+
 ## 首次使用流程
 
 1. 打开前端页面，「注册」账号（邮箱 + 至少 8 位密码）。
