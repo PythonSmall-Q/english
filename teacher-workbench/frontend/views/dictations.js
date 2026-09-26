@@ -161,7 +161,7 @@
 
     ctx.fillStyle = 'rgba(255,255,255,0.95)';
     ctx.font = `600 30px ${FONT}`;
-    ctx.fillText(I18n.text('未重默名单'), PAD + 32, PAD + 52);
+    ctx.fillText(I18n.t('clsCanvasTitle'), PAD + 32, PAD + 52);
     ctx.fillStyle = 'rgba(255,255,255,0.82)';
     ctx.font = `15px ${FONT}`;
     ctx.fillText(ellipsize(opts.meta || '', innerW - 64), PAD + 32, PAD + 86);
@@ -169,7 +169,7 @@
     ctx.fillStyle = 'rgba(255,255,255,0.30)';
     ctx.font = `600 64px ${FONT}`;
     ctx.textAlign = 'right';
-    ctx.fillText(I18n.text('重默'), W - PAD - 28, PAD + 92);
+    ctx.fillText(I18n.t('clsCanvasStamp'), W - PAD - 28, PAD + 92);
     ctx.textAlign = 'left';
 
     // —— 名单分区 ——
@@ -185,7 +185,7 @@
         ctx.fillStyle = '#98a2ba';
         ctx.font = `13px ${FONT}`;
         ctx.textAlign = 'right';
-        ctx.fillText(`${I18n.formatNumber(sec.items.length)}${I18n.text('人')}`, W - PAD, y + 20);
+        ctx.fillText(`${I18n.formatNumber(sec.items.length)} ${I18n.t('clsCanvasUnit')}`, W - PAD, y + 20);
         ctx.textAlign = 'left';
         y += 40;
       }
@@ -237,12 +237,12 @@
     ctx.fillStyle = '#98a2ba';
     ctx.font = `13px ${FONT}`;
     ctx.textAlign = 'center';
-    ctx.fillText(`${I18n.formatNumber(total)}${I18n.text('人')}${I18n.text('待重默')} · ${I18n.text('生成于')} ${I18n.formatDate(new Date(), { dateStyle: 'short', timeStyle: 'short' })}`, W / 2, totalH - PAD + 4);
+    ctx.fillText(`${I18n.formatNumber(total)} ${I18n.t('clsCanvasUnit')} ${I18n.t('clsCanvasPending')} · ${I18n.t('clsCanvasGeneratedAt')} ${I18n.formatDate(new Date(), { dateStyle: 'short', timeStyle: 'short' })}`, W / 2, totalH - PAD + 4);
     ctx.textAlign = 'left';
 
     canvas.toBlob((blob) => {
       if (!blob) {
-        App.toast(I18n.text('图片生成失败'));
+        App.toast(I18n.t('clsCanvasImageFailed'));
         return;
       }
       const url = URL.createObjectURL(blob);

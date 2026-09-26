@@ -50,8 +50,8 @@ function dashInjectStyles() {
   const style = document.createElement('style');
   style.id = 'dash-styles';
   style.textContent = `
-    .dash-quick { display: flex; gap: 10px; flex-wrap: wrap; }
-    .dash-quick .btn { flex: 1; min-width: 110px; text-align: center; white-space: nowrap; }
+    .dash-quick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .dash-quick .btn { min-width: 0; width: 100%; min-height: 38px; padding-inline: 8px; text-align: center; white-space: normal; overflow-wrap: anywhere; }
     .dash-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 16px; }
     .dash-list { display: flex; flex-direction: column; gap: 8px; }
     .dash-item {
@@ -74,6 +74,7 @@ function dashInjectStyles() {
     .dash-hw-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(120px, 150px) minmax(130px, 1fr); gap: 10px; align-items: center; padding: 9px 10px; border-bottom: 1px solid var(--border); }
     .dash-hw-row:last-child { border-bottom: none; }
     @media (max-width: 760px) { .dash-hw-row { grid-template-columns: 1fr; gap: 4px; } }
+    @media (max-width: 520px) { .dash-quick { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     .dash-hw-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dash-hw-meta { color: var(--text-muted); font-size: 13px; white-space: nowrap; }
     .dash-hw-rate { display: flex; align-items: center; gap: 8px; font-size: 13px; white-space: nowrap; }
