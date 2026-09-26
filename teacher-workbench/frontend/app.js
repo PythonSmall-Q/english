@@ -122,6 +122,22 @@ window.App = {
     }
     App.applyBranding();
   },
+  showAppLoading() {
+    const el = document.getElementById('app-loading');
+    if (!el) return;
+    const b = App.state.branding;
+    const custom = b && b.loaderUrl
+      ? `<img class="brand-loader ${App.esc(b.loaderAnim || 'spin')}" src="${App.esc(b.loaderUrl)}" alt="">`
+      : '<span class="default-loader" aria-hidden="true"></span>';
+    el.innerHTML = custom;
+    el.classList.remove('is-hidden');
+  },
+  hideAppLoading() {
+    const el = document.getElementById('app-loading');
+    if (!el) return;
+    el.classList.add('is-hidden');
+    setTimeout(() => el.remove(), 260);
+  },
   applyBranding() {
     const b = App.state.branding;
     // 自定义 icon（favicon）
@@ -339,11 +355,11 @@ window.App = {
     const b = App.state.branding;
     const loaderImg = b && b.loaderUrl
       ? `<img class="brand-loader ${App.esc(b.loaderAnim || 'spin')}" src="${App.esc(b.loaderUrl)}" alt="">`
-      : '';
+      : '<span class="default-loader" aria-hidden="true"></span>';
     wrap.innerHTML = `${loaderImg}<span class="up-label">${App.esc(label)}</span>
       <span class="up-track"><span class="up-fill" style="width:0%"></span></span>
       <span class="up-pct">0%</span>`;
-    if (loaderImg) wrap.classList.add('has-brand-loader');
+    wrap.classList.add('has-brand-loader');
     document.body.appendChild(wrap);
     requestAnimationFrame(() => wrap.classList.add('show'));
     const fill = wrap.querySelector('.up-fill');
@@ -886,7 +902,7 @@ window.App = {
   },
 
   /** 进入应用主框架（认证成功后调用） */
-  enterApp() {
+  async enterApp() {
     document.getElementById('auth-screen').classList.add('hidden');
     const frame = document.getElementById('app-frame');
     frame.classList.remove('hidden');
@@ -904,7 +920,8 @@ window.App = {
     window.DictFloat?.mount?.();
     App.updateTenantSwitcher();
     App.updateViewAsSwitcher();
-    App.loadBranding();
+    await App.loadBranding();
+    App.showAppLoading();
     // 每台设备首次进入工作台：弹出 平板/电脑 模式选择
     if (!App.currentDeviceMode()) App.showDeviceModePicker();
     // 初始视图：登录前暂存的目标路由（wb.redirect）> hash 中的有效视图 > dashboard
@@ -916,7 +933,7 @@ window.App = {
       if (App._views[r]) initial = r;
     }
     if (!initial) initial = App._hashView();
-    App.showView(initial || 'dashboard');
+    await App.showView(initial || 'dashboard');
   },
 
   /** 解析 location.hash 为视图名：仅当对应视图已注册时返回，否则 null */
@@ -947,6 +964,7 @@ window.App = {
 
   /** 应用启动：auth.me 成功→进主框架；失败→登录/注册视图 */
   async boot() {
+    App.showAppLoading();
     // 绑定导航与租户切换器（只绑一次；登录成功后 boot 会再次进入）
     if (!App._bound) {
       App._bound = true;
@@ -993,7 +1011,7 @@ window.App = {
       App.state.quota = App.state.tenant?.quota || null;
       // 学年列表与空间元信息并行加载，缩短登录路径
       await Promise.all([App.loadAcademicYears(), App.syncTenantPlans()]);
-      App.enterApp();
+      await App.enterApp();
       // 学年归档提醒（§63）：进入工作台后异步检查，9/15–9/30 每日一次
       App.checkArchiveReminder();
       // 3 天试用：落地页点了「免费试用」的，进入工作台后自动创建试用空间（仅一次）
@@ -1004,6 +1022,8 @@ window.App = {
       }
       // 未登录/会话过期 → 按 hash 路由：首页 / 登录 / 注册 / 记 redirect 后回登录
       App._routeGuest();
+    } finally {
+      App.hideAppLoading();
     }
   },
 };

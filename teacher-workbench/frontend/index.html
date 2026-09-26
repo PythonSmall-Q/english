@@ -8,6 +8,11 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- 启动加载层：认证、刷新和首屏视图准备完成前显示默认动画；有品牌配置时由 App 替换动画图标 -->
+  <div id="app-loading" class="app-loading" role="status" aria-label="加载中">
+    <span class="default-loader" aria-hidden="true"></span>
+  </div>
+
   <!-- 登录/注册屏（未认证时显示，由 auth.js 渲染） -->
   <div id="auth-screen" class="auth-screen hidden"></div>
 
