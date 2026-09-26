@@ -93,8 +93,11 @@ function renderTenantUsage(usage) {
       .map(([key, label]) => {
         const item = usage[key] || { used: 0, quota: null };
         const isCredit = key === 'ai_credits';
-        const unlimited = item.quota === null || item.quota === undefined;
-        const pct = unlimited ? 0 : Math.min(100, Math.round((item.used / item.quota) * 100));
+        const used = Number(item.used) || 0;
+        const limit = Number(isCredit ? item.total : item.quota);
+        const hasLimit = Number.isFinite(limit) && limit > 0;
+        const unlimited = !isCredit && !hasLimit;
+        const pct = hasLimit ? Math.min(100, Math.max(0, (used / limit) * 100)) : 0;
         return `
           <div class="quota-item">
             <div class="quota-item-header">
@@ -102,7 +105,7 @@ function renderTenantUsage(usage) {
               <span class="muted">${isCredit ? `${item.used ?? 0} / ${item.total == null ? '不限' : item.total}（剩余 ${item.available ?? 0}）` : `${item.used ?? 0} / ${unlimited ? '不限' : item.quota}`}</span>
             </div>
             <div class="quota-bar">
-              <div class="quota-bar-fill ${pct >= 90 ? 'warn' : ''}" style="width:${unlimited ? 0 : Math.max(pct, item.used > 0 ? 4 : 0)}%"></div>
+              <div class="quota-bar-fill ${pct >= 90 ? 'warn' : ''}" style="width:${pct}%"></div>
             </div>
           </div>`;
       })

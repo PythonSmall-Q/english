@@ -126,9 +126,7 @@ App.registerView('settings', {
     const tenant = App.state.tenant || {};
     // 数据管理权限（§50/§51）：无权限的入口不渲染
     const isAdmin = ['owner', 'admin'].includes(tenant.role);
-    const isPlatformAdmin = App.state.user?.platformRole === 'platform_admin';
     const planLabels = { trial: '3 天试用', free: '基础版', pro: '专业版', school: '学校版', custom: '定制版' };
-    const formalPlans = ['free', 'pro', 'school', 'custom'];
     const canExportStudents = isAdmin || tenant.role === 'teacher';
     // 个人资料偏好允许存 localStorage（§52：UI 偏好）
     const prefs = JSON.parse(localStorage.getItem('profile_prefs') || '{}');
@@ -194,14 +192,6 @@ App.registerView('settings', {
             <label class="form-label">当前套餐</label>
             <input class="form-input" value="${App.esc(planLabels[tenant.plan] || tenant.plan || '未设置')}" readonly>
           </div>
-          ${isPlatformAdmin ? `
-          <div>
-            <label class="form-label">调整正式套餐</label>
-            <select class="form-input" id="settings-plan">
-              ${formalPlans.map((plan) => `<option value="${plan}"${tenant.plan === plan ? ' selected' : ''}>${planLabels[plan]}</option>`).join('')}
-            </select>
-          </div>
-          <button class="btn btn-primary" id="settings-plan-save" type="button">保存套餐</button>` : ''}
         </div>
         ${isAdmin ? '<div class="muted" style="font-size:12.5px;margin-top:6px">需要升级、扩容或定制开发，请联系开发者微信：<b>19512002721</b>。试用套餐不能在设置页选择。</div>' : ''}
         <div id="quota-usage" style="margin-top:12px"><div class="muted">配额加载中…</div></div>
@@ -337,7 +327,6 @@ App.registerView('settings', {
       </div>`;
 
     bindProfile();
-    bindPlanSettings(isPlatformAdmin);
     // 平台 AI 已弃用：保留旧逻辑与接口，仅移除用户可见入口。
     document.getElementById('ai-mode-platform-label')?.remove();
     document.getElementById('ai-panel-platform')?.remove();
@@ -351,30 +340,6 @@ App.registerView('settings', {
     await bindBrandSettings();
   },
 });
-
-/** 套餐设置：仅平台管理员可切换正式套餐，试用套餐只能通过试用注册创建。 */
-function bindPlanSettings(isPlatformAdmin) {
-  if (!isPlatformAdmin) return;
-  const select = document.getElementById('settings-plan');
-  const button = document.getElementById('settings-plan-save');
-  const tenant = App.state.tenant;
-  if (!select || !button || !tenant) return;
-  button.addEventListener('click', async () => {
-    const plan = select.value;
-    if (!['free', 'pro', 'school', 'custom'].includes(plan)) return;
-    button.disabled = true;
-    try {
-      await api.admin.setPlan(tenant.id, plan);
-      App.state.tenant = { ...tenant, plan };
-      App.toast('套餐已更新');
-      await App.showView('settings');
-    } catch (err) {
-      App.toast((err && err.message) || '套餐更新失败');
-    } finally {
-      button.disabled = false;
-    }
-  });
-}
 
 /** 空间品牌（owner）：加载当前配置，保存/清除；图片可上传 GitHub 图床回填 */
 async function bindBrandSettings() {
@@ -766,8 +731,11 @@ async function renderSpace() {
       .map(([key, label]) => {
         const item = usage[key] || { used: 0, quota: null };
         const isCredit = key === 'ai_credits';
-        const unlimited = item.quota === null || item.quota === undefined;
-        const pct = unlimited ? 0 : Math.min(100, Math.round((item.used / item.quota) * 100));
+        const used = Number(item.used) || 0;
+        const limit = Number(isCredit ? item.total : item.quota);
+        const hasLimit = Number.isFinite(limit) && limit > 0;
+        const unlimited = !isCredit && !hasLimit;
+        const pct = hasLimit ? Math.min(100, Math.max(0, (used / limit) * 100)) : 0;
         return `
           <div class="quota-item">
             <div class="quota-item-header">
@@ -775,7 +743,7 @@ async function renderSpace() {
               <span class="muted">${isCredit ? `${item.used ?? 0} / ${item.total == null ? '不限' : item.total}（剩余 ${item.available ?? 0}）` : `${item.used ?? 0} / ${unlimited ? '不限' : item.quota}`}</span>
             </div>
             <div class="quota-bar">
-              <div class="quota-bar-fill ${pct >= 90 ? 'warn' : ''}" style="width:${unlimited ? 0 : Math.max(pct, item.used > 0 ? 4 : 0)}%"></div>
+              <div class="quota-bar-fill ${pct >= 90 ? 'warn' : ''}" style="width:${pct}%"></div>
             </div>
           </div>`;
       })
