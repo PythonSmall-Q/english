@@ -20,14 +20,31 @@ const QUOTA_LABELS = {
 };
 
 /**
- * Cloudflare AI 模型目录（与后端 worker/src/cfai.js 官方定价同构；1 credit = $0.01；
- * inPer1k/outPer1k = 每 1K 输入/输出 token 的 credits，输入输出分列精确计费）
+ * Cloudflare 官方定价精确计费（developers.cloudflare.com/workers-ai/platform/pricing）。
+ * 1 tenant credit = $0.01（与 Cloudflare 预付 credit 同口径）；
+ * inPer1k / outPer1k = 每 1K 输入/输出 token 的 credits（官方 $/M × 100 / 1000），输入输出分列。
+ * 若 Workers AI 将来在 usage 里直接回传 credits，优先采用回传值。
+ * 档位按输出价分档：low≤0.04 / efficient≤0.08 / high≤0.25 / extra-high>0.25（credits per 1k out）。
  */
 const CF_MODELS = [
-  { id: '@cf/meta/llama-3.1-8b-instruct', label: 'Llama 3.1 8B', tag: 'low', inPer1k: 0.0282, outPer1k: 0.0827 },
+  // ---- low ----
+  { id: '@cf/ibm-granite/granite-4.0-h-micro', label: 'Granite 4.0 H Micro', tag: 'low', inPer1k: 0.0017, outPer1k: 0.0112 },
   { id: '@cf/mistral/mistral-7b-instruct-v0.1', label: 'Mistral 7B', tag: 'low', inPer1k: 0.011, outPer1k: 0.019 },
+  { id: '@cf/meta/llama-3.2-1b-instruct', label: 'Llama 3.2 1B', tag: 'low', inPer1k: 0.0027, outPer1k: 0.0201 },
+  { id: '@cf/meta/llama-3.2-3b-instruct', label: 'Llama 3.2 3B', tag: 'low', inPer1k: 0.0051, outPer1k: 0.0335 },
+  // ---- efficient ----
+  { id: '@cf/meta/llama-3.1-8b-instruct-fp8-fast', label: 'Llama 3.1 8B Fast', tag: 'efficient', inPer1k: 0.0045, outPer1k: 0.0384 },
   { id: '@cf/openai/gpt-oss-20b', label: 'GPT-OSS 20B', tag: 'efficient', inPer1k: 0.02, outPer1k: 0.03 },
+  { id: '@cf/qwen/qwen3-30b-a3b-fp8', label: 'Qwen3 30B A3B', tag: 'efficient', inPer1k: 0.0051, outPer1k: 0.0335 },
+  { id: '@cf/zai-org/glm-4.7-flash', label: 'GLM 4.7 Flash', tag: 'efficient', inPer1k: 0.006, outPer1k: 0.04 },
+  { id: '@cf/google/gemma-3-12b-it', label: 'Gemma 3 12B', tag: 'efficient', inPer1k: 0.0345, outPer1k: 0.0556 },
+  { id: '@cf/meta/llama-3.1-8b-instruct', label: 'Llama 3.1 8B', tag: 'efficient', inPer1k: 0.0282, outPer1k: 0.0827 },
+  // ---- high ----
+  { id: '@cf/openai/gpt-oss-120b', label: 'GPT-OSS 120B', tag: 'high', inPer1k: 0.035, outPer1k: 0.075 },
+  { id: '@cf/nvidia/nemotron-3-120b-a12b', label: 'Nemotron 3 120B', tag: 'high', inPer1k: 0.05, outPer1k: 0.15 },
   { id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', label: 'Llama 3.3 70B', tag: 'high', inPer1k: 0.0293, outPer1k: 0.2253 },
+  { id: '@cf/moonshotai/kimi-k2.5', label: 'Kimi K2.5', tag: 'high', inPer1k: 0.06, outPer1k: 0.3 },
+  // ---- extra-high ----
   { id: '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', label: 'DeepSeek R1 32B', tag: 'extra-high', inPer1k: 0.0497, outPer1k: 0.4881 },
 ];
 /** tag → 中文档位（低/经济/高/极高），徽标四色 muted 蓝/绿/橙/红（样式见 styles.css .badge-cf-*） */
