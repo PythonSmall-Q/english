@@ -137,7 +137,7 @@ window.App = {
     const t = App.state.tenant;
     if (!t) return;
     try {
-      const data = await api.tenants.get(t.id);
+      const data = await api.tenants.branding(t.id);
       App.state.branding = data.branding || null;
     } catch (e) {
       App.state.branding = null;
@@ -297,7 +297,10 @@ window.App = {
     App.state.view = name;
     // 面包屑（当前模块名）
     const crumb = document.getElementById('breadcrumb');
-    if (crumb) crumb.textContent = def.title || name;
+    if (crumb) {
+      const title = def.title || name;
+      crumb.textContent = window.I18n?.text(title, window.I18n.t(name, title)) || title;
+    }
     // 导航高亮
     document.querySelectorAll('.nav-item').forEach((item) => {
       item.classList.toggle('active', item.dataset.view === name);
@@ -312,6 +315,7 @@ window.App = {
     }
     await def.render(container);
     def.init?.();
+    window.I18n?.apply(container);
     container.scrollTop = 0;
   },
 
@@ -327,7 +331,7 @@ window.App = {
       <div class="modal-mask">
         <div class="modal" role="dialog">
           <div class="modal-header">
-            <span class="modal-title">${App.esc(title)}</span>
+            <span class="modal-title">${App.esc(window.I18n?.text(title, title) || title)}</span>
             <button class="modal-close" type="button" aria-label="关闭">×</button>
           </div>
           <div class="modal-body">${html}</div>
@@ -340,6 +344,7 @@ window.App = {
     });
     root.querySelector('.modal-close').addEventListener('click', close);
     onMount?.(root.querySelector('.modal'));
+    window.I18n?.apply(root);
   },
 
   closeModal() {
@@ -356,7 +361,7 @@ window.App = {
     const root = document.getElementById('toast-root');
     const el = document.createElement('div');
     el.className = 'toast';
-    el.textContent = msg;
+    el.textContent = window.I18n?.text(msg, msg) || msg;
     root.appendChild(el);
     setTimeout(() => el.classList.add('show'), 10);
     setTimeout(() => {
@@ -379,7 +384,7 @@ window.App = {
     const loaderImg = b && b.loaderUrl
       ? `<img class="brand-loader ${App.esc(b.loaderAnim || 'spin')}" src="${App.esc(b.loaderUrl)}" alt="">`
       : '<span class="default-loader" aria-hidden="true"></span>';
-    wrap.innerHTML = `${loaderImg}<span class="up-label">${App.esc(label)}</span>
+    wrap.innerHTML = `${loaderImg}<span class="up-label">${App.esc(window.I18n?.text(label, label) || label)}</span>
       <span class="up-track"><span class="up-fill" style="width:0%"></span></span>
       <span class="up-pct">0%</span>`;
     wrap.classList.add('has-brand-loader');
@@ -772,22 +777,11 @@ window.App = {
       App.toast((e && e.message) || '试用空间创建失败，请稍后再试');
       return false;
     }
-    // 刷新租户列表：auth/me 带配额，GET /tenants 带 plan/expires_at，二者合并（保留 quota）
+    // auth/me 已返回新空间的套餐、到期时间与配额，直接使用，避免重复请求租户列表。
     try {
       const me = await api.auth.me();
       App.state.user = me.user || App.state.user;
-      const fresh = me.tenants || [];
-      try {
-        const data = await api.tenants.list();
-        const meta = new Map((data.tenants || []).map((t) => [t.id, t]));
-        for (const t of fresh) {
-          const m = meta.get(t.id);
-          if (m) Object.assign(t, { plan: m.plan, expires_at: m.expires_at, expired: m.expired });
-        }
-      } catch (e) {
-        /* 无 plan 数据则徽标不显示，不影响主流程 */
-      }
-      App.state.tenants = fresh;
+      App.state.tenants = me.tenants || [];
     } catch (e) {
       // 刷新失败：仅当创建接口已返回租户对象时补入列表，否则保持现状
       if (tenant && tenant.id && !App.state.tenants.some((x) => x.id === tenant.id)) App.state.tenants.push(tenant);
@@ -832,20 +826,10 @@ window.App = {
   },
 
   /**
-   * 合并 GET /tenants 的 plan/expires_at 到租户列表（试用徽标依赖这两个字段；
-   * auth/me 不返回 plan）。失败静默降级：不显示试用徽标。
+  * 兼容旧调用：auth/me 已直接返回套餐信息，保留方法名避免外部调用方失效。
    */
   async syncTenantPlans() {
-    try {
-      const data = await api.tenants.list();
-      const meta = new Map((data.tenants || []).map((t) => [t.id, t]));
-      App.state.tenants = App.state.tenants.map((t) => {
-        const m = meta.get(t.id);
-        return m ? { ...t, plan: m.plan, expires_at: m.expires_at, expired: m.expired } : t;
-      });
-    } catch (e) {
-      /* 静默降级 */
-    }
+    return App.state.tenants;
   },
 
   /**
@@ -1038,8 +1022,8 @@ window.App = {
       const personal = App.state.tenants.find((t) => t.type === 'personal');
       App.state.tenant = personal || App.state.tenants[0] || null;
       App.state.quota = App.state.tenant?.quota || null;
-      // 学年列表与空间元信息并行加载，缩短登录路径
-      await Promise.all([App.loadAcademicYears(), App.syncTenantPlans()]);
+      // auth.me 已包含空间套餐；这里只需加载学年列表。
+      await App.loadAcademicYears();
       await App.enterApp();
       // 学年归档提醒（§63）：进入工作台后异步检查，9/15–9/30 每日一次
       App.checkArchiveReminder();

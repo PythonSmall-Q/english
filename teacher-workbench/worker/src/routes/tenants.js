@@ -14,6 +14,7 @@ import { ApiError, newId, now, currentAcademicYear, getUserInfos } from '../db.j
 import { requireAuth, requireTenant, requireRole, audit, getUserPermissions, TEACHER_PERMS } from '../middleware.js';
 import { getQuotaUsage, PERSONAL_DEFAULTS, PLAN_PRESETS } from '../quota.js';
 import { hashPassword, resolvePlatformRole } from '../auth-core.js';
+import { parseBranding } from '../branding.js';
 
 const app = new Hono();
 
@@ -327,6 +328,14 @@ app.get('/:id', requireAuth, async (c) => {
     success: true,
     data: { tenant: tenantDto, members, quota, usage: await getQuotaUsage(db, tenantId), branding },
   });
+});
+
+/** GET /api/v1/tenants/:id/branding — 轻量品牌读取，避免启动时加载成员与完整配额。 */
+app.get('/:id/branding', requireAuth, requireTenant, async (c) => {
+  const tenantId = c.req.param('id');
+  if (tenantId !== c.get('tenantId')) throw new ApiError('FORBIDDEN', '你不属于该空间');
+  const tenant = c.get('tenant');
+  return c.json({ success: true, data: { branding: parseBranding(tenant.branding) } });
 });
 
 /**
@@ -825,11 +834,15 @@ app.get('/:id/academic-years', requireAuth, requireTenant, async (c) => {
   // 逐表取 distinct 学年后在内存合并降序（避免 compound SELECT 在 D1 本地模式下的条数限制）
   const TABLES = ['classes', 'students', 'lessons', 'schedules', 'assignments', 'dictations', 'exams'];
   const yearSet = new Set();
-  for (const table of TABLES) {
-    const rows = await db
-      .prepare(`SELECT DISTINCT academic_year FROM ${table} WHERE tenant_id = ? AND academic_year IS NOT NULL`)
-      .bind(tenantId)
-      .all();
+  const rowsByTable = await Promise.all(
+    TABLES.map((table) =>
+      db
+        .prepare(`SELECT DISTINCT academic_year FROM ${table} WHERE tenant_id = ? AND academic_year IS NOT NULL`)
+        .bind(tenantId)
+        .all()
+    )
+  );
+  for (const rows of rowsByTable) {
     for (const r of rows.results) yearSet.add(r.academic_year);
   }
   const current = currentAcademicYear();

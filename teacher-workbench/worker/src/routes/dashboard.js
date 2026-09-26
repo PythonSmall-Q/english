@@ -5,9 +5,6 @@
  * - todaySchedules   今天（weekday 口径与 schedules 路由一致：1=周一 … 7=周日）的课表，按节次排序
  * - lessonTodo       备课中心待办（status=pending 的教案，最新 5 条）
  * - recentAssignments 最近布置的作业（最新 5 条，附已交/班级人数统计）
- * - stats            { classes, students, pendingAssignments, pendingRetests }
- *   · pendingAssignments = status='active' 进行中的作业数
- *   · pendingRetests     = 默写 retest_required=1 且 retest_completed=0 的人数
  */
 
 import { Hono } from 'hono';
@@ -22,8 +19,8 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   // 今日课表（period 可能为空，空值排最后）；weekday 与 schedules 路由同口径 1=周一…7=周日
   const jsDay = new Date().getDay();
   const weekday = jsDay === 0 ? 7 : jsDay;
-  // 四组查询并行 + 统计计数一次 batch，缩短首页加载
-  const [schedulesRes, lessonsRes, assignmentsRes, statsRows] = await Promise.all([
+  // 首页只读取实际展示的数据，避免为未使用的统计再执行 4 次 SQL。
+  const [schedulesRes, lessonsRes, assignmentsRes] = await Promise.all([
     db
       .prepare(
         `SELECT s.*, cl.name AS class_name
@@ -56,27 +53,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
       )
       .bind(tenantId)
       .all(),
-    // 统计：班级数 / 学生数 / 进行中作业数 / 待重默人数（一次 batch）
-    db.batch([
-      db.prepare('SELECT COUNT(*) AS n FROM classes WHERE tenant_id = ?').bind(tenantId),
-      db.prepare('SELECT COUNT(*) AS n FROM students WHERE tenant_id = ?').bind(tenantId),
-      db.prepare("SELECT COUNT(*) AS n FROM assignments WHERE tenant_id = ? AND status = 'active'").bind(tenantId),
-      db
-        .prepare(
-          `SELECT COUNT(*) AS n FROM dictation_results
-           WHERE tenant_id = ? AND retest_required = 1 AND retest_completed = 0`
-        )
-        .bind(tenantId),
-    ]),
   ]);
-
-  const firstN = (r) => (r.results && r.results[0] ? r.results[0].n : 0);
-  const stats = {
-    classes: firstN(statsRows[0]),
-    students: firstN(statsRows[1]),
-    pendingAssignments: firstN(statsRows[2]),
-    pendingRetests: firstN(statsRows[3]),
-  };
 
   return c.json({
     success: true,
@@ -84,7 +61,6 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
       todaySchedules: schedulesRes.results,
       lessonTodo: lessonsRes.results,
       recentAssignments: assignmentsRes.results,
-      stats,
     },
   });
 });

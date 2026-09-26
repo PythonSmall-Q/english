@@ -121,6 +121,7 @@
       `<div class="dict-result"><div class="dict-hint">加载词库中…</div></div>` +
       `</div>`;
     document.body.appendChild(wrap);
+    window.I18n?.apply(wrap);
 
     const fab = document.getElementById('dict-fab');
     const panel = document.getElementById('dict-panel');

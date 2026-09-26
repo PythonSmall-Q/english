@@ -25,7 +25,7 @@ function recycleTypeMeta(itemType) {
 function formatDeletedAt(iso) {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return String(iso || '');
-  return d.toLocaleString('zh-CN', { hour12: false });
+  return I18n.formatDate(d, { dateStyle: 'short', timeStyle: 'short' });
 }
 
 App.registerView('recycle', {

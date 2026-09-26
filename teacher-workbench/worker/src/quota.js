@@ -209,15 +209,12 @@ export async function checkQuota(db, tenantId, resource, userId = null) {
  * @returns {Promise<Record<string, {quota: number|null, used: number}>>}
  */
 export async function getQuotaUsage(db, tenantId) {
-  const quotaRow = await db
-    .prepare('SELECT * FROM tenant_quotas WHERE tenant_id = ?')
-    .bind(tenantId)
-    .first();
-  // 所有 COUNT 一次 batch 发出（D1 单次往返），避免逐资源串行查询拖慢登录
+  // 配额、用量和 AI credit 一次 batch 发出，避免登录/租户详情产生多次 D1 往返。
   const monthPrefix = new Date().toISOString().slice(0, 7);
   const entries = Object.entries(RESOURCE_MAP);
-  const counted = await db.batch(
-    entries.map(([resource, mapping]) =>
+  const [quotaResult, ...counted] = await db.batch([
+    db.prepare('SELECT * FROM tenant_quotas WHERE tenant_id = ?').bind(tenantId),
+    ...entries.map(([resource, mapping]) =>
       resource === 'ai'
         ? db
             .prepare(
@@ -225,16 +222,7 @@ export async function getQuotaUsage(db, tenantId) {
             )
             .bind(tenantId, monthPrefix)
         : db.prepare(`SELECT COUNT(*) AS n FROM ${mapping.table} WHERE tenant_id = ?`).bind(tenantId)
-    )
-  );
-  const result = {};
-  entries.forEach(([resource, mapping], i) => {
-    const quota = quotaRow ? quotaRow[mapping.quotaColumn] ?? null : null;
-    const rows = counted[i] && counted[i].results;
-    const used = rows && rows.length ? rows[0].n : 0;
-    result[resource] = { quota, used };
-  });
-  const [creditUsage, creditBalance] = await db.batch([
+    ),
     db
       .prepare(
         'SELECT COALESCE(SUM(credits), 0) AS n FROM ai_generations WHERE tenant_id = ? AND substr(created_at, 1, 7) = ? AND credits IS NOT NULL'
@@ -242,6 +230,16 @@ export async function getQuotaUsage(db, tenantId) {
       .bind(tenantId, monthPrefix),
     db.prepare('SELECT ai_credits, ai_credits_monthly, ai_credits_bonus FROM tenants WHERE id = ?').bind(tenantId),
   ]);
+  const quotaRow = quotaResult.results?.[0] || null;
+  const result = {};
+  entries.forEach(([resource, mapping], i) => {
+    const quota = quotaRow ? quotaRow[mapping.quotaColumn] ?? null : null;
+    const rows = counted[i] && counted[i].results;
+    const used = rows && rows.length ? rows[0].n : 0;
+    result[resource] = { quota, used };
+  });
+  const creditUsage = counted[entries.length];
+  const creditBalance = counted[entries.length + 1];
   const creditRow = creditBalance.results?.[0] || {};
   const creditTotal = creditRow.ai_credits_monthly == null
     ? null

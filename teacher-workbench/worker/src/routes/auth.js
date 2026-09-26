@@ -21,7 +21,7 @@ import {
   SESSION_COOKIE,
 } from '../auth-core.js';
 import { ApiError, newId, now } from '../db.js';
-import { PERSONAL_DEFAULTS, getQuotaUsage } from '../quota.js';
+import { PERSONAL_DEFAULTS } from '../quota.js';
 import { requireAuth } from '../middleware.js';
 
 const app = new Hono();
@@ -196,10 +196,10 @@ app.post('/logout', async (c) => {
 });
 
 /**
- * GET /api/v1/auth/me — 当前用户 + 租户列表（含 role、配额与用量）
+ * GET /api/v1/auth/me — 当前用户 + 租户列表（轻量基础信息）
  * 双库并集：主库 memberships JOIN tenants + TRIAL_DB 同查合并返回
  * （试用租户整体在 TRIAL_DB；users/sessions 等全局表只在主库）。
- * 响应 data: { user, tenants: [{ id, name, type, role, plan, expiresAt, expired, quota: {...} }] }
+ * 响应 data: { user, tenants: [{ id, name, type, role, plan, expiresAt, expired }] }
  */
   app.get('/me', requireAuth, async (c) => {
   const user = c.get('user');
@@ -229,7 +229,6 @@ app.post('/logout', async (c) => {
       plan: row.plan,
       expiresAt: row.expires_at,
       expired: !!row.expires_at && row.expires_at <= now(),
-      quota: await getQuotaUsage(db, row.id), // 用量按所在库统计
     }))
   );
 

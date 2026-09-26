@@ -166,6 +166,7 @@
   const tenants = {
     list: () => request('/tenants'),
     get: (id) => request(`/tenants/${id}`),
+    branding: (id) => request(`/tenants/${id}/branding`),
     /** 学年归档：当前学年 + 本空间出现过的学年列表（降序） */
     academicYears: (id) => request(`/tenants/${id}/academic-years`),
     create: (body) => request('/tenants', { method: 'POST', body }),

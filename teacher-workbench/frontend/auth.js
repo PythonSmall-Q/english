@@ -36,6 +36,8 @@ App.showAuthScreen = function (mode = 'login') {
         </form>
       </div>`;
 
+    window.I18n?.apply(screen);
+
     screen.querySelectorAll('.auth-tab').forEach((tab) => {
       tab.addEventListener('click', () => render(tab.dataset.mode));
     });

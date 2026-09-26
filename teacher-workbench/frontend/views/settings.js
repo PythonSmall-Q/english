@@ -247,7 +247,7 @@ App.registerView('settings', {
         <div class="muted">支持 .xlsx / .csv / .json / 直接粘贴；导入在服务端解析校验后写入，匹配失败的数据会明确返回。</div>
       </div>
 
-      <!-- 5. 显示（设备模式） -->
+      <!-- 5. 显示（设备模式与语言） -->
       <div class="card">
         <div class="card-title">显示</div>
         <div class="form-row" style="align-items:flex-end">
@@ -259,6 +259,17 @@ App.registerView('settings', {
             </select>
           </div>
           <div class="muted" style="font-size:12.5px;padding-bottom:8px">平板模式字体与按钮更大、间距更宽，适合触控；仅保存在本设备</div>
+        </div>
+        <div class="form-row" style="align-items:flex-end;margin-top:10px">
+          <div>
+            <label class="form-label">界面语言</label>
+            <select class="form-input" id="pref-locale" style="min-width:200px">
+              <option value="zh-CN">简体中文</option>
+              <option value="zh-TW">繁體中文</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+          <div class="muted" style="font-size:12.5px;padding-bottom:8px">切换语言后重新加载界面</div>
         </div>
       </div>
 
@@ -331,6 +342,7 @@ App.registerView('settings', {
     document.getElementById('ai-mode-platform-label')?.remove();
     document.getElementById('ai-panel-platform')?.remove();
     bindDeviceMode();
+    bindLocale();
     await renderSpace();
     await renderMyQuota();
     bindDataManagement();
@@ -513,6 +525,16 @@ function bindDeviceMode() {
     localStorage.setItem(App.DEVICE_MODE_KEY, mode);
     App.applyDeviceMode(mode);
     App.toast(mode === 'tablet' ? '已切换为平板模式' : '已切换为电脑模式');
+  });
+}
+
+/** 全局界面语言：语言选择保存在本机，重载后统一应用到主框架。 */
+function bindLocale() {
+  const select = document.getElementById('pref-locale');
+  if (!select || !window.I18n) return;
+  select.value = I18n.locale;
+  select.addEventListener('change', () => {
+    if (I18n.setLocale(select.value)) location.reload();
   });
 }
 

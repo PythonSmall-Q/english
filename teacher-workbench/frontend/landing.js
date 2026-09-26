@@ -189,6 +189,7 @@ App.showLanding = function () {
 
       <footer class="landing-footer muted">英语教师教学工作台 · 让教学事务井井有条</footer>
     </div>`;
+  window.I18n?.apply(screen);
 
   const scrollTo = (el) => el && el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 

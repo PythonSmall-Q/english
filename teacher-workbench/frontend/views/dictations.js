@@ -237,7 +237,7 @@
     ctx.fillStyle = '#98a2ba';
     ctx.font = `13px ${FONT}`;
     ctx.textAlign = 'center';
-    ctx.fillText(`共 ${total} 人待重默 · 生成于 ${new Date().toLocaleString('zh-CN', { hour12: false })}`, W / 2, totalH - PAD + 4);
+    ctx.fillText(`${I18n.formatNumber(total)} 人待重默 · 生成于 ${I18n.formatDate(new Date(), { dateStyle: 'short', timeStyle: 'short' })}`, W / 2, totalH - PAD + 4);
     ctx.textAlign = 'left';
 
     canvas.toBlob((blob) => {

@@ -450,7 +450,7 @@ App.registerView('classes', {
     // —— 已毕业班级归档（owner/admin；纯读取板块，数据随 render 首屏加载，写操作后不重拉）——
     const fmtTime = (t) => {
       const d = new Date(t);
-      return isNaN(d.getTime()) ? App.esc(String(t || '')) : App.esc(d.toLocaleString('zh-CN', { hour12: false }));
+      return isNaN(d.getTime()) ? App.esc(String(t || '')) : App.esc(I18n.formatDate(d, { dateStyle: 'short', timeStyle: 'short' }));
     };
     const gradRowHtml = (g) => `
           <tr>
