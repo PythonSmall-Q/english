@@ -92,6 +92,12 @@ window.App = {
     );
   },
 
+  /** 用户主动退出时清除独立 App 的自动登录凭据。 */
+  clearStandaloneAutoLogin() {
+    localStorage.removeItem('wb.app.auto_login');
+    window.__wbAutoLoginAttempted = true;
+  },
+
   _pendingSelectRender: null,
   _selectRenderGuardBound: false,
 
@@ -365,7 +371,7 @@ window.App = {
     const mask = root.querySelector('.modal-mask');
     const close = () => App.closeModal();
     mask.addEventListener('mousedown', (e) => {
-      if (e.target === mask) close();
+      if (e.target === mask && mask.dataset.locked !== 'true') close();
     });
     root.querySelector('.modal-close').addEventListener('click', close);
     onMount?.(root.querySelector('.modal'));
@@ -772,6 +778,7 @@ window.App = {
       } catch (e) {
         /* 忽略登出异常 */
       }
+      App.clearStandaloneAutoLogin();
       location.reload();
     });
   },
@@ -1046,6 +1053,7 @@ window.App = {
           } catch (e) {
             /* 忽略登出异常，本地态照样清理 */
           }
+          App.clearStandaloneAutoLogin();
           location.reload();
         });
       }

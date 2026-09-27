@@ -9,6 +9,8 @@
     "api.js",
     "auth.js",
     "landing.js",
+    "update.js",
+    "app-update.json",
     "dict.js",
     "views/admin.js",
     "views/ai.js",

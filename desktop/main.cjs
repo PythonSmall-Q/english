@@ -5,6 +5,14 @@ const path = require('node:path');
 const apiBase = process.env.WB_API_BASE || 'https://fff-api.xmoj-script.uk/api/v1';
 const frontendUpdateBase = process.env.WB_FRONTEND_UPDATE_BASE || 'https://fff.xmoj-script.uk';
 
+ipcMain.handle('get-app-version', () => app.getVersion());
+ipcMain.handle('open-external', async (_event, url) => {
+  const parsed = new URL(String(url || ''));
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('仅允许打开 HTTP(S) 下载地址');
+  await shell.openExternal(parsed.toString());
+  return { opened: true };
+});
+
 ipcMain.handle('save-file', async (_event, { filename, data }) => {
   const result = await dialog.showSaveDialog({
     defaultPath: filename,
