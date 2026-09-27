@@ -139,20 +139,20 @@ App.registerView('settings', {
     el.innerHTML = `
       ${isStandalone ? `
       <div class="card app-version-card">
-        <div class="card-title">${I18n.t('appVersionLabel')}</div>
+        <div class="card-title">${I18n.t('appVersionLabel', '当前版本')}</div>
         <div class="app-version-row">
           <strong id="app-current-version">${App.esc(appVersion)}</strong>
-          <button class="btn btn-primary" id="check-app-update" type="button">${I18n.t('checkUpdate')}</button>
+          <button class="btn btn-primary" id="check-app-update" type="button">${I18n.t('checkUpdate', '检查更新')}</button>
         </div>
       </div>` : `
       <div class="card desktop-download-card">
-        <div class="card-title">${I18n.t('desktopDownloadTitle')}</div>
-        <div class="muted" style="margin-bottom:12px">${I18n.t('desktopDownloadHint')}</div>
+        <div class="card-title">${I18n.t('desktopDownloadTitle', '桌面端下载')}</div>
+        <div class="muted" style="margin-bottom:12px">${I18n.t('desktopDownloadHint', '浏览器端可下载 Windows 或 macOS 安装包')}</div>
         <div class="form-row">
-          <a class="btn btn-primary" href="https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-windows.exe" download>${I18n.t('windows')} · ${I18n.t('download')}</a>
-          <a class="btn" href="https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-macos.dmg" download>${I18n.t('macos')} · ${I18n.t('download')}</a>
+          <a class="btn btn-primary" href="https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-windows.exe" download>${I18n.t('windows', 'Windows')} · ${I18n.t('download', '下载')}</a>
+          <a class="btn" href="https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-macos.dmg" download>${I18n.t('macos', 'macOS')} · ${I18n.t('download', '下载')}</a>
         </div>
-        <div class="muted" style="font-size:12px;margin-top:10px">${I18n.t('macDesktopHint')}</div>
+        <div class="muted" style="font-size:12px;margin-top:10px">${I18n.t('macDesktopHint', 'macOS 首次打开若提示无法验证开发者，请到“系统设置 → 隐私与安全性”中点击“仍要打开”。')}</div>
       </div>`}
 
       <!-- 1. 个人资料 -->
@@ -361,10 +361,10 @@ App.registerView('settings', {
       checkUpdateButton.textContent = I18n.t('updateChecking');
       try {
         const hasUpdate = await App.checkForUpdates({ force: true });
-        if (!hasUpdate) App.toast(I18n.t('latestVersion'));
+        if (!hasUpdate) App.toast(I18n.t('latestVersion', '当前已是最新版本'));
       } finally {
         checkUpdateButton.disabled = false;
-        checkUpdateButton.textContent = I18n.t('checkUpdate');
+        checkUpdateButton.textContent = I18n.t('checkUpdate', '检查更新');
       }
     });
     await renderSpace();
