@@ -44,6 +44,12 @@ const DASH_ACTIONS = [
   { label: '🤖 ', key: 'ai', view: 'ai' },
 ];
 
+const DASH_APP_DOWNLOADS = {
+  windows: { icon: '🪟', key: 'windows', requirement: 'windowsRequirement', url: 'https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-windows.exe' },
+  macos: { icon: '🍎', key: 'macos', requirement: 'macosRequirement', url: 'https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-macos.dmg' },
+  android: { icon: '▣', key: 'android', requirement: 'androidRequirement', url: 'https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-android.apk' },
+};
+
 /** 注入本模块专属样式（幂等，类名带 dash- 前缀） */
 function dashInjectStyles() {
   if (document.getElementById('dash-styles')) return;
@@ -111,6 +117,27 @@ App.registerView('dashboard', {
         </div>
       </div>`;
 
+    const downloadHtml = App.isStandaloneApp() ? '' : `
+      <div class="card">
+        <div class="card-title">${I18n.t('downloadSoftware', '软件下载')}</div>
+        <div class="muted" style="margin-bottom:12px">${I18n.t('downloadSoftwareHint', '选择对应设备版本，安装文件发布后即可下载')}</div>
+        <div class="landing-download-grid">
+          ${Object.values(DASH_APP_DOWNLOADS).map((item) => `
+            <div class="landing-download-card">
+              <span class="landing-download-icon">${item.icon}</span>
+              <div class="landing-download-body">
+                <strong>${I18n.t(item.key)}</strong>
+                <span class="muted">${I18n.t(item.requirement)}</span>
+              </div>
+              <a class="btn landing-download-btn" href="${item.url}" download>${I18n.t('download', '下载')}</a>
+            </div>`).join('')}
+        </div>
+        <div class="landing-macos-note">
+          <strong>${I18n.t('macosFirstOpenTitle', 'macOS 首次打开提示')}</strong>
+          <span class="muted">${I18n.t('macosFirstOpenHint', '若系统提示无法验证开发者，请到“系统设置 → 隐私与安全性”中点击“仍要打开”。')}</span>
+        </div>
+      </div>`;
+
     // —— 今日课表 ——
     const schedHtml = todaySchedules.length
       ? `<div class="dash-list">${todaySchedules
@@ -163,6 +190,7 @@ App.registerView('dashboard', {
       : `<div class="dash-empty">${I18n.t('dashNoAssignments')}</div>`;
 
     el.innerHTML = `
+      ${downloadHtml}
       ${quickHtml}
       <div class="dash-row">
         <div class="card">
