@@ -15,8 +15,8 @@
   // —— 模块样式（只注入一次，类名均带 aiw- 前缀避免污染）——
   const CSS = `
 .aiw-layout { display: flex; gap: 14px; align-items: stretch; }
-.aiw-chat { flex: 1; display: flex; flex-direction: column; min-height: 520px; min-width: 0; }
-.aiw-msgs { flex: 1; overflow-y: auto; padding: 4px 2px; display: flex; flex-direction: column; gap: 12px; }
+.aiw-chat { flex: 1; display: flex; flex-direction: column; height: min(680px, calc(100vh - 180px)); min-height: 520px; min-width: 0; overflow: hidden; }
+.aiw-msgs { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 2px; display: flex; flex-direction: column; gap: 12px; }
 .aiw-empty { margin: auto; text-align: center; color: #9aa4b5; padding: 30px 10px; }
 .aiw-msg { display: flex; }
 .aiw-msg-user { justify-content: flex-end; }
@@ -65,7 +65,7 @@
 @media (max-width: 900px) {
   .aiw-layout { flex-direction: column; }
   .aiw-side { width: auto; }
-  .aiw-chat { min-height: 420px; }
+  .aiw-chat { height: 520px; min-height: 420px; }
 }
 `;
 
@@ -279,6 +279,9 @@
       button.addEventListener('click', () => copyText(button.dataset.copyText || '', button));
     });
     box.scrollTop = box.scrollHeight;
+    requestAnimationFrame(() => {
+      if (dom.msgs === box) box.scrollTop = box.scrollHeight;
+    });
   }
 
   /** 更新 provider 徽标（按最后一条 AI 回复的来源） */
