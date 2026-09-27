@@ -911,6 +911,64 @@ select.form-input {
   margin-bottom: 32px;
 }
 
+.landing-download-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  max-width: 1080px;
+  margin: 0 auto 18px;
+}
+
+.landing-download-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 88px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  box-shadow: var(--shadow);
+}
+
+.landing-download-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.landing-download-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.landing-download-body span {
+  font-size: 12px;
+}
+
+.landing-download-btn {
+  flex: 0 0 auto;
+}
+
+.landing-download-btn.is-pending {
+  opacity: 0.58;
+}
+
+.landing-macos-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 13px 16px;
+  border-left: 3px solid var(--primary);
+  background: rgba(45, 137, 136, 0.08);
+  text-align: left;
+  font-size: 13px;
+}
+
 .landing-price-card {
   position: relative;
   display: flex;
@@ -1100,6 +1158,10 @@ select.form-input {
     max-width: 640px;
     margin-left: auto;
     margin-right: auto;
+  }
+
+  .landing-download-grid {
+    grid-template-columns: 1fr;
   }
 }
 

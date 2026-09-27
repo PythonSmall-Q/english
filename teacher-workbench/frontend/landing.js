@@ -36,6 +36,13 @@ const LANDING_TRIAL = {
   bannerCta: '立即试用',
 };
 
+// 安装文件上传后只需替换这里的 URL；留空时按钮会提示文件尚未发布。
+const DESKTOP_DOWNLOADS = {
+  windows: '',
+  macos: '',
+  android: '',
+};
+
 /** 定价功能对比表（'—' 表示不支持；custom 列为定制版） */
 const LANDING_COMPARE = [
   { name: '班级数量', free: '1', pro: '10', school: '不限', custom: '不限' },
@@ -64,6 +71,7 @@ App.showLanding = function () {
         <p class="landing-tagline">面向英语教师的全流程教学工作台</p>
         <nav class="landing-nav">
           <a href="#features" class="landing-nav-link" data-anchor="features">功能</a>
+          <a href="#downloads" class="landing-nav-link" data-anchor="downloads">${I18n.t('downloadSoftware')}</a>
           <a href="#pricing" class="landing-nav-link" data-anchor="pricing">定价</a>
         </nav>
         <div class="landing-actions">
@@ -85,6 +93,33 @@ App.showLanding = function () {
               <span class="landing-card-desc muted">${App.esc(f.desc)}</span>
             </div>`
           ).join('')}
+        </div>
+      </section>
+
+      <section class="landing-section" id="downloads">
+        <h2 class="landing-section-title">${I18n.t('downloadSoftware')}</h2>
+        <p class="landing-section-sub muted">${I18n.t('downloadSoftwareHint')}</p>
+        <div class="landing-download-grid">
+          ${[
+            ['windows', '🪟', 'Windows', I18n.t('windowsRequirement')],
+            ['macos', '🍎', 'macOS', I18n.t('macosRequirement')],
+            ['android', '▣', 'Android', I18n.t('androidRequirement')],
+          ].map(([platform, icon, title, detail]) => `
+            <div class="landing-download-card">
+              <span class="landing-download-icon">${icon}</span>
+              <div class="landing-download-body">
+                <strong>${I18n.t(title === 'Windows' ? 'windows' : title === 'macOS' ? 'macos' : 'android')}</strong>
+                <span class="muted">${detail}</span>
+              </div>
+              <a class="btn landing-download-btn${DESKTOP_DOWNLOADS[platform] ? '' : ' is-pending'}"
+                 data-download-platform="${platform}"
+                 href="${DESKTOP_DOWNLOADS[platform] || '#'}"
+                 ${DESKTOP_DOWNLOADS[platform] ? 'download' : 'aria-disabled="true"'}>${I18n.t('download')}</a>
+            </div>`).join('')}
+        </div>
+        <div class="landing-macos-note">
+          <strong>${I18n.t('macosFirstOpenTitle')}</strong>
+          <span class="muted">${I18n.t('macosFirstOpenHint')}</span>
         </div>
       </section>
 
@@ -206,6 +241,14 @@ App.showLanding = function () {
     link.addEventListener('click', (e) => {
       e.preventDefault();
       scrollTo(document.getElementById(link.dataset.anchor));
+    });
+  });
+  screen.querySelectorAll('[data-download-platform]').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      if (!DESKTOP_DOWNLOADS[link.dataset.downloadPlatform]) {
+        event.preventDefault();
+        App.toast(I18n.t('installFilePending'));
+      }
     });
   });
   screen.querySelectorAll('[data-scroll-top]').forEach((btn) => {
