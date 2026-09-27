@@ -95,6 +95,45 @@ npm run mobile:apk        # 生成 android/app/build/outputs/apk/release/app-rel
 `capacitor.config.json` 的 `webDir` 直接打包 `frontend/`，如需本地 Worker，请在设备可访问的地址上配置 API
 覆盖（不能使用 Android 模拟器不可达的 `localhost`）。应用包名为 `cn.xmoj.teacherworkbench`。
 
+### 版本更新与发布注意事项
+
+项目有两套独立的更新机制，修改前端代码和发布安装包时必须分别维护对应清单。
+
+#### 1. 前端资源在线更新
+
+- 浏览器和 APK 使用 `frontend/sw.js` 的 Service Worker 缓存前端资源。
+- Electron 不使用 Service Worker，而是在启动窗口前由 `desktop/main.cjs` 检查远程清单并覆盖前端资源。
+- 前端更新清单是 `frontend/update-manifest.json`，默认部署在 Pages 的
+  `https://fff.xmoj-script.uk/update-manifest.json`。
+- 修改 HTML、JS、CSS 或静态资源后，必须递增清单中的 `version`，并把修改过的文件加入 `files`。
+- `files` 应包含完整的前端程序文件，尤其是 `index.html`、`i18n.js`、`app.js`、`update.js`、
+  `styles.css` 和对应的 `views/*.js`；否则 Electron 覆盖目录可能混用新旧资源。
+- 必须先部署 Pages，再启动 APK 或 Electron 验证更新。版本号不变时，客户端会认为无需更新。
+- APK 的 Service Worker 可能先返回现有缓存，后台更新资源，通常在下一次刷新或重新打开后完全生效。
+- Electron 会在启动时等待远程资源下载；网络不可用或下载失败时继续使用本地内置版本。
+- 前端在线更新只替换 HTML/JS/CSS/静态资源，不会更新原生代码、Electron 主进程、Android 权限或数据库。
+
+#### 2. 安装包版本更新
+
+- 安装包版本清单是 R2 上的 `app-update.json`，地址为
+  `https://fff-file-r2-cloudflare.xmoj-script.uk/app-update.json`。
+- `platforms.windows`、`platforms.macos`、`platforms.android` 分别对应 Electron Windows、Electron macOS 和 APK。
+- Electron 与 APK 共用 `frontend/update.js` 的版本检查逻辑：发现新安装包后弹窗并打开下载地址。
+- 当前是“下载提示”模式，不是静默安装：Windows 用户需要运行 `.exe`，Android 用户需要确认安装 `.apk`。
+- Electron 尚未接入 `electron-updater`，因此不会在后台自动替换自身；APK 也不能绕过系统确认自动安装。
+- `force: true` 会锁定升级弹窗，适合阻止旧版本继续使用；启用前必须确认安装包 URL 可访问。
+
+#### 3. 发布检查清单
+
+1. 仅发布前端改动：递增 `frontend/update-manifest.json` 的 `version`，检查 `files`，部署 Pages。
+2. 发布新安装包：同步更新 `package.json`、`android/app/build.gradle` 的版本信息，并通过
+   `Desktop Release` 工作流创建对应的 Release tag，例如 `v3.0.2`。
+3. 确认工作流已将安装包和新的 `app-update.json` 上传到 R2；稳定下载地址不能改名：
+   `teacher-workbench-windows.exe`、`teacher-workbench-macos.dmg`、`teacher-workbench-android.apk`。
+4. 检查 Pages 的 `update-manifest.json` 与 R2 的 `app-update.json`：前者控制前端资源，后者控制安装包版本，不能混用。
+5. 在浏览器、已安装 Electron 和已安装 APK 各验证一次；重点检查设置页版本号、更新按钮、下载地址和 macOS 首次打开提示。
+6. 如果出现旧资源混用，先确认清单版本已递增，再刷新页面或重启应用；必要时清除站点 Service Worker 缓存后重新打开。
+
 Worker 已接入 D1 Sessions API。启用 Global Read Replication 后，API 会按数据库 binding
 （主库、试用库、归档库）分别维护 session bookmark；前端 API Client 会自动透传并保存 bookmark，
 保证跨请求的顺序一致性。旧版客户端不携带 bookmark 时仍会从 `first-unconstrained` 开始会话。
