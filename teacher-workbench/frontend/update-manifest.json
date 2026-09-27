@@ -1,5 +1,5 @@
 {
-  "version": "3.0.4",
+  "version": "3.0.5",
   "files": [
     "index.html",
     "styles.css",
@@ -10,6 +10,7 @@
     "auth.js",
     "landing.js",
     "update.js",
+    "sw.js",
     "app-update.json",
     "dict.js",
     "views/admin.js",
