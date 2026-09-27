@@ -36,11 +36,12 @@ const LANDING_TRIAL = {
   bannerCta: '立即试用',
 };
 
-// 安装包直接放在 frontend/downloads/，使用固定文件名即可无需再改配置。
+// 大型安装包放在 R2（Cloudflare Pages 单文件上限为 25 MiB），上传同名对象即可。
+const DESKTOP_DOWNLOAD_BASE = 'https://fff-file-r2-cloudflare.xmoj-script.uk';
 const DESKTOP_DOWNLOADS = {
-  windows: 'downloads/teacher-workbench-windows.exe',
-  macos: 'downloads/teacher-workbench-macos.dmg',
-  android: 'downloads/teacher-workbench-android.apk',
+  windows: `${DESKTOP_DOWNLOAD_BASE}/teacher-workbench-windows.exe`,
+  macos: `${DESKTOP_DOWNLOAD_BASE}/teacher-workbench-macos.dmg`,
+  android: `${DESKTOP_DOWNLOAD_BASE}/teacher-workbench-android.apk`,
 };
 
 /** 定价功能对比表（'—' 表示不支持；custom 列为定制版） */

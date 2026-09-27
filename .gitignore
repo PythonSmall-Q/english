@@ -12,6 +12,11 @@
 **/*.jks
 **/*.keystore
 
+# Large installers are hosted in Cloudflare R2, not Cloudflare Pages
+teacher-workbench/frontend/downloads/*.exe
+teacher-workbench/frontend/downloads/*.dmg
+teacher-workbench/frontend/downloads/*.apk
+
 # Cloudflare Wrangler local state
 **/.wrangler/
 
