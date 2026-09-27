@@ -36,11 +36,11 @@ const LANDING_TRIAL = {
   bannerCta: '立即试用',
 };
 
-// 安装文件上传后只需替换这里的 URL；留空时按钮会提示文件尚未发布。
+// 安装包直接放在 frontend/downloads/，使用固定文件名即可无需再改配置。
 const DESKTOP_DOWNLOADS = {
-  windows: '',
-  macos: '',
-  android: '',
+  windows: 'downloads/teacher-workbench-windows.exe',
+  macos: 'downloads/teacher-workbench-macos.dmg',
+  android: 'downloads/teacher-workbench-android.apk',
 };
 
 /** 定价功能对比表（'—' 表示不支持；custom 列为定制版） */
