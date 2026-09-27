@@ -445,15 +445,42 @@ window.App = {
     });
   },
 
-  /** 触发浏览器下载 JSON 文件（设置页导出用） */
-  downloadJSON(filename, data) {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  /** 在 Web、Electron、Android 中统一保存导出文件 */
+  async downloadBlob(filename, blob) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    if (window.WB_RUNTIME?.saveFile) {
+      const result = await window.WB_RUNTIME.saveFile(filename, bytes);
+      return !result?.canceled;
+    }
+    const filesystem = window.Capacitor?.Plugins?.Filesystem;
+    if (filesystem?.writeFile) {
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      }
+      const base64 = btoa(binary);
+      const result = await filesystem.writeFile({
+        path: filename,
+        data: base64,
+        directory: 'DOCUMENTS',
+        recursive: true,
+      });
+      return { saved: true, uri: result.uri || 'Documents' };
+    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    return true;
+  },
+
+  /** 导出 JSON 文件（设置页导出用） */
+  async downloadJSON(filename, data) {
+    return App.downloadBlob(filename, new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
   },
 
   /** 切换当前租户（§22）：切换后刷新顶部并重新渲染当前页 */

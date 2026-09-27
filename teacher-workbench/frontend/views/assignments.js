@@ -485,7 +485,8 @@
         ws['!cols'] = header.map((_, i) => ({ wch: i < 2 ? 12 : 16 }));
         XLSX.utils.book_append_sheet(wb, ws, (c.name || '班级').slice(0, 31));
       }
-      XLSX.writeFile(wb, `作业统计_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      const xlsx = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      await App.downloadBlob(`作业统计_${new Date().toISOString().slice(0, 10)}.xlsx`, new Blob([xlsx], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
       App.toast('已导出作业统计');
     } catch (err) {
       App.toast(errMsg(err, '导出失败'));
@@ -500,12 +501,7 @@
     try {
       const data = await api.archive.download('assignments', App.state.academicYear);
       const blob = new Blob([JSON.stringify(data)], { type: 'application/json;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `归档-作业-${App.state.academicYear}.json`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      await App.downloadBlob(`归档-作业-${App.state.academicYear}.json`, blob);
       App.toast('归档文件已开始下载');
     } catch (err) {
       App.toast(errMsg(err, '下载归档失败'));

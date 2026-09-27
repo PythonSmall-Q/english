@@ -79,8 +79,17 @@ npm run mobile:apk        # 生成 android/app/build/outputs/apk/release/app-rel
 ### GitHub Actions 桌面版发布
 
 工作流 `.github/workflows/desktop-release.yml` 支持手动触发，会在 Windows 和 macOS Runner
-上分别构建未签名安装包，然后创建 GitHub Release。进入仓库的 **Actions → Desktop Release → Run workflow**，
+上分别构建未签名安装包，并构建签名 Android APK，最后创建 GitHub Release。进入仓库的 **Actions → Desktop Release → Run workflow**，
 填写版本标签（例如 `v3.0.0`）即可。
+
+运行前在仓库 **Settings → Secrets and variables → Actions** 配置 Android 签名 Secrets：
+
+- `ANDROID_KEYSTORE_BASE64`：`android/teacher-workbench-release.jks` 的 base64 内容
+- `ANDROID_KEYSTORE_PASSWORD`：keystore 密码
+- `ANDROID_KEY_ALIAS`：签名别名
+- `ANDROID_KEY_PASSWORD`：签名密码
+
+工作流使用同一 keystore 构建 `app-release.apk` 并上传到 Release。不要把 `.jks` 或密码提交到仓库。
 
 桌面应用通过 `WB_API_BASE` 注入 API 地址，未设置时使用生产 API。Android 构建使用
 `capacitor.config.json` 的 `webDir` 直接打包 `frontend/`，如需本地 Worker，请在设备可访问的地址上配置 API

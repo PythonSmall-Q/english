@@ -566,11 +566,7 @@ function bindMigrate(el) {
     const tpl = { version: 3, tenant: { name: '学校名称' } };
     MIGRATE_TABLE_KEYS.forEach(([key]) => (tpl[key] = []));
     const blob = new Blob([JSON.stringify(tpl, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = '迁移模板.json';
-    a.click();
-    URL.revokeObjectURL(a.href);
+    App.downloadBlob('迁移模板.json', blob);
   });
 
   // 选择文件：大小限制 + 本地 JSON.parse 预检

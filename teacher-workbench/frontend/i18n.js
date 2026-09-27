@@ -143,6 +143,7 @@
     '待重默': [' pending retest', '待重默'],
     '生成于': ['Generated at', '產生於'],
     '图片生成失败': ['Failed to generate image', '圖片產生失敗'],
+    '已保存到图片': ['Saved to Pictures', '已儲存到圖片'],
     '全部状态': ['All statuses', '全部狀態'],
     '全部班级': ['All classes', '全部班級'],
     '全部课型': ['All lesson types', '全部課型'],

@@ -635,7 +635,7 @@ App.registerView('lessons', {
   },
 
   /** 导出 Markdown：纯前端组装 + Blob 下载，无需后端 */
-  _exportMarkdown(lesson) {
+  async _exportMarkdown(lesson) {
     const type = LSN_TYPES[lesson.lesson_type];
     const atts = lesson.attachments || [];
     const lines = [
@@ -661,14 +661,7 @@ App.registerView('lessons', {
     else lines.push('（无附件）');
     const md = lines.filter((l) => l !== null).join('\n');
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${lesson.title || '教案'}.md`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    await App.downloadBlob(`${lesson.title || '教案'}.md`, blob);
     App.toast('已导出 Markdown');
   },
 

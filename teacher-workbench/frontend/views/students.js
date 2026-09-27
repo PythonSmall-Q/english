@@ -537,7 +537,8 @@
       ws['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 16 }, { wch: 8 }, { wch: 24 }];
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, '学生名单');
-      XLSX.writeFile(wb, `学生名单_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      const xlsx = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      await App.downloadBlob(`学生名单_${new Date().toISOString().slice(0, 10)}.xlsx`, new Blob([xlsx], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
       App.toast('已导出学生名单');
     } catch (err) {
       App.toast(errMsg(err, '导出失败'));
@@ -667,7 +668,8 @@
     wsEx['!cols'] = [{ wch: 12 }, { wch: 12 }, ...colNames.map(() => ({ wch: 18 }))];
     XLSX.utils.book_append_sheet(wb, wsEx, '考试成绩');
 
-    XLSX.writeFile(wb, `班级统计-${data.className || '班级'}-${data.academicYear || ''}.xlsx`);
+    const xlsx = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    await App.downloadBlob(`班级统计-${data.className || '班级'}-${data.academicYear || ''}.xlsx`, new Blob([xlsx], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
   }
 
   // ===== 视图注册 =====

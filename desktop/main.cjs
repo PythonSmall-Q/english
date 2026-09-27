@@ -1,9 +1,19 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
 const apiBase = process.env.WB_API_BASE || 'https://fff-api.xmoj-script.uk/api/v1';
 const frontendUpdateBase = process.env.WB_FRONTEND_UPDATE_BASE || 'https://fff.xmoj-script.uk';
+
+ipcMain.handle('save-file', async (_event, { filename, data }) => {
+  const result = await dialog.showSaveDialog({
+    defaultPath: filename,
+    title: '导出文件',
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  await fs.writeFile(result.filePath, Buffer.from(data));
+  return { canceled: false, filePath: result.filePath };
+});
 
 function isNewerVersion(remote, local) {
   const remoteParts = String(remote || '0').split('.').map(Number);

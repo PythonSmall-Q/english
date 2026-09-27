@@ -666,12 +666,7 @@ App.registerView('classes', {
         try {
           const data = await api.graduated.download(btn.dataset.gradDl);
           const blob = new Blob([JSON.stringify(data)], { type: 'application/json;charset=utf-8' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `毕业归档-${btn.dataset.gradName || '班级'}-${btn.dataset.gradYear || ''}.json`;
-          a.click();
-          setTimeout(() => URL.revokeObjectURL(url), 5000);
+          await App.downloadBlob(`毕业归档-${btn.dataset.gradName || '班级'}-${btn.dataset.gradYear || ''}.json`, blob);
           App.toast('毕业归档已开始下载');
         } catch (err) {
           if (err && err.code === 'GRAD_NOT_CONFIGURED') {

@@ -930,7 +930,7 @@ function bindDataManagement() {
   document.getElementById('export-backup')?.addEventListener('click', async () => {
     try {
       const data = await api.export.backup();
-      App.downloadJSON(`backup-${new Date().toISOString().slice(0, 10)}.json`, data);
+      await App.downloadJSON(`backup-${new Date().toISOString().slice(0, 10)}.json`, data);
       App.toast('已导出全部数据');
     } catch (e) {
       App.toast(e.message || '导出失败');
@@ -940,7 +940,7 @@ function bindDataManagement() {
   document.getElementById('export-students')?.addEventListener('click', async () => {
     try {
       const data = await api.export.students();
-      App.downloadJSON(`students-${new Date().toISOString().slice(0, 10)}.json`, data);
+      await App.downloadJSON(`students-${new Date().toISOString().slice(0, 10)}.json`, data);
       App.toast('已导出学生名单');
     } catch (e) {
       App.toast(e.message || '导出失败');
