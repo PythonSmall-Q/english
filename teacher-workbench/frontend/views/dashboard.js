@@ -117,7 +117,10 @@ App.registerView('dashboard', {
         </div>
       </div>`;
 
-    const downloadHtml = App.isStandaloneApp() ? '' : `
+    const standalone = typeof App.isStandaloneApp === 'function'
+      ? App.isStandaloneApp()
+      : Boolean(window.WB_RUNTIME || window.Capacitor?.isNativePlatform?.() || location.protocol === 'capacitor:');
+    const downloadHtml = standalone ? '' : `
       <div class="card">
         <div class="card-title">${I18n.t('downloadSoftware', '软件下载')}</div>
         <div class="muted" style="margin-bottom:12px">${I18n.t('downloadSoftwareHint', '选择对应设备版本，安装文件发布后即可下载')}</div>

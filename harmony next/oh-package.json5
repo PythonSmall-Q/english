@@ -1,0 +1,9 @@
+{
+  "modelVersion": "5.0.0",
+  "name": "english-teacher-workbench-harmony",
+  "version": "3.0.0",
+  "description": "HarmonyOS NEXT shell for English Teacher Workbench",
+  "dependencies": {
+    "@ohos/hvigor-ohos-plugin": "^2.4.2"
+  }
+}

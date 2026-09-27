@@ -84,7 +84,10 @@
   }
 
   App.checkForUpdates = async function ({ force = false } = {}) {
-    if (checked && !force || !App.isStandaloneApp()) return false;
+    const standalone = typeof App.isStandaloneApp === 'function'
+      ? App.isStandaloneApp()
+      : Boolean(window.WB_RUNTIME || window.Capacitor?.isNativePlatform?.() || location.protocol === 'capacitor:');
+    if (checked && !force || !standalone) return false;
     checked = true;
     const currentPlatform = platform();
     if (!currentPlatform) return false;

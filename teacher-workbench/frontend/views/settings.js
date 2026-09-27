@@ -128,7 +128,9 @@ App.registerView('settings', {
     const isAdmin = ['owner', 'admin'].includes(tenant.role);
     const planLabels = { trial: '3 天试用', free: '基础版', pro: '专业版', school: '学校版', custom: '定制版' };
     const canExportStudents = isAdmin || tenant.role === 'teacher';
-    const isStandalone = App.isStandaloneApp();
+    const isStandalone = typeof App.isStandaloneApp === 'function'
+      ? App.isStandaloneApp()
+      : Boolean(window.WB_RUNTIME || window.Capacitor?.isNativePlatform?.() || location.protocol === 'capacitor:');
     let appVersion = '—';
     if (isStandalone) {
       try { appVersion = await App.getCurrentAppVersion?.() || '—'; } catch (e) { /* 使用占位版本 */ }

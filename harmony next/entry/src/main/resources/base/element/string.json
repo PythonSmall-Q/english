@@ -1,0 +1,24 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "英语教师教学工作台"
+    },
+    {
+      "name": "module_desc",
+      "value": "英语教师教学工作台 HarmonyOS NEXT 应用"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "英语教师教学工作台入口"
+    },
+    {
+      "name": "web_load_failed",
+      "value": "工作台加载失败，请检查网络后重试"
+    },
+    {
+      "name": "retry",
+      "value": "重新加载"
+    }
+  ]
+}

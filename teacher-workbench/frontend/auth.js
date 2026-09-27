@@ -11,7 +11,9 @@
 App.showAuthScreen = function (mode = 'login') {
   const screen = document.getElementById('auth-screen');
   const AUTO_LOGIN_KEY = 'wb.app.auto_login';
-  const isStandaloneApp = App.isStandaloneApp();
+  const isStandaloneApp = typeof App.isStandaloneApp === 'function'
+    ? App.isStandaloneApp()
+    : Boolean(window.WB_RUNTIME || window.Capacitor?.isNativePlatform?.() || location.protocol === 'capacitor:');
   document.getElementById('app-frame').classList.add('hidden');
   screen.classList.remove('hidden');
   render(mode);

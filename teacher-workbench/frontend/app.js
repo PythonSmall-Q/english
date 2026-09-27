@@ -1023,7 +1023,10 @@ window.App = {
   _routeGuest() {
     const name = (location.hash || '').replace(/^#\/?/, '');
     if (!name || name === 'home') {
-      App.isStandaloneApp() ? App.showAuthScreen('login') : App.showLanding();
+      const standalone = typeof App.isStandaloneApp === 'function'
+        ? App.isStandaloneApp()
+        : Boolean(window.WB_RUNTIME || window.Capacitor?.isNativePlatform?.() || location.protocol === 'capacitor:');
+      standalone ? App.showAuthScreen('login') : App.showLanding();
     } else if (name === 'login') {
       App.showAuthScreen('login');
     } else if (name === 'register') {

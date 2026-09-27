@@ -8,6 +8,7 @@
 - 后端：`teacher-workbench/worker/`，Cloudflare Workers + Hono + D1 + R2。
 - 桌面端：`desktop/main.cjs`、`desktop/preload.cjs`，Electron。
 - Android：`android/`，Capacitor 7 + Gradle。
+- HarmonyOS NEXT：`harmony next/`，ArkTS/ArkUI WebView 壳层；需要 DevEco Studio 和 HarmonyOS SDK。
 - 数据库迁移：`teacher-workbench/worker/migrations/`。
 - 发布工作流：`.github/workflows/desktop-release.yml`。
 - 产品和部署文档：根目录设计文档、`teacher-workbench/README.md` 及 `teacher-workbench/docs/`。
@@ -154,6 +155,7 @@ R2 上的 `app-update.json` 控制安装包版本，包含：
 - 备份恢复会清空当前空间业务数据；涉及恢复、删除、回收站和租户归档的改动必须保留明确的二次确认和权限检查。
 - AI 密钥只允许服务端保存，不在前端明文回显，也不写入日志。
 - R2 上传、公开下载域名和 Worker CORS 配置变更后，必须验证权限边界和文件类型/大小限制。
+- HarmonyOS 签名证书、Profile、私钥和密码只允许保存在 DevEco 或 CI Secrets 中，不得提交到 `harmony next/`。
 
 ## 完成标准
 

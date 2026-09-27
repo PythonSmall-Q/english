@@ -76,6 +76,10 @@ npm run mobile:open       # 在 Android Studio 中打开
 npm run mobile:apk        # 生成 android/app/build/outputs/apk/release/app-release.apk
 ```
 
+HarmonyOS NEXT 壳层位于 `harmony next/`，使用 ArkTS/ArkUI WebView 复用线上前端。
+需要 DevEco Studio、HarmonyOS SDK、OHPM 和独立的 HAP/App 签名配置；HarmonyOS NEXT 不直接复用 Android APK。
+详细导入、构建和发布说明见 `harmony next/README.md`。
+
 ### GitHub Actions 桌面版发布
 
 工作流 `.github/workflows/desktop-release.yml` 支持手动触发，会在 Windows 和 macOS Runner
