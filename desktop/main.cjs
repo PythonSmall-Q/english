@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, dialog, ipcMain, Menu } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
@@ -70,9 +70,19 @@ async function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      devTools: !app.isPackaged,
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
+
+  if (app.isPackaged) {
+    window.webContents.on('before-input-event', (event, input) => {
+      const opensDevTools = input.key === 'F12' ||
+        (input.key.toLowerCase() === 'i' && input.control && input.shift) ||
+        (input.key.toLowerCase() === 'j' && input.control && input.shift);
+      if (opensDevTools) event.preventDefault();
+    });
+  }
 
   // file:// 页面属于不透明来源；放宽 API 会话 Cookie 的 SameSite 属性，保证登录后的 auth/me 能复用会话。
   const apiOrigin = new URL(apiBase).origin;
@@ -100,6 +110,8 @@ async function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // 生产包不显示 Electron 默认的 File/Edit/Window/Help 菜单。
+  if (app.isPackaged) Menu.setApplicationMenu(null);
   createWindow().catch((error) => console.error('[frontend-update] startup failed:', error));
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -5,6 +5,7 @@
   "author": "Shan Wenxiao",
   "description": "英语教师教学工作台的 Windows、macOS 与 Android 独立应用壳层",
   "main": "desktop/main.cjs",
+  "asar": true,
   "scripts": {
     "desktop:dev": "electron .",
     "desktop:dist": "electron-builder",
