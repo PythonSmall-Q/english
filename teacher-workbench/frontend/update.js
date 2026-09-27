@@ -1,6 +1,6 @@
 /* 独立 App 版本检查：统一读取在线 app-update.json。 */
 (function () {
-  const UPDATE_URL = 'https://fff.xmoj-script.uk/app-update.json';
+  const UPDATE_URL = 'https://fff-file-r2-cloudflare.xmoj-script.uk/app-update.json';
   let checked = false;
 
   function compareVersions(left, right) {
@@ -27,6 +27,8 @@
     const manifest = await response.json();
     return manifest.version || '0.0.0';
   }
+
+  App.getCurrentAppVersion = localVersion;
 
   function text(key, fallback) {
     return window.I18n?.t(key, fallback) || fallback;
@@ -81,11 +83,11 @@
     );
   }
 
-  App.checkForUpdates = async function () {
-    if (checked || !App.isStandaloneApp()) return;
+  App.checkForUpdates = async function ({ force = false } = {}) {
+    if (checked && !force || !App.isStandaloneApp()) return false;
     checked = true;
     const currentPlatform = platform();
-    if (!currentPlatform) return;
+    if (!currentPlatform) return false;
     try {
       const [remoteResponse, current] = await Promise.all([
         fetch(`${UPDATE_URL}?t=${Date.now()}`, { cache: 'no-store' }),
@@ -96,9 +98,12 @@
       const release = manifest.platforms?.[currentPlatform];
       if (release?.version && compareVersions(release.version, current) > 0 && release.url) {
         showUpdate(release, currentPlatform);
+        return true;
       }
+      return false;
     } catch (error) {
       console.warn('[app-update] skipped:', error.message);
+      return false;
     }
   };
 

@@ -128,10 +128,33 @@ App.registerView('settings', {
     const isAdmin = ['owner', 'admin'].includes(tenant.role);
     const planLabels = { trial: '3 天试用', free: '基础版', pro: '专业版', school: '学校版', custom: '定制版' };
     const canExportStudents = isAdmin || tenant.role === 'teacher';
+    const isStandalone = App.isStandaloneApp();
+    let appVersion = '—';
+    if (isStandalone) {
+      try { appVersion = await App.getCurrentAppVersion?.() || '—'; } catch (e) { /* 使用占位版本 */ }
+    }
     // 个人资料偏好允许存 localStorage（§52：UI 偏好）
     const prefs = JSON.parse(localStorage.getItem('profile_prefs') || '{}');
 
     el.innerHTML = `
+      ${isStandalone ? `
+      <div class="card app-version-card">
+        <div class="card-title">${I18n.t('appVersionLabel')}</div>
+        <div class="app-version-row">
+          <strong id="app-current-version">${App.esc(appVersion)}</strong>
+          <button class="btn btn-primary" id="check-app-update" type="button">${I18n.t('checkUpdate')}</button>
+        </div>
+      </div>` : `
+      <div class="card desktop-download-card">
+        <div class="card-title">${I18n.t('desktopDownloadTitle')}</div>
+        <div class="muted" style="margin-bottom:12px">${I18n.t('desktopDownloadHint')}</div>
+        <div class="form-row">
+          <a class="btn btn-primary" href="https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-windows.exe" download>${I18n.t('windows')} · ${I18n.t('download')}</a>
+          <a class="btn" href="https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-macos.dmg" download>${I18n.t('macos')} · ${I18n.t('download')}</a>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:10px">${I18n.t('macDesktopHint')}</div>
+      </div>`}
+
       <!-- 1. 个人资料 -->
       <div class="card">
         <div class="card-title">个人资料</div>
@@ -332,6 +355,18 @@ App.registerView('settings', {
     document.getElementById('ai-panel-platform')?.remove();
     bindDeviceMode();
     bindLocale();
+    const checkUpdateButton = document.getElementById('check-app-update');
+    checkUpdateButton?.addEventListener('click', async () => {
+      checkUpdateButton.disabled = true;
+      checkUpdateButton.textContent = I18n.t('updateChecking');
+      try {
+        const hasUpdate = await App.checkForUpdates({ force: true });
+        if (!hasUpdate) App.toast(I18n.t('latestVersion'));
+      } finally {
+        checkUpdateButton.disabled = false;
+        checkUpdateButton.textContent = I18n.t('checkUpdate');
+      }
+    });
     await renderSpace();
     await renderMyQuota();
     bindDataManagement();

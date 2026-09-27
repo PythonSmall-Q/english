@@ -189,6 +189,12 @@ Electron 启动时会检查 `https://fff.xmoj-script.uk/update-manifest.json`。
 发布前请更新 `frontend/update-manifest.json` 的 `version`，并确保 `files` 包含完整前端程序文件。
 该机制只更新 HTML/JS/CSS/静态资源，不覆盖登录信息、业务数据或用户设置。
 
+GitHub Actions 的 `Desktop Release` 工作流在创建 Release 后会自动把 Windows 安装包、macOS DMG、Android APK
+和动态生成的 `app-update.json` 上传到 R2。工作流需要配置仓库 Secrets：`CLOUDFLARE_API_TOKEN`
+（需要 R2 写入权限）和 `CLOUDFLARE_ACCOUNT_ID`。手动运行工作流时，`force_update=true` 会让客户端强制升级。
+安装包统一使用 `teacher-workbench-windows.exe`、`teacher-workbench-macos.dmg`、`teacher-workbench-android.apk`
+三个 R2 对象名；版本号从 Release tag（如 `v3.0.1`）自动去掉 `v` 得到。
+
 ## R2 文件存储
 
 文件上传已接入 R2（§44-46）：Worker 经 `FILES` binding 直写 bucket `fff`，
