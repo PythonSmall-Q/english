@@ -82,6 +82,16 @@ window.App = {
   /** §66 页面状态 */
   state: { user: null, tenants: [], tenant: null, quota: null, view: null, academicYear: null, currentAcademicYear: null, academicYears: [], viewAs: null },
 
+  /** 判断当前是否运行在 Electron / Capacitor 独立 App 中。 */
+  isStandaloneApp() {
+    return Boolean(
+      window.WB_RUNTIME ||
+        window.Capacitor?.isNativePlatform?.() ||
+        location.protocol === 'capacitor:' ||
+        (location.protocol === 'https:' && location.hostname === 'localhost' && !location.port)
+    );
+  },
+
   _pendingSelectRender: null,
   _selectRenderGuardBound: false,
 
@@ -1006,7 +1016,7 @@ window.App = {
   _routeGuest() {
     const name = (location.hash || '').replace(/^#\/?/, '');
     if (!name || name === 'home') {
-      App.showLanding();
+      App.isStandaloneApp() ? App.showAuthScreen('login') : App.showLanding();
     } else if (name === 'login') {
       App.showAuthScreen('login');
     } else if (name === 'register') {
