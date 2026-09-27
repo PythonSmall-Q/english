@@ -229,7 +229,9 @@ Electron 启动时会检查 `https://fff.xmoj-script.uk/update-manifest.json`。
 该机制只更新 HTML/JS/CSS/静态资源，不覆盖登录信息、业务数据或用户设置。
 
 GitHub Actions 的 `Desktop Release` 工作流在创建 Release 后会自动把 Windows 安装包、macOS DMG、Android APK
-和动态生成的 `app-update.json` 上传到 R2。工作流需要配置仓库 Secrets：`CLOUDFLARE_API_TOKEN`
+和动态生成的 `app-update.json` 上传到 R2，并将 `teacher-workbench/frontend/` 自动部署到 Cloudflare Pages。
+Pages 部署只使用前端目录，不会把 `.exe`、`.apk`、`.dmg` 或 `dist/` 中的其他安装包上传到 Pages。
+工作流需要配置仓库 Secrets：`CLOUDFLARE_API_TOKEN`
 （需要 R2 写入权限）和 `CLOUDFLARE_ACCOUNT_ID`。手动运行工作流时，`force_update=true` 会让客户端强制升级。
 安装包统一使用 `teacher-workbench-windows.exe`、`teacher-workbench-macos.dmg`、`teacher-workbench-android.apk`
 三个 R2 对象名；版本号从 Release tag（如 `v3.0.1`）自动去掉 `v` 得到。

@@ -118,6 +118,7 @@ R2 上的 `app-update.json` 控制安装包版本，包含：
 - Ubuntu Runner 构建签名 Android APK。
 - 创建 GitHub Release。
 - 将稳定安装包和动态生成的 `app-update.json` 上传到 R2。
+- 将 `teacher-workbench/frontend/` 单独部署到 Cloudflare Pages，部署根目录不包含 `dist/` 安装包。
 
 工作流需要以下 Secrets：
 
@@ -128,7 +129,9 @@ R2 上的 `app-update.json` 控制安装包版本，包含：
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
 
-重要：当前工作流会自动发布安装包和 R2 的 `app-update.json`，但不会自动把 `frontend/update-manifest.json` 或完整前端目录部署到 Cloudflare Pages。前端资源发布必须单独部署 Pages，或者先补充专门的 Pages 部署步骤；不能仅创建 GitHub Release 就认为 APK/Electron 会拿到最新前端。
+重要：当前工作流会自动发布安装包、R2 的 `app-update.json` 和 Pages 前端资源。Pages 步骤只部署
+`teacher-workbench/frontend/`，不会上传 `dist/` 中的 `.exe`、`.apk`、`.dmg` 或其他安装包；发布前仍必须递增
+`frontend/update-manifest.json` 的 `version` 并确认 `files` 完整。
 
 ### 发布后
 
