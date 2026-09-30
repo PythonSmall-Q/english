@@ -217,6 +217,7 @@ App.registerView('admin', {
 
       const details = document.createElement('details');
       details.className = 'admin-section';
+      if (card.classList.contains('hidden')) details.classList.add('hidden');
       const summary = document.createElement('summary');
       summary.className = 'admin-section-summary';
       summary.textContent = title.textContent.trim();
