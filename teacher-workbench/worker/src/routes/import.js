@@ -15,6 +15,25 @@ import { checkQuota } from '../quota.js';
 
 const app = new Hono();
 
+async function batchInChunks(db, statements, label) {
+  const chunkSize = 1000;
+  for (let offset = 0; offset < statements.length; offset += chunkSize) {
+    const chunk = statements.slice(offset, offset + chunkSize);
+    let lastError;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await db.batch(chunk);
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 200));
+      }
+    }
+    if (lastError) throw new ApiError('IMPORT_FAILED', `${label}第 ${Math.floor(offset / chunkSize) + 1} 批写入失败，请稍后重试`);
+  }
+}
+
 /**
  * 在 tenant 内按班级名称匹配班级整行（§48），未匹配返回 null
  * 仅取 id / teacher_id / grade_group_id（导入权限判定用）
@@ -218,6 +237,7 @@ app.post('/restore', requireAuth, requireTenant, requireRole(['admin']), async (
     ['exam_scores', 'scores'],
     ['exam_subscores', 'subscores'],
   ];
+  const backupRows = TABLES.reduce((total, [, key]) => total + (Array.isArray(body[key]) ? body[key].length : 0), 0);
 
   // 第 1 步：删除当前 tenant 全部业务数据（不动成员/配额/邀请/AI/审计）
   const deletes = [...TABLES].reverse().map(([table]) =>
@@ -252,17 +272,9 @@ app.post('/restore', requireAuth, requireTenant, requireRole(['admin']), async (
     }
   }
 
-  // 删除 + 插入一次性 batch（D1 batch 具有事务性，单批上限 1000 条语句；
-  // 超过上限时分块提交，此时不再保证整体原子性，README 已注明该限制）
-  const CHUNK = 1000;
+  // 删除与插入按 D1 单批上限分块；临时失败的批次自动重试。
   const all = [...deletes, ...inserts];
-  if (all.length <= CHUNK) {
-    await db.batch(all);
-  } else {
-    for (let i = 0; i < all.length; i += CHUNK) {
-      await db.batch(all.slice(i, i + CHUNK));
-    }
-  }
+  await batchInChunks(db, all, '恢复');
 
   const restored = Object.values(counts).reduce((a, b) => a + b, 0);
   await audit(db, tenantId, user.id, 'restore', 'tenant', tenantId, { counts, restored });

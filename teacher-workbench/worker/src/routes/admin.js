@@ -19,6 +19,25 @@ import { CF_MODELS, parseCfAiSetting } from '../cfai.js';
 
 const app = new Hono();
 
+async function batchInChunks(db, statements, label) {
+  const chunkSize = 1000;
+  for (let offset = 0; offset < statements.length; offset += chunkSize) {
+    const chunk = statements.slice(offset, offset + chunkSize);
+    let lastError;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await db.batch(chunk);
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 200));
+      }
+    }
+    if (lastError) throw new ApiError('IMPORT_FAILED', `${label}第 ${Math.floor(offset / chunkSize) + 1} 批写入失败，请稍后重试`);
+  }
+}
+
 /** 平台管理员校验（§72） */
 function requirePlatformAdmin(c) {
   const user = c.get('user');
@@ -408,7 +427,7 @@ app.post('/rollover', requireAuth, async (c) => {
  *
  * backup 为「导出全部数据」version 3 备份 JSON；backup.tenant 块仅参考，不校验不沿用。
  * 覆盖式：清空目标租户 11 张业务表后按备份行原样插入（tenant_id 强制改写为目标租户）。
- * 先删后插、CHUNK=1000 分块的写入逻辑与 import/restore（§51）一致；
+ * 写入前检查 D1 batch 的 1000 条语句上限，与 import/restore（§51）一致；
  * 删除语句只删 11 张业务表，绝不动 tenants/memberships/tenant_quotas/invitations/files 等。
  * 成功：{ tenant_id, tenant_name, restored, counts }；audit 写在目标租户（action '平台迁入'）。
  */
@@ -426,6 +445,7 @@ app.post('/migrate', requireAuth, async (c) => {
   if (backup.version !== 3) {
     throw new ApiError('VALIDATION_ERROR', `不支持的备份版本：${backup.version}（当前仅支持 version=3）`);
   }
+  const mode = body.mode === 'merge' ? 'merge' : 'replace';
 
   // 目标二选一
   const hasTargetId =
@@ -535,7 +555,6 @@ app.post('/migrate', requireAuth, async (c) => {
   );
 
   // 模式：replace（覆盖，缺省）= 清空后写入；merge（增量）= 不动现有数据，按真实 id 匹配合并
-  const mode = body.mode === 'merge' ? 'merge' : 'replace';
 
   // ===== merge 模式：先建立 班级/学生/老师 的真实 id 映射 =====
   // 班级按 (name, academic_year) 匹配；学生按 tenant 内 student_no 匹配（无学号按 name+class_id）；
@@ -577,6 +596,24 @@ app.post('/migrate', requireAuth, async (c) => {
       if (real) {
         studentIdMap.set(row.id, real);
         matched.students++;
+      }
+    }
+
+    // 未匹配行不能用 INSERT OR REPLACE 覆盖目标空间中无关的同 ID 记录。
+    const [existingClasses, existingStudents] = await Promise.all([
+      db.prepare('SELECT id FROM classes WHERE tenant_id = ?').bind(tenantId).all(),
+      db.prepare('SELECT id FROM students WHERE tenant_id = ?').bind(tenantId).all(),
+    ]);
+    const existingClassIds = new Set(existingClasses.results.map((row) => row.id));
+    const existingStudentIds = new Set(existingStudents.results.map((row) => row.id));
+    for (const row of backup.classes || []) {
+      if (row?.id && existingClassIds.has(row.id) && !classIdMap.has(row.id)) {
+        throw new ApiError('CONFLICT', `班级备份 ID ${row.id} 已被目标空间其他记录占用，已拒绝覆盖`);
+      }
+    }
+    for (const row of backup.students || []) {
+      if (row?.id && existingStudentIds.has(row.id) && !studentIdMap.has(row.id)) {
+        throw new ApiError('CONFLICT', `学生备份 ID ${row.id} 已被目标空间其他记录占用，已拒绝覆盖`);
       }
     }
   }
@@ -628,22 +665,12 @@ app.post('/migrate', requireAuth, async (c) => {
     }
   }
 
-  // replace：删除 + 插入一次性 batch（D1 batch 具有事务性，单批上限 1000 条语句；
-  // 超过上限时分块提交，此时不再保证整体原子性，README 已注明该限制）
-  const CHUNK = 1000;
+  // 按 D1 单批上限分块；临时失败的批次自动重试。
   if (mode === 'merge') {
-    for (let i = 0; i < inserts.length; i += CHUNK) {
-      await db.batch(inserts.slice(i, i + CHUNK));
-    }
+    await batchInChunks(db, inserts, '迁入');
   } else {
     const all = [...deletes, ...inserts];
-    if (all.length <= CHUNK) {
-      await db.batch(all);
-    } else {
-      for (let i = 0; i < all.length; i += CHUNK) {
-        await db.batch(all.slice(i, i + CHUNK));
-      }
-    }
+    await batchInChunks(db, all, '迁入');
   }
 
   const restored = Object.values(counts).reduce((a, b) => a + b, 0);

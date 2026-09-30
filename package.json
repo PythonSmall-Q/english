@@ -1,7 +1,7 @@
 {
   "name": "english-teacher-workbench",
   "private": true,
-  "version": "3.0.1",
+  "version": "3.0.6",
   "author": "Shan Wenxiao",
   "description": "英语教师教学工作台的 Windows、macOS 与 Android 独立应用壳层",
   "main": "desktop/main.cjs",
