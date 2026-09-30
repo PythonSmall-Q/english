@@ -44,7 +44,17 @@
     return manifest.version || '0.0.0';
   }
 
-  App.getCurrentAppVersion = localVersion;
+  async function onlineVersion() {
+    const currentPlatform = platform();
+    if (!currentPlatform) return '0.0.0';
+    const response = await fetch(`${UPDATE_URL}?version=${Date.now()}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const manifest = await response.json();
+    return manifest.platforms?.[currentPlatform]?.version || manifest.version || '0.0.0';
+  }
+
+  // 设置页显示线上发布清单版本；更新检查仍使用 localVersion() 判断本机是否需要升级。
+  App.getCurrentAppVersion = onlineVersion;
 
   async function updateAndroidFrontend() {
     if (!navigator.serviceWorker) return false;

@@ -131,6 +131,7 @@ App.registerView('settings', {
     const isStandalone = typeof App.isStandaloneApp === 'function'
       ? App.isStandaloneApp()
       : Boolean(window.WB_RUNTIME || window.Capacitor?.isNativePlatform?.() || location.protocol === 'capacitor:');
+    const isAndroid = typeof App.isAndroidApp === 'function' ? App.isAndroidApp() : false;
     let appVersion = '—';
     if (isStandalone) {
       try { appVersion = await App.getCurrentAppVersion?.() || '—'; } catch (e) { /* 使用占位版本 */ }
@@ -275,6 +276,7 @@ App.registerView('settings', {
           </div>
           <div class="muted" style="font-size:12.5px;padding-bottom:8px">平板模式字体与按钮更大、间距更宽，适合触控；仅保存在本设备</div>
         </div>
+        ${isAndroid ? `
         <div class="form-row" style="align-items:flex-end;margin-top:10px">
           <div>
             <label class="form-label">屏幕方向（APK）</label>
@@ -284,7 +286,7 @@ App.registerView('settings', {
             </select>
           </div>
           <div class="muted" style="font-size:12.5px;padding-bottom:8px">APK 中立即生效；浏览器由系统决定方向</div>
-        </div>
+        </div>` : ''}
         <div class="form-row" style="align-items:flex-end;margin-top:10px">
           <div>
             <label class="form-label">界面语言</label>
