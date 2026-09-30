@@ -277,6 +277,16 @@ App.registerView('settings', {
         </div>
         <div class="form-row" style="align-items:flex-end;margin-top:10px">
           <div>
+            <label class="form-label">屏幕方向（APK）</label>
+            <select class="form-input" id="pref-screen-orientation" style="min-width:200px">
+              <option value="landscape">横屏（平板布局）</option>
+              <option value="portrait">竖屏（移动布局）</option>
+            </select>
+          </div>
+          <div class="muted" style="font-size:12.5px;padding-bottom:8px">APK 中立即生效；浏览器由系统决定方向</div>
+        </div>
+        <div class="form-row" style="align-items:flex-end;margin-top:10px">
+          <div>
             <label class="form-label">界面语言</label>
             <select class="form-input" id="pref-locale" style="min-width:200px">
               <option value="zh-CN">简体中文</option>
@@ -288,8 +298,8 @@ App.registerView('settings', {
         </div>
       </div>
 
-      <!-- 6. AI 助手设置（§41-43：服务方式三选一，own/platform 存数据库，cloudflare 走平台 Workers AI 按 credit 计费） -->
-      <div class="card" id="ai-settings-card">
+      <!-- 6. AI 助手设置（§41-43：服务方式三选一，own/platform 存数据库，cloudflare 走平台 Workers AI 按 credit 计费）；AI 入口暂时隐藏（接口已禁用），代码保留不删 -->
+      <div class="card hidden" id="ai-settings-card">
         <div class="card-title">AI 助手设置</div>
         <div id="ai-settings-status" class="muted" style="margin-bottom:10px">加载中…</div>
         <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:12px">
@@ -528,6 +538,15 @@ function bindDeviceMode() {
     App.applyDeviceMode(mode);
     App.toast(mode === 'tablet' ? '已切换为平板模式' : '已切换为电脑模式');
   });
+  const orientation = document.getElementById('pref-screen-orientation');
+  if (orientation) {
+    orientation.value = App.currentOrientation() || (App.currentDeviceMode() === 'tablet' ? 'landscape' : 'portrait');
+    orientation.addEventListener('change', () => {
+      localStorage.setItem(App.ORIENTATION_KEY, orientation.value);
+      App.applyOrientation(orientation.value);
+      App.toast(orientation.value === 'landscape' ? '已切换为横屏' : '已切换为竖屏');
+    });
+  }
 }
 
 /** 全局界面语言：语言选择保存在本机，重载后统一应用到主框架。 */

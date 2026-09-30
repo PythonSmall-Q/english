@@ -4,13 +4,14 @@
  * 约定：
  * - 未认证时由 App.boot() 调用 App.showAuthScreen(mode) 渲染到 #auth-screen
  * - 登录/注册成功后重新走 App.boot() 流程进入主框架
- * - 密码不存 localStorage（§85）；会话由后端 HttpOnly Cookie 维护
+ * - 已记住账号保存在本机 localStorage；会话仍由后端 HttpOnly Cookie 维护
  */
 
 /** 渲染登录/注册屏（含表单切换） */
 App.showAuthScreen = function (mode = 'login') {
   const screen = document.getElementById('auth-screen');
   const AUTO_LOGIN_KEY = 'wb.app.auto_login';
+  const ACCOUNTS_KEY = 'wb.app.accounts';
   const isStandaloneApp = typeof App.isStandaloneApp === 'function'
     ? App.isStandaloneApp()
     : Boolean(window.WB_RUNTIME || window.Capacitor?.isNativePlatform?.() || location.protocol === 'capacitor:');
@@ -18,8 +19,24 @@ App.showAuthScreen = function (mode = 'login') {
   screen.classList.remove('hidden');
   render(mode);
 
+  function getAccounts() {
+    try {
+      const list = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || '[]');
+      return Array.isArray(list) ? list.filter((item) => item?.email && item?.password) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function rememberAccount(account) {
+    const accounts = getAccounts().filter((item) => item.email.toLowerCase() !== account.email.toLowerCase());
+    accounts.unshift(account);
+    localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts.slice(0, 8)));
+  }
+
   function render(current) {
     const isLogin = current === 'login';
+    const accounts = isLogin ? getAccounts() : [];
     screen.innerHTML = `
       <div class="auth-card card">
         <div class="auth-logo">英语教师教学工作台</div>
@@ -38,6 +55,7 @@ App.showAuthScreen = function (mode = 'login') {
           <div class="auth-error hidden" id="auth-error"></div>
           <button class="btn btn-primary btn-block" type="submit">${isLogin ? '登录' : '注册并进入'}</button>
         </form>
+        ${accounts.length ? `<div class="muted" style="margin-top:18px;font-size:13px">已记住的账号</div><div class="auth-accounts">${accounts.map((item, index) => `<button type="button" class="btn auth-account" data-account-index="${index}">${App.esc(item.email)}</button>`).join('')}</div>` : ''}
       </div>`;
 
     window.I18n?.apply(screen);
@@ -56,6 +74,16 @@ App.showAuthScreen = function (mode = 'login') {
 
     screen.querySelectorAll('.auth-tab').forEach((tab) => {
       tab.addEventListener('click', () => render(tab.dataset.mode));
+    });
+
+    screen.querySelectorAll('[data-account-index]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const account = accounts[Number(button.dataset.accountIndex)];
+        if (!account) return;
+        document.getElementById('auth-email').value = account.email;
+        document.getElementById('auth-password').value = account.password;
+        document.getElementById('auth-form').requestSubmit();
+      });
     });
 
     document.getElementById('auth-form').addEventListener('submit', async (e) => {
@@ -79,16 +107,19 @@ App.showAuthScreen = function (mode = 'login') {
         } else {
           await api.auth.register(body);
         }
-        if (isStandaloneApp) {
-          localStorage.setItem(AUTO_LOGIN_KEY, JSON.stringify({ email: body.email, password: body.password }));
-        }
+        rememberAccount({ email: body.email, password: body.password });
+        if (isStandaloneApp) localStorage.setItem(AUTO_LOGIN_KEY, JSON.stringify({ email: body.email, password: body.password }));
         // 登录成功后统一回到工作台首页，避免沿用登录前残留的 hash 或 redirect。
         sessionStorage.removeItem('wb.redirect');
         history.replaceState(null, '', '#/dashboard');
         // 成功：重新走启动流程（加载租户并进入主框架）
         await App.boot();
       } catch (err) {
-        if (isStandaloneApp && isLogin) localStorage.removeItem(AUTO_LOGIN_KEY);
+        if (isLogin) {
+          localStorage.removeItem(AUTO_LOGIN_KEY);
+          const accountsAfterFailure = getAccounts().filter((item) => item.email.toLowerCase() !== body.email.toLowerCase());
+          localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accountsAfterFailure));
+        }
         errEl.textContent = (err && err.message) || '操作失败，请重试';
         errEl.classList.remove('hidden');
       } finally {

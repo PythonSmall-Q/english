@@ -206,6 +206,7 @@ CREATE TABLE exams (
     tenant_id TEXT NOT NULL,
     name TEXT NOT NULL,
     subject TEXT,
+    total_score REAL,
     exam_date TEXT,
     paper_url TEXT,
     academic_year TEXT,

@@ -769,7 +769,8 @@ App.registerView('lessons', {
       <textarea class="form-input" id="lsn-f-obj" placeholder="如：学生能够掌握本单元核心词汇与阅读策略">${App.esc(lesson?.objective || '')}</textarea>
       <div class="lsn-f-content-head">
         <label class="form-label">教案正文</label>
-        <button class="btn btn-sm" type="button" id="lsn-f-ai">✨ AI 起草</button>
+        <!-- AI 入口暂时隐藏（接口已禁用），代码保留不删 -->
+        <button class="btn btn-sm hidden" type="button" id="lsn-f-ai">✨ AI 起草</button>
       </div>
       <div id="lsn-f-content-holder"><div class="lsn-vditor-loading">编辑器加载中…</div></div>
       <div class="modal-actions">

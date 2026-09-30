@@ -1375,6 +1375,12 @@ input[type='checkbox']:disabled {
   cursor: not-allowed;
 }
 
+/* 登记列表保持左侧布局，勾选后仅将滑块轨道显示为绿色。 */
+.asg-check-row input[type='checkbox']:checked,
+.dct-check-row input[type='checkbox']:checked {
+  background: #16a34a;
+}
+
 /* ===== 设备模式：平板模式（大字体大按钮，适合触控） ===== */
 html[data-device='tablet'] {
   font-size: 17px;

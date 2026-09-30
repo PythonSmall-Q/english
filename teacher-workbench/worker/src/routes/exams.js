@@ -106,7 +106,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
 
 /**
  * POST /api/v1/exams — 新建考试（§36，需 exams 配额）
- * body: { name(必填), subject?, exam_date?, scope?: 'class'|'grade', class_id? }
+ * body: { name(必填), subject?, total_score?, exam_date?, scope?: 'class'|'grade', class_id? }
  * scope 缺省：有 class_id 视为 'class'，否则 'grade'。
  * 班级考试：创建者须可管理该班；全年段考试：owner/admin、本租户任意年级组组长或备课组长。
  */
@@ -119,6 +119,10 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeach
   const name = String(body.name || '').trim();
   if (!name) throw new ApiError('VALIDATION_ERROR', '考试名称不能为空');
   const subject = body.subject ? String(body.subject).trim() : null;
+  const totalScore = body.total_score === null || body.total_score === '' || body.total_score === undefined ? null : Number(body.total_score);
+  if (totalScore !== null && (!Number.isFinite(totalScore) || totalScore <= 0)) {
+    throw new ApiError('VALIDATION_ERROR', '考试总分必须是大于 0 的数字');
+  }
   const examDate = body.exam_date ? String(body.exam_date).trim() : null;
 
   let scope = body.scope !== undefined && body.scope !== null ? String(body.scope).trim() : '';
@@ -144,10 +148,10 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeach
   const id = newId();
   await db
     .prepare(
-      `INSERT INTO exams (id, tenant_id, name, subject, exam_date, academic_year, scope, class_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO exams (id, tenant_id, name, subject, total_score, exam_date, academic_year, scope, class_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(id, tenantId, name, subject, examDate, currentAcademicYear(), scope, classId, now())
+     .bind(id, tenantId, name, subject, totalScore, examDate, currentAcademicYear(), scope, classId, now())
     .run();
   await audit(db, tenantId, user.id, 'create_exam', '考试', id, { name, scope });
   const exam = await getExam(db, tenantId, id);
@@ -243,7 +247,7 @@ app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) =
 });
 
 /**
- * PUT /api/v1/exams/:id — 编辑考试（name/subject/exam_date/paper_url）
+ * PUT /api/v1/exams/:id — 编辑考试（name/subject/total_score/exam_date/paper_url）
  */
 app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
   const db = c.get('tenantDb') || c.env.DB;
@@ -263,12 +267,16 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
   const name = body.name !== undefined ? String(body.name).trim() : exam.name;
   if (!name) throw new ApiError('VALIDATION_ERROR', '考试名称不能为空');
   const subject = body.subject !== undefined ? String(body.subject).trim() : exam.subject;
+  const totalScore = body.total_score === null || body.total_score === '' || body.total_score === undefined ? exam.total_score : Number(body.total_score);
+  if (totalScore !== null && (!Number.isFinite(totalScore) || totalScore <= 0)) {
+    throw new ApiError('VALIDATION_ERROR', '考试总分必须是大于 0 的数字');
+  }
   const examDate = body.exam_date !== undefined ? String(body.exam_date).trim() : exam.exam_date;
   const paperUrl = body.paper_url !== undefined ? String(body.paper_url).trim() : exam.paper_url;
 
   await db
-    .prepare('UPDATE exams SET name = ?, subject = ?, exam_date = ?, paper_url = ? WHERE tenant_id = ? AND id = ?')
-    .bind(name, subject, examDate, paperUrl, tenantId, exam.id)
+    .prepare('UPDATE exams SET name = ?, subject = ?, total_score = ?, exam_date = ?, paper_url = ? WHERE tenant_id = ? AND id = ?')
+    .bind(name, subject, totalScore, examDate, paperUrl, tenantId, exam.id)
     .run();
   await audit(db, tenantId, user.id, 'update_exam', '考试', exam.id, { name });
   return c.json({ success: true, data: await getExam(db, tenantId, exam.id) });
@@ -279,6 +287,8 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
  * 取已录总分的最高分与小分满分按学生加总后的最高值；都没有则返回 null（不校验上限）。
  */
 async function examFullScore(db, tenantId, examId) {
+  const exam = await db.prepare('SELECT total_score FROM exams WHERE tenant_id = ? AND id = ?').bind(tenantId, examId).first();
+  if (exam?.total_score !== null && exam?.total_score !== undefined) return Number(exam.total_score);
   const r1 = await db
     .prepare('SELECT MAX(score) AS m FROM exam_scores WHERE tenant_id = ? AND exam_id = ?')
     .bind(tenantId, examId)
@@ -472,6 +482,7 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
   let failed = 0;
   const unmatched = [];
   const ts = now();
+  const fullScore = exam.total_score !== null && exam.total_score !== undefined ? Number(exam.total_score) : null;
 
   for (const row of body.rows) {
     const student = matchStudent(row, byNo, byNameClass);
@@ -494,6 +505,11 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
     const score = rawScore === '' || rawScore == null ? NaN : Number(rawScore);
     if (!Number.isFinite(score)) {
       failed++;
+      continue;
+    }
+    if (type === 'scores' && fullScore !== null && score > fullScore) {
+      failed++;
+      unmatched.push({ row, reason: `成绩不能超过考试总分 ${fullScore}` });
       continue;
     }
 
@@ -750,6 +766,9 @@ app.put('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['te
     throw new ApiError('VALIDATION_ERROR', 'score 必须为有限数字');
   }
   const score = body.score;
+  if (exam.total_score !== null && exam.total_score !== undefined && score > Number(exam.total_score)) {
+    throw new ApiError('VALIDATION_ERROR', `成绩不能超过考试总分 ${exam.total_score}`);
+  }
 
   const student = await db
     .prepare('SELECT id, name, class_id FROM students WHERE id = ? AND tenant_id = ?')

@@ -233,11 +233,11 @@
       y += sec.h + SECTION_GAP;
     });
 
-    // —— 底部 ——
+    // —— 底部（统一显示北京时间 UTC+8，避免设备时区不同导致时间戳不一致）——
     ctx.fillStyle = '#98a2ba';
     ctx.font = `13px ${FONT}`;
     ctx.textAlign = 'center';
-    ctx.fillText(`${I18n.formatNumber(total)} ${I18n.t('clsCanvasUnit')} ${I18n.t('clsCanvasPending')} · ${I18n.t('clsCanvasGeneratedAt')} ${I18n.formatDate(new Date(), { dateStyle: 'short', timeStyle: 'short' })}`, W / 2, totalH - PAD + 4);
+    ctx.fillText(`${I18n.formatNumber(total)} ${I18n.t('clsCanvasUnit')} ${I18n.t('clsCanvasPending')} · ${I18n.t('clsCanvasGeneratedAt')} ${formatBeijingTime(new Date())}`, W / 2, totalH - PAD + 4);
     ctx.textAlign = 'left';
 
     canvas.toBlob((blob) => {
@@ -257,6 +257,20 @@
   /** 文件名安全化 */
   function safeFilename(name) {
     return String(name || '').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 80) || '未重默名单';
+  }
+
+  /** 固定按北京时间（UTC+8）格式化，与导出设备本地时区无关 */
+  function formatBeijingTime(date) {
+    try {
+      return new Intl.DateTimeFormat(I18n.locale || 'zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+      }).format(date);
+    } catch (e) {
+      // Intl 不支持 timeZone 时退回手动偏移（UTC+8）
+      const t = new Date(date.getTime() + 8 * 3600 * 1000);
+      return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')} ${String(t.getUTCHours()).padStart(2, '0')}:${String(t.getUTCMinutes()).padStart(2, '0')}`;
+    }
   }
 
   /** 该默写适用的学生名单：班级默写取本班；全年段只取当前用户可管理班级的学生；豁免生不参与登记 */
@@ -671,6 +685,10 @@
       `重默·${clsName} — 勾选「已重默」`,
       `
         <div class="muted" style="margin-bottom:8px">共 ${rows.length} 名学生待重默，勾选已完成重默的学生后提交。</div>
+        <div class="dct-quick">
+          <button class="btn btn-sm" id="dct-t-all" type="button">全部已重默</button>
+          <button class="btn btn-sm" id="dct-t-none" type="button">全部未重默</button>
+        </div>
         <div class="dct-check-list" id="dct-t-list">${checkRows}</div>
         <div class="modal-actions">
           <button class="btn" id="dct-t-export" type="button">导出名单</button>
@@ -679,6 +697,13 @@
         </div>`,
       (modal) => {
         modal.querySelector('#dct-t-cancel').onclick = App.closeModal;
+        // 还原部署包原版「全部已重默 / 全部未重默」批量勾选交互
+        modal.querySelector('#dct-t-all').onclick = () => {
+          modal.querySelectorAll('#dct-t-list input[type=checkbox]').forEach((cb) => { cb.checked = true; });
+        };
+        modal.querySelector('#dct-t-none').onclick = () => {
+          modal.querySelectorAll('#dct-t-list input[type=checkbox]').forEach((cb) => { cb.checked = false; });
+        };
         modal.querySelector('#dct-t-export').onclick = () => {
           // 按默写项目分组（保持出现顺序），组内按学号排序
           const order = [];

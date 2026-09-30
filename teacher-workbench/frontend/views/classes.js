@@ -685,13 +685,25 @@ App.registerView('classes', {
   /** 新建/编辑班级 modal（cls 为 null 表示新建） */
   openForm(cls) {
     const isEdit = !!cls;
+    // 年级组下拉候选：取现有班级里已出现过的 grade 取值去重排序，避免自由文本误输入/误删
+    const gradeOptions = [...new Set(clsClasses.map((c) => (c.grade || '').trim()).filter(Boolean))].sort((a, b) =>
+      a.localeCompare(b, 'zh-CN')
+    );
+    const currentGrade = (cls?.grade || '').trim();
+    if (currentGrade && !gradeOptions.includes(currentGrade)) gradeOptions.push(currentGrade);
+    const CUSTOM_VALUE = '__custom__';
     App.modal(
       isEdit ? I18n.t('clsEdit') : I18n.t('clsNewClass'),
       `
       <label class="form-label" for="cls-f-name">${I18n.t('clsClassName')}</label>
       <input class="form-input" id="cls-f-name" type="text" placeholder="${I18n.t('clsNamePlaceholder')}" value="${App.esc(cls?.name || '')}">
       <label class="form-label" for="cls-f-grade">${I18n.t('clsGradeGroup')}</label>
-      <input class="form-input" id="cls-f-grade" type="text" placeholder="${I18n.t('clsGradePlaceholder')}" value="${App.esc(cls?.grade || '')}">
+      <select class="form-input" id="cls-f-grade">
+        <option value="">${I18n.t('clsGradeNotSet')}</option>
+        ${gradeOptions.map((g) => `<option value="${App.esc(g)}" ${g === currentGrade ? 'selected' : ''}>${App.esc(g)}</option>`).join('')}
+        <option value="${CUSTOM_VALUE}">${I18n.t('clsGradeCustom')}</option>
+      </select>
+      <input class="form-input hidden" id="cls-f-grade-custom" type="text" style="margin-top:8px" placeholder="${I18n.t('clsGradePlaceholder')}">
       <label class="form-label" for="cls-f-grad-year">${I18n.t('clsGradYear')} ${I18n.t('clsOptional')}</label>
       <input class="form-input" id="cls-f-grad-year" type="number" min="2000" max="2100" placeholder="${I18n.t('clsGradYearPlaceholder')}" value="${
         cls?.graduation_year != null ? App.esc(cls.graduation_year) : ''
@@ -702,6 +714,11 @@ App.registerView('classes', {
         <button class="btn btn-primary" type="button" id="cls-f-save">${isEdit ? I18n.t('clsSave') : I18n.t('clsCreate')}</button>
       </div>`,
       () => {
+        const gradeSel = document.getElementById('cls-f-grade');
+        const gradeCustom = document.getElementById('cls-f-grade-custom');
+        const syncCustomVisibility = () => gradeCustom.classList.toggle('hidden', gradeSel.value !== CUSTOM_VALUE);
+        gradeSel.addEventListener('change', syncCustomVisibility);
+        syncCustomVisibility();
         document.getElementById('cls-f-cancel').onclick = () => App.closeModal();
         document.getElementById('cls-f-save').onclick = async () => {
           const name = document.getElementById('cls-f-name').value.trim();
@@ -719,9 +736,10 @@ App.registerView('classes', {
             }
             graduation_year = gy;
           }
+          const grade = gradeSel.value === CUSTOM_VALUE ? gradeCustom.value.trim() : gradeSel.value.trim();
           const body = {
             name,
-            grade: document.getElementById('cls-f-grade').value.trim() || null,
+            grade: grade || null,
             graduation_year,
           };
           const saveBtn = document.getElementById('cls-f-save');

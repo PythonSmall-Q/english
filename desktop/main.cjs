@@ -4,6 +4,17 @@ const path = require('node:path');
 
 const apiBase = process.env.WB_API_BASE || 'https://fff-api.xmoj-script.uk/api/v1';
 const frontendUpdateBase = process.env.WB_FRONTEND_UPDATE_BASE || 'https://fff.xmoj-script.uk';
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) app.quit();
+
+app.on('second-instance', () => {
+  const existing = BrowserWindow.getAllWindows()[0];
+  if (!existing) return;
+  if (existing.isMinimized()) existing.restore();
+  existing.show();
+  existing.focus();
+});
 
 ipcMain.handle('get-app-version', () => app.getVersion());
 ipcMain.handle('open-external', async (_event, url) => {
@@ -67,7 +78,8 @@ async function updateFrontend() {
 }
 
 async function createWindow() {
-  const frontendRoot = await updateFrontend();
+  const bundledRoot = path.join(__dirname, '..', 'teacher-workbench', 'frontend');
+  const frontendRoot = bundledRoot;
   const window = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -114,10 +126,14 @@ async function createWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+  // 先显示随包前端，联网更新在后台执行，不阻塞窗口出现。
   window.loadFile(path.join(frontendRoot, 'index.html'));
+  updateFrontend().then((activeRoot) => {
+    if (activeRoot !== bundledRoot && !window.isDestroyed()) window.loadFile(path.join(activeRoot, 'index.html'));
+  }).catch((error) => console.warn('[frontend-update] skipped:', error.message));
 }
 
-app.whenReady().then(() => {
+if (hasSingleInstanceLock) app.whenReady().then(() => {
   // 生产包不显示 Electron 默认的 File/Edit/Window/Help 菜单。
   if (app.isPackaged) Menu.setApplicationMenu(null);
   createWindow().catch((error) => console.error('[frontend-update] startup failed:', error));

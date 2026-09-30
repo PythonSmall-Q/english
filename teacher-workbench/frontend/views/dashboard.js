@@ -111,9 +111,12 @@ App.registerView('dashboard', {
     const quickHtml = `
       <div class="card">
         <div class="dash-quick">
-          ${DASH_ACTIONS.map(
-            (a) => `<button class="btn" type="button" data-dash-view="${App.esc(a.view)}">${a.label}${I18n.t(a.key)}</button>`
-          ).join('')}
+          ${DASH_ACTIONS
+            // AI 入口暂时隐藏（接口已禁用），代码保留不删
+            .filter((a) => a.key !== 'ai')
+            .map(
+              (a) => `<button class="btn" type="button" data-dash-view="${App.esc(a.view)}">${a.label}${I18n.t(a.key)}</button>`
+            ).join('')}
         </div>
       </div>`;
 

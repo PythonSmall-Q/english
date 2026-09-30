@@ -542,13 +542,14 @@
           <td>${esc(e.exam_date || '—')}</td>
           <td>${Number(e.student_count || 0)}</td>
           <td>${fmtScore(e.avg_score)}</td>
+          <td>${fmtScore(e.total_score)}</td>
           <td class="ex-ops">${ops}</td>
         </tr>`;
         })
         .join('');
       listEl.innerHTML = `
         <div class="card"><table class="table">
-          <thead><tr><th>考试名称</th><th>科目</th><th>考试日期</th><th>参考人数</th><th>均分</th><th>操作</th></tr></thead>
+          <thead><tr><th>考试名称</th><th>科目</th><th>考试日期</th><th>参考人数</th><th>均分</th><th>总分</th><th>操作</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>`;
       listEl.querySelectorAll('button[data-act]').forEach((btn) => {
@@ -781,6 +782,8 @@
         }
         <label>科目</label>
         <input class="form-input" id="exf-subject" value="${esc(exam?.subject || '')}" placeholder="英语">
+        <label>考试总分</label>
+        <input class="form-input" id="exf-total-score" type="number" min="0.01" step="0.01" value="${exam?.total_score != null ? esc(exam.total_score) : ''}" placeholder="如：150（可选）">
         <label>考试日期</label>
         <input class="form-input" id="exf-date" type="date" value="${esc(exam?.exam_date || '')}">
       </div>
@@ -804,9 +807,17 @@
           const body = {
             name: document.getElementById('exf-name').value.trim(),
             subject: document.getElementById('exf-subject').value.trim(),
+            total_score: document.getElementById('exf-total-score').value.trim(),
             exam_date: document.getElementById('exf-date').value,
           };
           if (!body.name) return App.toast('考试名称不能为空');
+          if (body.total_score !== '') {
+            const totalScore = Number(body.total_score);
+            if (!Number.isFinite(totalScore) || totalScore <= 0) return App.toast('考试总分必须是大于 0 的数字');
+            body.total_score = totalScore;
+          } else {
+            body.total_score = null;
+          }
           if (!isEdit) {
             const scope = scopeInputs.find((i) => i.checked)?.value || 'class';
             body.scope = scope;

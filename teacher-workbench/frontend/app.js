@@ -128,6 +128,19 @@ window.App = {
   currentDeviceMode() {
     return localStorage.getItem(App.DEVICE_MODE_KEY) || '';
   },
+  ORIENTATION_KEY: 'wb_screen_orientation',
+  applyOrientation(orientation) {
+    const value = orientation === 'portrait' ? 'portrait' : 'landscape';
+    document.documentElement.dataset.orientation = value;
+    try {
+      if (window.screen?.orientation?.lock) window.screen.orientation.lock(value).catch(() => {});
+    } catch (e) {
+      /* 浏览器或 WebView 不支持锁定时保留本机设置 */
+    }
+  },
+  currentOrientation() {
+    return localStorage.getItem(App.ORIENTATION_KEY) || '';
+  },
 
   /** 白天/黑夜模式：本机 localStorage 持久化 */
   THEME_KEY: 'wb_theme',
@@ -220,6 +233,11 @@ window.App = {
            📱 平板模式<span style="display:block;font-size:13px;margin-top:2px;opacity:.85">更大字体与按钮，间距更宽，适合触控</span>
          </button>
        </div>
+       <label class="form-label" for="first-orientation" style="margin-top:14px">屏幕方向（APK）</label>
+       <select class="form-input" id="first-orientation">
+         <option value="landscape">横屏（平板布局）</option>
+         <option value="portrait">竖屏（移动布局）</option>
+       </select>
        <div class="modal-actions"><span class="muted" style="font-size:12px">选择即保存到本机</span></div>`,
       () => {
         document.querySelectorAll('[data-dev-mode]').forEach((btn) => {
@@ -227,6 +245,9 @@ window.App = {
             const mode = btn.dataset.devMode;
             localStorage.setItem(App.DEVICE_MODE_KEY, mode);
             App.applyDeviceMode(mode);
+            const orientation = document.getElementById('first-orientation')?.value || (mode === 'tablet' ? 'landscape' : 'portrait');
+            localStorage.setItem(App.ORIENTATION_KEY, orientation);
+            App.applyOrientation(orientation);
             App.closeModal();
             App.toast(mode === 'tablet' ? '已切换为平板模式' : '已切换为电脑模式');
             try {
@@ -529,8 +550,9 @@ window.App = {
     App.loadBranding();
     // 每台设备首次进入：弹出 平板/电脑 模式选择
     if (!App.currentDeviceMode()) App.showDeviceModePicker();
+    App.applyOrientation(App.currentOrientation() || (App.currentDeviceMode() === 'tablet' ? 'landscape' : 'portrait'));
     App.closeTenantMenu();
-    await App.loadAcademicYears();
+    App.loadAcademicYears();
     await App.showView(App.state.view || 'dashboard');
   },
 
@@ -992,7 +1014,8 @@ window.App = {
     window.DictFloat?.mount?.();
     App.updateTenantSwitcher();
     App.updateViewAsSwitcher();
-    await App.loadBranding();
+    // 品牌仅影响侧栏和标题，不阻塞首屏视图。
+    App.loadBranding().catch(() => {});
     App.showAppLoading();
     // 每台设备首次进入工作台：弹出 平板/电脑 模式选择
     if (!App.currentDeviceMode()) App.showDeviceModePicker();
@@ -1049,6 +1072,14 @@ window.App = {
       App.bindTenantSwitcher();
       App.bindYearSwitcher();
       const logoutBtn = document.getElementById('logout-btn');
+      const switchAccountBtn = document.getElementById('switch-account-btn');
+      if (switchAccountBtn) {
+        switchAccountBtn.addEventListener('click', async () => {
+          try { await api.auth.logout(); } catch (e) { /* 本地继续切换 */ }
+          window.__wbAutoLoginAttempted = true;
+          App.showAuthScreen('login');
+        });
+      }
       if (logoutBtn) {
         logoutBtn.addEventListener('click', async () => {
           try {
@@ -1086,8 +1117,7 @@ window.App = {
       App.state.tenant = personal || App.state.tenants[0] || null;
       App.state.quota = App.state.tenant?.quota || null;
       // auth.me 已包含空间套餐；这里只需加载学年列表。
-      await App.loadAcademicYears();
-      await App.enterApp();
+      await Promise.all([App.loadAcademicYears(), App.enterApp()]);
       // 学年归档提醒（§63）：进入工作台后异步检查，9/15–9/30 每日一次
       App.checkArchiveReminder();
       // 3 天试用：落地页点了「免费试用」的，进入工作台后自动创建试用空间（仅一次）
@@ -1106,6 +1136,7 @@ window.App = {
 
 // 启动前先应用本机保存的设备模式与主题（避免闪烁；未选择过则按默认渲染）
 App.applyDeviceMode(App.currentDeviceMode() || 'desktop');
+App.applyOrientation(App.currentOrientation() || (App.currentDeviceMode() === 'tablet' ? 'landscape' : 'portrait'));
 App.applyTheme(localStorage.getItem(App.THEME_KEY) || 'light');
 // 浏览器和 Capacitor 使用静态缓存；Electron 由主进程负责覆盖更新。
 if ('serviceWorker' in navigator) {

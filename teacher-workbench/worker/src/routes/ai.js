@@ -20,6 +20,9 @@ import { CF_MODELS, getCfModel, parseCfAiSetting, estimateCredits, ensureMonthly
 
 const app = new Hono();
 
+// AI 功能暂时下线：保留实现与数据结构，统一拒绝调用，避免隐藏入口仍消耗配额或访问 Provider。
+app.use('*', async (c) => c.json({ success: false, error: { code: 'AI_DISABLED', message: 'AI 功能暂时不可用' } }, 503));
+
 const AI_TYPES = ['practice', 'lesson_plan', 'essay_feedback', 'analysis', 'translate'];
 
 /** 各 type 的 system prompt（§41 快捷指令） */
