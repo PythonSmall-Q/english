@@ -9,8 +9,19 @@
 
 import { Hono } from 'hono';
 import { requireAuth, requireTenant, requireRole } from '../middleware.js';
+import { currentAcademicYear } from '../db.js';
 
 const app = new Hono();
+
+function parseTargetSet(row) {
+  if (!row.target_ids) return null;
+  try {
+    const ids = JSON.parse(row.target_ids);
+    return Array.isArray(ids) && ids.length ? new Set(ids.map(String)) : null;
+  } catch {
+    return null;
+  }
+}
 
 app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   const db = c.get('tenantDb') || c.env.DB;
@@ -40,27 +51,63 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
       )
       .bind(tenantId)
       .all(),
-    // 最近布置的作业（最新 5 条，附已交人数与班级总人数）
+    // 最近布置的作业（最新 5 条；统计在下方按作业工作台口径计算）
     db
       .prepare(
-        `SELECT a.*, cl.name AS class_name,
-                (SELECT COUNT(*) FROM assignment_submissions sub
-                  WHERE sub.assignment_id = a.id AND sub.status = 'submitted') AS submitted_count,
-                (SELECT COUNT(*) FROM students st WHERE st.class_id = a.class_id) AS total_count
+        `SELECT a.*, cl.name AS class_name
          FROM assignments a LEFT JOIN classes cl ON cl.id = a.class_id
-         WHERE a.tenant_id = ?
+         WHERE a.tenant_id = ? AND a.academic_year = ?
          ORDER BY a.created_at DESC LIMIT 5`
       )
-      .bind(tenantId)
+      .bind(tenantId, currentAcademicYear())
       .all(),
   ]);
+
+  const recentAssignments = assignmentsRes.results;
+  const classIds = [...new Set(recentAssignments.map((assignment) => assignment.class_id).filter(Boolean))];
+  const assignmentIds = recentAssignments.map((assignment) => assignment.id);
+  const studentMap = new Map();
+  const submissionMap = new Map();
+
+  if (classIds.length) {
+    const placeholders = classIds.map(() => '?').join(',');
+    const studentsRes = await db
+      .prepare(`SELECT id, class_id FROM students WHERE tenant_id = ? AND exempt = 0 AND class_id IN (${placeholders})`)
+      .bind(tenantId, ...classIds)
+      .all();
+    for (const student of studentsRes.results) {
+      if (!studentMap.has(student.class_id)) studentMap.set(student.class_id, new Set());
+      studentMap.get(student.class_id).add(String(student.id));
+    }
+  }
+
+  if (assignmentIds.length) {
+    const placeholders = assignmentIds.map(() => '?').join(',');
+    const submissionsRes = await db
+      .prepare(`SELECT assignment_id, student_id, status FROM assignment_submissions WHERE tenant_id = ? AND assignment_id IN (${placeholders})`)
+      .bind(tenantId, ...assignmentIds)
+      .all();
+    for (const submission of submissionsRes.results) {
+      if (!submissionMap.has(submission.assignment_id)) submissionMap.set(submission.assignment_id, new Map());
+      submissionMap.get(submission.assignment_id).set(String(submission.student_id), submission.status);
+    }
+  }
+
+  for (const assignment of recentAssignments) {
+    const target = parseTargetSet(assignment);
+    const students = studentMap.get(assignment.class_id) || new Set();
+    const dueIds = target ? [...target].filter((id) => students.has(id)) : [...students];
+    const submissions = submissionMap.get(assignment.id) || new Map();
+    assignment.total_count = dueIds.length;
+    assignment.submitted_count = dueIds.filter((id) => submissions.get(id) === 'submitted').length;
+  }
 
   return c.json({
     success: true,
     data: {
       todaySchedules: schedulesRes.results,
       lessonTodo: lessonsRes.results,
-      recentAssignments: assignmentsRes.results,
+      recentAssignments,
     },
   });
 });

@@ -5,19 +5,19 @@
     "android": {
       "version": "3.0.6",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-android.apk",
-      "force": false,
+      "force": true,
       "notes": ["Android release 3.0.6"]
     },
     "windows": {
       "version": "3.0.6",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-windows.exe",
-      "force": false,
+      "force": true,
       "notes": ["Windows release 3.0.6"]
     },
     "macos": {
       "version": "3.0.6",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-macos.dmg",
-      "force": false,
+      "force": true,
       "notes": ["macOS release 3.0.6"]
     }
   }
