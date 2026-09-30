@@ -1,24 +1,24 @@
 {
-  "version": "3.0.6",
+  "version": "3.0.7",
   "updatedAt": "2026-09-30",
   "platforms": {
     "android": {
-      "version": "3.0.6",
+      "version": "3.0.7",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-android.apk",
       "force": true,
-      "notes": ["Android release 3.0.6"]
+      "notes": ["Android release 3.0.7"]
     },
     "windows": {
-      "version": "3.0.6",
+      "version": "3.0.7",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-windows.exe",
       "force": true,
-      "notes": ["Windows release 3.0.6"]
+      "notes": ["Windows release 3.0.7"]
     },
     "macos": {
-      "version": "3.0.6",
+      "version": "3.0.7",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-macos.dmg",
       "force": true,
-      "notes": ["macOS release 3.0.6"]
+      "notes": ["macOS release 3.0.7"]
     }
   }
 }
