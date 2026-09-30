@@ -878,7 +878,6 @@ const MY_QUOTA_ITEMS = [
   ['assignments', '作业', 'assignments'],
   ['dictations', '默写', 'dictations'],
   ['files', '文件数', 'files'],
-  ['aiCredits', 'AI Credit（消耗）', 'ai_credits'],
 ];
 
 /** 字节 → 人类可读（KB/MB） */

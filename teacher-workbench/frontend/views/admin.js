@@ -12,9 +12,9 @@ const TENANT_STATUS_LABELS = { active: '正常', disabled: '已停用' };
 /** 定价套餐（创建租户三选一预设，缺省 custom=商议/手动配额） */
 const PLAN_LABELS = { free: '基础版', pro: '专业版', school: '学校版', custom: '商议' };
 const PLAN_SUMMARIES = {
-  free: '1 个班级 · 30 名学生 · 100 AI Credit/月 · $0.01/Credit · 10MB 存储 · 最多 5 名成员',
-  pro: '10 个班级 · 300 名学生 · 1,000 AI Credit/月 · $0.01/Credit · 5GB 存储 · 最多 30 名成员',
-  school: '班级 / 学生 / 教案等不限 · 5,000 AI Credit/月 · $0.01/Credit · 50GB 存储 · 成员不限',
+  free: '1 个班级 · 30 名学生 · 10MB 存储 · 最多 5 名成员',
+  pro: '10 个班级 · 300 名学生 · 5GB 存储 · 最多 30 名成员',
+  school: '班级 / 学生 / 教案等不限 · 50GB 存储 · 成员不限',
 };
 /** 可编辑配额字段（§20 + 成员数上限） */
 const QUOTA_FIELDS = [
@@ -156,7 +156,7 @@ App.registerView('admin', {
       </div>
 
       <!-- 平台 AI 接口（已弃用）：代码与接口保留，前端入口在渲染后移除 -->
-      <div class="card" id="platform-ai-card">
+      <div class="card hidden" id="platform-ai-card">
         <div class="card-title">平台 AI 接口</div>
         <div class="muted" style="font-size:12.5px;margin-bottom:10px">
           为全平台配置默认 AI 接口：成员未在「设置 → AI 助手设置」配置自己的接口时，调用本平台接口并<b>计入其空间 AI 月度配额</b>；自配接口的成员<b>不计配额</b>。留空密钥并保存 = 清除平台配置（回退到内置演示）。
@@ -755,9 +755,9 @@ function openPlanModal(tenantId, tenantName, current) {
       选择预设档（基础版/专业版/学校版）会<b>立即按套餐覆盖该空间的配额与成员上限</b>；「商议」只改套餐名，配额保持现状。
     </div>
     ${[
-      ['free', '基础版', '1 班 · 30 学生 · 10 Credit/月 · $0.01/Credit · 10MB · 5 成员'],
-      ['pro', '专业版', '10 班 · 300 学生 · 100 Credit/月 · $0.01/Credit · 5GB · 30 成员'],
-      ['school', '学校版', '班级学生不限 · 500 Credit/月 · $0.01/Credit · 50GB · 成员不限'],
+      ['free', '基础版', '1 班 · 30 学生 · 10MB · 5 成员'],
+      ['pro', '专业版', '10 班 · 300 学生 · 5GB · 30 成员'],
+      ['school', '学校版', '班级学生不限 · 50GB · 成员不限'],
       ['custom', '商议', '保持现有配额不变'],
     ]
       .map(
@@ -930,7 +930,7 @@ async function renderTenants() {
                 <td>${t.memberCount ?? t.member_count ?? '-'}</td>
                 <td>
                   <button class="btn btn-sm" data-quota="${t.id}" data-name="${App.esc(t.name)}" type="button">配额/到期</button>
-                  <button class="btn btn-sm" data-ai-quota="${t.id}" data-name="${App.esc(t.name)}" data-ai-credits="${t.ai_credits ?? 0}" data-ai-monthly="${t.ai_credits_monthly ?? ''}" data-ai-bonus="${t.ai_credits_bonus ?? 0}" type="button">AI Credit</button>
+                  <button class="btn btn-sm hidden" data-ai-quota="${t.id}" data-name="${App.esc(t.name)}" data-ai-credits="${t.ai_credits ?? 0}" data-ai-monthly="${t.ai_credits_monthly ?? ''}" data-ai-bonus="${t.ai_credits_bonus ?? 0}" type="button">AI Credit</button>
                   <button class="btn btn-sm" data-plan="${t.id}" data-name="${App.esc(t.name)}" data-current="${App.esc(t.plan || 'custom')}" type="button">套餐</button>
                   <button class="btn btn-sm" data-branding="${t.id}" data-name="${App.esc(t.name)}" type="button">品牌</button>
                   <button class="btn btn-sm ${t.status === 'active' ? 'btn-danger' : ''}" data-toggle-status="${t.id}" data-status="${t.status === 'active' ? 'disabled' : 'active'}" type="button">

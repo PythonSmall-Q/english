@@ -15,7 +15,7 @@ const LANDING_FEATURES = [
   { icon: '📝', title: '作业管理', desc: '布置、登记上交、缺交追踪、统计导出' },
   { icon: '✍️', title: '默写重默', desc: '全年段下派、重默登记、名单图片导出' },
   { icon: '📊', title: '考试分析', desc: '班级/年段考试、成绩小分、班内年段排名' },
-  { icon: '🤖', title: 'AI 教学助手', desc: '写教案、出练习、批改作文、学情解读' },
+  { icon: '🤖', title: 'AI 教学助手', desc: '写教案、出练习、批改作文、学情解读', hidden: true },
   { icon: '🔐', title: '数据归档', desc: '学年自动压缩归档、毕业班级打包、分级权限' },
 ];
 
@@ -49,7 +49,6 @@ const LANDING_COMPARE = [
   { name: '班级数量', free: '1', pro: '10', school: '不限', custom: '不限' },
   { name: '学生数量', free: '30', pro: '300', school: '不限', custom: '不限' },
   { name: '教案/作业/默写/考试', free: '基础额度', pro: '不限', school: '不限', custom: '不限' },
-  { name: 'AI Credit/月', free: '10', pro: '100', school: '500', custom: '按约定' },
   { name: '文件存储', free: '10MB', pro: '5GB', school: '50GB', custom: '按约定' },
   { name: '学年压缩归档', free: '—', pro: '✓', school: '✓', custom: '✓' },
   { name: '毕业班级归档下载', free: '—', pro: '—', school: '✓', custom: '✓' },
@@ -86,7 +85,7 @@ App.showLanding = function () {
         <h2 class="landing-section-title">一站式教学工作台</h2>
         <p class="landing-section-sub muted">从备课、课表到作业、考试，覆盖英语教学全流程</p>
         <div class="landing-features-grid">
-          ${LANDING_FEATURES.map(
+          ${LANDING_FEATURES.filter((f) => !f.hidden).map(
             (f) => `
             <div class="landing-feature-card">
               <span class="landing-card-icon">${f.icon}</span>
@@ -135,7 +134,6 @@ App.showLanding = function () {
             <ul class="landing-price-list">
               <li>1 个班级</li>
               <li>30 名学生</li>
-              <li>每月 10 AI Credit</li>
               <li>基础功能</li>
             </ul>
             <button class="btn landing-price-cta" type="button" data-copy-wechat>联系我们</button>
@@ -148,7 +146,6 @@ App.showLanding = function () {
             <ul class="landing-price-list">
               <li>10 个班级</li>
               <li>300 名学生</li>
-              <li>每月 100 AI Credit</li>
               <li>5GB 文件存储</li>
               <li>学年归档</li>
             </ul>
@@ -160,7 +157,6 @@ App.showLanding = function () {
             <div class="landing-price-yearly muted">微信 ${CONTACT_WECHAT}（点击复制）</div>
             <ul class="landing-price-list">
               <li>不限班级与学生</li>
-              <li>每月 500 AI Credit</li>
               <li>50GB 存储</li>
               <li>毕业归档下载</li>
               <li>年级组/备课组权限</li>

@@ -10,7 +10,7 @@
  *
  * 缓存名带版本号；sw.js 内容变更即触发 activate 清理旧版缓存。
  */
-const CACHE = 'wb-static-v15';
+const CACHE = 'wb-static-v16';
 const UPDATE_BASE = 'https://fff.xmoj-script.uk';
 const UPDATE_MANIFEST = `${UPDATE_BASE}/update-manifest.json`;
 
@@ -51,10 +51,21 @@ async function updateRemoteCache() {
     await Promise.all(keys
       .filter((key) => key.startsWith('wb-static-remote-') && key !== cacheName)
       .map((key) => caches.delete(key)));
+    return true;
   } catch (_) {
     // 云端不可用时继续使用 APK 内置资源和已有缓存。
+    return false;
   }
 }
+
+self.addEventListener('message', (event) => {
+  if (event.data?.type !== 'UPDATE_REMOTE_CACHE') return;
+  event.waitUntil(
+    updateRemoteCache().then((updated) => {
+      event.ports[0]?.postMessage({ updated });
+    })
+  );
+});
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;

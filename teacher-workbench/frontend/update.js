@@ -1,6 +1,7 @@
 /* 独立 App 版本检查：统一读取在线 app-update.json。 */
 (function () {
   const UPDATE_URL = 'https://fff-file-r2-cloudflare.xmoj-script.uk/app-update.json';
+  const FRONTEND_UPDATE_URL = 'https://fff.xmoj-script.uk/update-manifest.json';
   let checked = false;
 
   function compareVersions(left, right) {
@@ -16,12 +17,27 @@
     if (window.WB_RUNTIME?.platform === 'win32') return 'windows';
     if (window.WB_RUNTIME?.platform === 'darwin') return 'macos';
     const nativePlatform = window.Capacitor?.getPlatform?.();
-    return nativePlatform === 'android' ? 'android' : '';
+    if (nativePlatform === 'android') return 'android';
+    // 某些 Capacitor 版本未把 getPlatform 暴露到全局对象，但仍使用 localhost WebView。
+    if (window.Capacitor?.isNativePlatform?.() && location.hostname === 'localhost') return 'android';
+    if (location.protocol === 'https:' && location.hostname === 'localhost' && !location.port) return 'android';
+    if (location.protocol === 'capacitor:') return 'android';
+    return '';
   }
 
   async function localVersion() {
     if (window.WB_RUNTIME?.getAppVersion) return window.WB_RUNTIME.getAppVersion();
     if (window.WB_RUNTIME?.appVersion) return window.WB_RUNTIME.appVersion;
+    const currentPlatform = platform();
+    const manifestUrl = currentPlatform === 'android' ? 'app-update.json' : 'update-manifest.json';
+    const response = await fetch(`${manifestUrl}?local=${Date.now()}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const manifest = await response.json();
+    if (currentPlatform === 'android') return manifest.platforms?.android?.version || manifest.version || '0.0.0';
+    return manifest.version || '0.0.0';
+  }
+
+  async function localFrontendVersion() {
     const response = await fetch(`update-manifest.json?local=${Date.now()}`, { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const manifest = await response.json();
@@ -29,6 +45,21 @@
   }
 
   App.getCurrentAppVersion = localVersion;
+
+  async function updateAndroidFrontend() {
+    if (!navigator.serviceWorker) return false;
+    const registration = await navigator.serviceWorker.ready;
+    if (!registration.active) return false;
+    return new Promise((resolve) => {
+      const channel = new MessageChannel();
+      const timeout = setTimeout(() => resolve(false), 30000);
+      channel.port1.onmessage = (event) => {
+        clearTimeout(timeout);
+        resolve(event.data?.updated === true);
+      };
+      registration.active.postMessage({ type: 'UPDATE_REMOTE_CACHE' }, [channel.port2]);
+    });
+  }
 
   function text(key, fallback) {
     return window.I18n?.t(key, fallback) || fallback;
@@ -102,6 +133,20 @@
       if (release?.version && compareVersions(release.version, current) > 0 && release.url) {
         showUpdate(release, currentPlatform);
         return true;
+      }
+
+      if (currentPlatform === 'android') {
+        const frontendResponse = await fetch(`${FRONTEND_UPDATE_URL}?t=${Date.now()}`, { cache: 'no-store' });
+        if (frontendResponse.ok) {
+          const frontendManifest = await frontendResponse.json();
+          if (compareVersions(frontendManifest.version, await localFrontendVersion()) > 0) {
+            const updated = await updateAndroidFrontend();
+            if (updated) {
+              window.location.reload();
+              return true;
+            }
+          }
+        }
       }
       return false;
     } catch (error) {

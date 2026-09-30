@@ -92,6 +92,14 @@ window.App = {
     );
   },
 
+  isAndroidApp() {
+    const nativePlatform = window.Capacitor?.getPlatform?.();
+    return nativePlatform === 'android' ||
+      (window.Capacitor?.isNativePlatform?.() && location.hostname === 'localhost') ||
+      (location.protocol === 'https:' && location.hostname === 'localhost' && !location.port) ||
+      location.protocol === 'capacitor:';
+  },
+
   /** 用户主动退出时清除独立 App 的自动登录凭据。 */
   clearStandaloneAutoLogin() {
     localStorage.removeItem('wb.app.auto_login');
@@ -324,6 +332,8 @@ window.App = {
    * @param {string} name 视图名（对应导航 data-view）
    */
   async showView(name) {
+    // AI 入口暂时隐藏，保留视图代码和接口但禁止通过地址或旧导航直接打开。
+    if (name === 'ai') name = 'dashboard';
     // 懒加载：脚本未下载时先注入再渲染（Service Worker 缓存后二次进入秒开）
     let ready = true;
     try {
@@ -548,8 +558,8 @@ window.App = {
     App.updateTenantSwitcher();
     App.updateViewAsSwitcher();
     App.loadBranding();
-    // 每台设备首次进入：弹出 平板/电脑 模式选择
-    if (!App.currentDeviceMode()) App.showDeviceModePicker();
+    // Android 设备未设置设备模式或屏幕方向时，每次进入都要求完成选择。
+    if (!App.currentDeviceMode() || (App.isAndroidApp() && !App.currentOrientation())) App.showDeviceModePicker();
     App.applyOrientation(App.currentOrientation() || (App.currentDeviceMode() === 'tablet' ? 'landscape' : 'portrait'));
     App.closeTenantMenu();
     App.loadAcademicYears();
@@ -1017,8 +1027,8 @@ window.App = {
     // 品牌仅影响侧栏和标题，不阻塞首屏视图。
     App.loadBranding().catch(() => {});
     App.showAppLoading();
-    // 每台设备首次进入工作台：弹出 平板/电脑 模式选择
-    if (!App.currentDeviceMode()) App.showDeviceModePicker();
+    // Android 设备未设置设备模式或屏幕方向时，每次进入都要求完成选择。
+    if (!App.currentDeviceMode() || (App.isAndroidApp() && !App.currentOrientation())) App.showDeviceModePicker();
     // 初始视图：登录前暂存的目标路由（wb.redirect）> hash 中的有效视图 > dashboard
     let initial = null;
     const redirect = sessionStorage.getItem('wb.redirect');
