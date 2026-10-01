@@ -349,6 +349,11 @@ App.registerView('classes', {
         <span class="cls-head-title">${I18n.format('clsTotal', { count: classes.length })}</span>
         ${canCreateClass ? `<button class="btn btn-primary" type="button" id="cls-new">＋ ${I18n.t('clsNewClass')}</button>` : ''}
       </div>`;
+    const summaryHtml = `<div class="next-summary-grid cls-summary">
+      <div class="next-summary-card"><span>${I18n.t('班级数量')}</span><strong>${classes.length}</strong><small>${I18n.t('当前学年记录')}</small></div>
+      <div class="next-summary-card"><span>${I18n.t('学生总数')}</span><strong>${classes.reduce((sum, c) => sum + (Number(c.student_count) || 0), 0)}</strong><small>${I18n.t('已纳入班级名单')}</small></div>
+      <div class="next-summary-card"><span>${I18n.t('可管理班级')}</span><strong>${classes.filter((c) => c.canManage).length}</strong><small>${I18n.t('当前账号权限范围')}</small></div>
+    </div>`;
 
     // 班级卡片：先「我的班级」（班主任/任课），再「其他班级」（仅当两类都有时才分区展示）
     const classCardHtml = (c) => {
@@ -482,7 +487,7 @@ App.registerView('classes', {
       </div>`
       : '';
 
-    el.innerHTML = groupsHtml + headHtml + bodyHtml + gradHtml;
+    el.innerHTML = groupsHtml + summaryHtml + headHtml + bodyHtml + gradHtml;
 
     // 班级卡片成绩趋势：异步补取后局部插入（不阻塞整页；失败静默不画）
     for (const c of classes) clsLoadTrend(c);

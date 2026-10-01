@@ -187,6 +187,17 @@ body {
   gap: 2px;
 }
 
+.nav-section {
+  padding: 14px 12px 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.mobile-bottom-nav { display: none; }
+
 .nav-item {
   display: block;
   padding: 9px 12px;
@@ -416,6 +427,96 @@ body {
   flex: 1;
   padding: 20px;
   overflow-y: auto;
+}
+
+.version-toggle {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* 新版工作台：复用现有视图结构，切换视觉层，不影响旧版回退。 */
+html[data-ui-version='next'] {
+  --primary: #0f766e;
+  --primary-dark: #115e59;
+  --primary-soft: rgba(15, 118, 110, 0.11);
+  --cyan: #0891b2;
+  --bg: #eef4f3;
+  --card-bg: #ffffff;
+  --border: #d5e2df;
+  --shadow: 0 8px 24px rgba(19, 61, 58, 0.08);
+  --radius: 12px;
+}
+
+html[data-ui-version='next'] body {
+  font-family: 'Aptos', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: radial-gradient(circle at 92% 0%, rgba(20, 184, 166, 0.12), transparent 28rem), var(--bg);
+}
+
+html[data-ui-version='next'] .sidebar {
+  background: #123b3a;
+  border-right: 0;
+  color: #e7f5f2;
+}
+
+html[data-ui-version='next'] .sidebar-user,
+html[data-ui-version='next'] .sidebar-footer { border-color: rgba(231, 245, 242, 0.14); }
+html[data-ui-version='next'] .sidebar-user-sub,
+html[data-ui-version='next'] .sidebar .muted { color: #a7c7c2; }
+html[data-ui-version='next'] .nav-item { color: #d5ebe7; border-radius: 9px; }
+html[data-ui-version='next'] .nav-item:hover { background: rgba(255, 255, 255, 0.08); }
+html[data-ui-version='next'] .nav-item.active { background: #d8f3ed; color: #115e59; box-shadow: none; }
+html[data-ui-version='next'] .nav-section { color: #82aaa4; }
+html[data-ui-version='next'] .main-area { background: transparent; }
+html[data-ui-version='next'] .topbar { background: rgba(255, 255, 255, 0.88); border-bottom-color: var(--border); backdrop-filter: blur(14px); }
+html[data-ui-version='next'] .view-container { padding: 28px clamp(18px, 4vw, 48px); }
+html[data-ui-version='next'] .card { border: 1px solid var(--border); box-shadow: var(--shadow); }
+html[data-ui-version='next'] .card-title { font-size: 17px; letter-spacing: 0; }
+html[data-ui-version='next'] .btn { border-radius: 9px; }
+html[data-ui-version='next'] .btn-primary { background: linear-gradient(135deg, #0f766e, #0d9488); border-color: #0f766e; }
+html[data-ui-version='next'] .version-toggle { background: #e6fffa; color: #115e59; border-color: #99d9cf; }
+html[data-ui-version='next'] .version-toggle:hover { background: #ccfbf1; }
+html[data-ui-version='next'] .toolbar { padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: rgba(255, 255, 255, 0.78); box-shadow: 0 4px 14px rgba(19, 61, 58, 0.04); }
+html[data-ui-version='next'] .form-input { border-radius: 9px; border-color: #c8d9d5; background: #fbfefd; }
+html[data-ui-version='next'] .table { border-color: var(--border); }
+html[data-ui-version='next'] .table th { background: #eaf5f2; color: #275c57; }
+html[data-ui-version='next'] .table tr:hover td { background: #f4fbf9; }
+html[data-ui-version='next'] .badge { border-radius: 999px; }
+html[data-ui-version='next'] .modal { border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 24px 70px rgba(15, 55, 51, 0.22); }
+html[data-ui-version='next'] .modal-header { background: #f2faf8; border-bottom-color: var(--border); }
+html[data-ui-version='next'] .toast { border-left: 3px solid #0f766e; }
+html[data-ui-version='next'] .next-view-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin: 0 0 22px; }
+html[data-ui-version='next'] .next-view-header h1 { margin: 0; color: #123b3a; font-size: clamp(24px, 3vw, 34px); line-height: 1.15; }
+html[data-ui-version='next'] .next-view-header p { margin: 8px 0 0; color: var(--text-muted); }
+html[data-ui-version='next'] .next-view-kicker { margin-bottom: 7px; color: #0f766e; font-size: 10px; font-weight: 800; letter-spacing: .16em; }
+html[data-ui-version='next'] .next-view-header-mark { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 14px; background: #d8f3ed; color: #0f766e; font-size: 25px; }
+html[data-ui-version='next'] .next-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 20px; }
+html[data-ui-version='next'] .next-summary-card { display: grid; gap: 4px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: rgba(255, 255, 255, .84); box-shadow: 0 4px 14px rgba(19, 61, 58, .04); }
+html[data-ui-version='next'] .next-summary-card span { color: var(--text-muted); font-size: 12px; }
+html[data-ui-version='next'] .next-summary-card strong { overflow: hidden; color: #123b3a; font-size: 25px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+html[data-ui-version='next'] .next-summary-card small { color: var(--text-muted); font-size: 11px; }
+html[data-ui-version='next'] .next-summary-warn { border-top: 3px solid var(--warning); }
+
+@media (max-width: 760px) {
+  html[data-ui-version='next'] .view-container { padding: 16px 12px 76px; }
+  html[data-ui-version='next'] .topbar { padding: 10px 12px; }
+  html[data-ui-version='next'] .toolbar { align-items: stretch; }
+  html[data-ui-version='next'] .toolbar .form-input { min-width: 0 !important; width: 100%; }
+  html[data-ui-version='next'] .sidebar { border-bottom: 0; }
+  html[data-ui-version='next'] .sidebar .nav { display: none; }
+  html[data-ui-version='next'] .sidebar-footer { display: none; }
+  html[data-ui-version='next'] .mobile-bottom-nav { position: fixed; z-index: 200; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(5, 1fr); padding: 7px 8px calc(7px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: rgba(255, 255, 255, .94); backdrop-filter: blur(14px); box-shadow: 0 -6px 18px rgba(19, 61, 58, .08); }
+  html[data-ui-version='next'] .mobile-nav-item { display: grid; gap: 2px; place-items: center; color: var(--text-muted); text-decoration: none; font-size: 19px; }
+  html[data-ui-version='next'] .mobile-nav-item small { font-size: 10px; }
+  html[data-ui-version='next'] .mobile-nav-item.active { color: #0f766e; font-weight: 700; }
+  html[data-ui-version='next'] .next-view-header { margin-bottom: 16px; }
+  html[data-ui-version='next'] .next-summary-grid { grid-template-columns: 1fr; gap: 8px; }
+  html[data-ui-version='next'] .next-summary-card { grid-template-columns: 1fr auto; align-items: center; padding: 12px 14px; }
+  html[data-ui-version='next'] .next-summary-card small { grid-column: 1 / -1; }
 }
 
 /* ===== 卡片 ===== */

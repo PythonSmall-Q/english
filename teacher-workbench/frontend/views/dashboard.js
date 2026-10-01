@@ -195,8 +195,16 @@ App.registerView('dashboard', {
           .join('')
       : `<div class="dash-empty">${I18n.t('dashNoAssignments')}</div>`;
 
+    const cockpitHtml = `
+      <div class="next-summary-grid">
+        <div class="next-summary-card"><span>${I18n.t('今日课程')}</span><strong>${todaySchedules.length}</strong><small>${I18n.t('今日教学安排')}</small></div>
+        <div class="next-summary-card next-summary-warn"><span>${I18n.t('待处理备课')}</span><strong>${lessonTodo.length}</strong><small>${I18n.t('需要继续完成')}</small></div>
+        <div class="next-summary-card"><span>${I18n.t('近期作业')}</span><strong>${recentAssignments.length}</strong><small>${I18n.t('最近布置记录')}</small></div>
+      </div>`;
+
     el.innerHTML = `
       ${downloadHtml}
+      ${cockpitHtml}
       ${quickHtml}
       <div class="dash-row">
         <div class="card">

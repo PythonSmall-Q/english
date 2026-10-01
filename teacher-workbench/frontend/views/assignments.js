@@ -159,6 +159,15 @@
     const archivedView = assignments.some((a) => a.archived);
     const createBtn = containerEl.querySelector('#asg-btn-create');
     if (createBtn) createBtn.style.display = anyManageable && !archivedView ? '' : 'none';
+    const totalSubmitted = assignments.reduce((sum, a) => sum + (Number(a.stats?.submitted) || 0), 0);
+    const totalStudents = assignments.reduce((sum, a) => sum + (Number(a.stats?.total) || 0), 0);
+    const missing = assignments.reduce((sum, a) => sum + (Number(a.stats?.missing) || 0), 0);
+    const avgRate = totalStudents ? Math.round((totalSubmitted / totalStudents) * 100) : 0;
+    const summary = `<div class="next-summary-grid asg-summary">
+      <div class="next-summary-card"><span>${I18n.t('布置数量')}</span><strong>${assignments.length}</strong><small>${I18n.t('当前学年作业')}</small></div>
+      <div class="next-summary-card"><span>${I18n.t('平均提交率')}</span><strong>${avgRate}%</strong><small>${I18n.t('按学生人次计算')}</small></div>
+      <div class="next-summary-card next-summary-warn"><span>${I18n.t('未提交人数')}</span><strong>${missing}</strong><small>${I18n.t('需要继续跟进')}</small></div>
+    </div>`;
     if (!classes.length) {
       content.innerHTML = '<div class="card"><div class="muted">当前空间还没有班级，请先在「我的班级」中创建。</div></div>';
       return;
@@ -180,7 +189,7 @@
           </div>`;
       })
       .join('');
-    content.innerHTML = `<div class="asg-cols">${cols}</div>`;
+    content.innerHTML = summary + `<div class="asg-cols">${cols}</div>`;
   }
 
   // ===== 弹窗：新建作业 =====

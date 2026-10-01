@@ -33,21 +33,24 @@
       <!-- 商议版品牌：校徽 + 校训（平台管理员配置后显示） -->
       <div id="sidebar-brand" class="sidebar-brand hidden"></div>
       <nav class="nav">
-        <a class="nav-item" data-view="dashboard"><span class="nav-ico">🏠</span> <span data-i18n="home">工作台首页</span></a>
-        <a class="nav-item" data-view="classes"><span class="nav-ico">🏫</span> <span data-i18n="classes">我的班级</span></a>
-        <a class="nav-item" data-view="lessons"><span class="nav-ico">📚</span> <span data-i18n="lessons">备课中心</span></a>
-        <a class="nav-item" data-view="schedule"><span class="nav-ico">📅</span> <span data-i18n="schedule">教学课表</span></a>
-        <a class="nav-item" data-view="students"><span class="nav-ico">👥</span> <span data-i18n="students">学生管理</span></a>
-        <a class="nav-item" data-view="assignments"><span class="nav-ico">📝</span> <span data-i18n="assignments">作业统计</span></a>
-        <a class="nav-item" data-view="dictations"><span class="nav-ico">✏️</span> <span data-i18n="dictations">默写管理</span></a>
-        <a class="nav-item" data-view="exams"><span class="nav-ico">📊</span> <span data-i18n="exams">考试成绩</span></a>
-        <a class="nav-item" data-view="todos"><span class="nav-ico">📋</span> <span data-i18n="todos">待办中心</span></a>
-        <!-- AI 入口暂时隐藏（接口已禁用），代码保留不删 -->
-        <a class="nav-item hidden" data-view="ai"><span class="nav-ico">🤖</span> <span data-i18n="ai">AI 教学助手</span></a>
-        <a class="nav-item" data-view="recycle"><span class="nav-ico">🗑</span> <span data-i18n="recycle">回收站</span></a>
-        <a class="nav-item" data-view="settings"><span class="nav-ico">⚙️</span> <span data-i18n="settings">设置</span></a>
-        <!-- 仅 platform_admin 可见（§72），默认隐藏，App.enterApp 控制 -->
-        <a class="nav-item hidden" data-view="admin" id="nav-admin"><span class="nav-ico">🛡️</span> <span data-i18n="admin">平台管理</span></a>
+        <div class="nav-section"><span data-i18n="教学总览">教学总览</span></div>
+        <a class="nav-item" data-view="dashboard"><span class="nav-ico">⌂</span> <span data-i18n="home">工作台首页</span></a>
+        <a class="nav-item" data-view="schedule"><span class="nav-ico">◷</span> <span data-i18n="schedule">教学课表</span></a>
+        <div class="nav-section"><span data-i18n="班级与学生">班级与学生</span></div>
+        <a class="nav-item" data-view="classes"><span class="nav-ico">▦</span> <span data-i18n="classes">我的班级</span></a>
+        <a class="nav-item" data-view="students"><span class="nav-ico">◎</span> <span data-i18n="students">学生管理</span></a>
+        <div class="nav-section"><span data-i18n="教学内容">教学内容</span></div>
+        <a class="nav-item" data-view="lessons"><span class="nav-ico">▤</span> <span data-i18n="lessons">备课中心</span></a>
+        <a class="nav-item" data-view="assignments"><span class="nav-ico">□</span> <span data-i18n="assignments">作业统计</span></a>
+        <a class="nav-item" data-view="dictations"><span class="nav-ico">✎</span> <span data-i18n="dictations">默写管理</span></a>
+        <div class="nav-section"><span data-i18n="数据分析">数据分析</span></div>
+        <a class="nav-item" data-view="exams"><span class="nav-ico">⌁</span> <span data-i18n="exams">考试成绩</span></a>
+        <a class="nav-item" data-view="todos"><span class="nav-ico">✓</span> <span data-i18n="todos">待办中心</span></a>
+        <div class="nav-section"><span data-i18n="系统设置">系统设置</span></div>
+        <a class="nav-item hidden" data-view="ai"><span class="nav-ico">✦</span> <span data-i18n="ai">AI 教学助手</span></a>
+        <a class="nav-item" data-view="recycle"><span class="nav-ico">⌫</span> <span data-i18n="recycle">回收站</span></a>
+        <a class="nav-item" data-view="settings"><span class="nav-ico">⚙</span> <span data-i18n="settings">设置</span></a>
+        <a class="nav-item hidden" data-view="admin" id="nav-admin"><span class="nav-ico">◇</span> <span data-i18n="admin">平台管理</span></a>
       </nav>
       <div class="sidebar-footer">
         <button class="btn btn-block" id="switch-account-btn" type="button" data-i18n="切换账号">切换账号</button>
@@ -60,6 +63,7 @@
         <div class="topbar-right">
           <!-- 白天/黑夜模式切换（本机记忆） -->
           <button type="button" id="theme-toggle" class="theme-toggle" title="切换黑夜/白天模式">🌙</button>
+          <button type="button" id="ui-version-toggle" class="version-toggle" data-i18n="进入新版">进入新版</button>
           <!-- 身份查看（仅平台管理员）：选择以某成员身份查看与管理本空间 -->
           <div id="viewas-switcher" class="tenant-switcher hidden">
             <select id="viewas-select" class="viewas-select" aria-label="以成员身份查看">
@@ -92,6 +96,13 @@
       <div id="year-banner" class="year-banner hidden"></div>
       <main id="view-container" class="view-container"></main>
     </div>
+    <nav class="mobile-bottom-nav" aria-label="移动端导航">
+      <a class="mobile-nav-item" data-view="dashboard"><span>⌂</span><small data-i18n="home">首页</small></a>
+      <a class="mobile-nav-item" data-view="classes"><span>▦</span><small data-i18n="classes">班级</small></a>
+      <a class="mobile-nav-item" data-view="dictations"><span>✎</span><small data-i18n="dictations">默写</small></a>
+      <a class="mobile-nav-item" data-view="students"><span>◎</span><small data-i18n="students">学生</small></a>
+      <a class="mobile-nav-item" data-view="settings"><span>⚙</span><small data-i18n="settings">设置</small></a>
+    </nav>
   </div>
 
   <!-- 弹窗 / 轻提示容器 -->

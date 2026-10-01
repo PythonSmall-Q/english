@@ -165,6 +165,27 @@ window.App = {
     App.toast(next === 'dark' ? '已切换到黑夜模式' : '已切换到白天模式');
   },
 
+  UI_VERSION_KEY: 'wb_ui_version',
+  applyUIVersion(version) {
+    const value = version === 'next' ? 'next' : 'legacy';
+    document.documentElement.dataset.uiVersion = value;
+    const button = document.getElementById('ui-version-toggle');
+    if (button) {
+      const key = value === 'next' ? '返回旧版' : '进入新版';
+      button.dataset.i18n = key;
+      button.textContent = window.I18n?.t(key, key) || key;
+    }
+  },
+  currentUIVersion() {
+    return localStorage.getItem(App.UI_VERSION_KEY) || 'legacy';
+  },
+  toggleUIVersion() {
+    const next = App.currentUIVersion() === 'next' ? 'legacy' : 'next';
+    localStorage.setItem(App.UI_VERSION_KEY, next);
+    App.applyUIVersion(next);
+    App.toast(next === 'next' ? '已进入新版工作台' : '已返回旧版工作台');
+  },
+
   /**
    * 商议版品牌定制：加载并应用当前空间的 branding
    * （校徽/校训展示在侧栏；favicon 换自定义 icon；上传进度条用自定义加载图标+动画）
@@ -272,6 +293,22 @@ window.App = {
   /** 视图注册表：name → { title, icon, render, init? } */
   _views: {},
 
+  NEXT_VIEW_HINTS: {
+    dashboard: '页面加载说明',
+    classes: '查看班级概况、学生和教学进度',
+    students: '搜索学生并集中处理名单数据',
+    lessons: '管理教案、课程材料和备课进度',
+    schedule: '查看本周课程和当天教学安排',
+    assignments: '追踪作业提交情况和未交学生',
+    dictations: '登记默写结果并处理待重默学生',
+    exams: '分析考试成绩、趋势和班级表现',
+    todos: '按时间和优先级处理教学待办',
+    recycle: '恢复或彻底删除已移除的数据',
+    settings: '管理个人、设备、空间和更新设置',
+    admin: '管理平台用户、空间权限和资源配额',
+    quota: '查看空间和成员资源使用情况',
+  },
+
   /** 当前打开的确认弹窗回调（confirmDialog 用） */
   _confirmResolve: null,
 
@@ -358,7 +395,7 @@ window.App = {
       crumb.textContent = window.I18n?.t(name, title) || title;
     }
     // 导航高亮
-    document.querySelectorAll('.nav-item').forEach((item) => {
+    document.querySelectorAll('.nav-item, .mobile-nav-item').forEach((item) => {
       item.classList.toggle('active', item.dataset.view === name);
     });
     const container = document.getElementById('view-container');
@@ -371,6 +408,7 @@ window.App = {
     }
     try {
       await def.render(container);
+      App.mountNextViewHeader(container, name, def);
       def.init?.();
     } catch (e) {
       container.innerHTML = `<div class="card"><div class="card-title">${App.esc(e?.message || '页面加载失败')}</div><button class="btn btn-primary" type="button" id="view-retry-btn">重新加载</button></div>`;
@@ -379,6 +417,17 @@ window.App = {
     }
     window.I18n?.apply(container);
     container.scrollTop = 0;
+  },
+
+  mountNextViewHeader(container, name, def) {
+    if (App.currentUIVersion() !== 'next') return;
+    const title = def.title || name;
+    const hintKey = App.NEXT_VIEW_HINTS[name] || '页面加载说明';
+    const hint = window.I18n?.t(hintKey, hintKey) || hintKey;
+    const header = document.createElement('div');
+    header.className = 'next-view-header';
+    header.innerHTML = `<div><div class="next-view-kicker">${App.esc(window.I18n?.t('教学工作台', 'TEACHING WORKSPACE') || 'TEACHING WORKSPACE')}</div><h1>${App.esc(window.I18n?.t(title, title) || title)}</h1><p>${App.esc(hint)}</p></div><div class="next-view-header-mark">${App.esc(def.icon || '•')}</div>`;
+    container.prepend(header);
   },
 
   /**
@@ -1075,11 +1124,12 @@ window.App = {
   async boot() {
     if (App._bootStarted) return;
     App._bootStarted = true;
+    App.applyUIVersion(App.currentUIVersion());
     App.showAppLoading();
     // 绑定导航与租户切换器（只绑一次；登录成功后 boot 会再次进入）
     if (!App._bound) {
       App._bound = true;
-      document.querySelectorAll('.nav-item').forEach((item) => {
+      document.querySelectorAll('.nav-item, .mobile-nav-item').forEach((item) => {
         item.addEventListener('click', () => App.showView(item.dataset.view));
       });
       App.bindTenantSwitcher();
@@ -1106,6 +1156,8 @@ window.App = {
       }
       const themeBtn = document.getElementById('theme-toggle');
       if (themeBtn) themeBtn.addEventListener('click', () => App.toggleTheme());
+      const versionBtn = document.getElementById('ui-version-toggle');
+      if (versionBtn) versionBtn.addEventListener('click', () => App.toggleUIVersion());
     }
 
     try {

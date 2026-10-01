@@ -37,6 +37,21 @@
     .dct-retest-group-count { color: var(--text-muted); font-size: 12px; font-weight: 400; }
     .dct-check-no { width: 62px; color: var(--text-muted); font-size: 13px; }
     .dct-check-sub { color: var(--text-muted); font-size: 12px; }
+    .dct-status-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .dct-status-row:last-child { border-bottom: none; }
+    .dct-status-student { display: flex; align-items: center; gap: 8px; min-width: 150px; flex: 1; }
+    .dct-status-control { display: inline-flex; padding: 2px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); }
+    .dct-status-control label { position: relative; cursor: pointer; }
+    .dct-status-control input { position: absolute; opacity: 0; pointer-events: none; }
+    .dct-status-control span { display: block; padding: 5px 9px; border-radius: 999px; color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+    .dct-status-control input:checked + span { background: var(--primary); color: #fff; }
+    .dct-status-control input:disabled + span { cursor: not-allowed; opacity: .72; }
+    @media (max-width: 600px) {
+      .dct-status-row { align-items: flex-start; flex-direction: column; gap: 5px; }
+      .dct-status-student { min-width: 0; width: 100%; }
+      .dct-status-control { width: 100%; }
+      .dct-status-control label { flex: 1; text-align: center; }
+    }
     .dct-quick { display: flex; gap: 8px; margin: 10px 0; }
     .dct-scope-row { display: flex; gap: 16px; align-items: center; }
     .dct-scope-row label { display: flex; gap: 6px; align-items: center; font-size: 14px; }
@@ -505,40 +520,48 @@
       App.toast(errMsg(err, '加载失败'));
       return;
     }
-    // 只显示未登记学生：已有结果记录（含未过/需重默/已重默）的不出现在名单里
-    const registeredIds = new Set(existed.map((r) => r.studentId));
-    const pending = roster.filter((s) => !registeredIds.has(s.id));
-    if (!pending.length) {
-      const hint = roster.length
-        ? '该范围学生已全部登记完成。'
-        : d.scope === 'grade' && !isTenantAdmin && !anyManageable
-          ? '仅该班老师可登记本次全年段默写'
-          : '暂无学生名单，请先在学生管理中添加学生。';
+    if (!roster.length) {
+      const hint = d.scope === 'grade' && !isTenantAdmin && !anyManageable
+        ? '仅该班老师可登记本次全年段默写'
+        : '暂无学生名单，请先在学生管理中添加学生。';
       App.modal('登记默写结果', `<div class="muted">${App.esc(hint)}</div>`);
       return;
     }
-    const rows = pending
-      .slice()
-      .sort((x, y) => {
-        const nx = x.student_no || '￿';
-        const ny = y.student_no || '￿';
-        return nx < ny ? -1 : nx > ny ? 1 : 0;
-      })
-      .map(
-        (s) => `
-        <label class="dct-check-row">
-          <input type="checkbox" data-sid="${App.esc(s.id)}">
-          <span class="dct-check-no">${App.esc(s.student_no || '—')}</span>
-          <span>${App.esc(s.name)}</span>
-        </label>`
-      )
-      .join('');
+    const records = new Map(existed.map((r) => [r.studentId, r]));
+    const statusOf = (record) => {
+      if (!record) return 'unregistered';
+      if (record.passed) return 'passed';
+      if (record.retestCompleted) return 'retestPassed';
+      return 'failed';
+    };
+    const rank = { unregistered: 0, failed: 1, retestPassed: 2, passed: 3 };
+    const sortedRoster = roster.slice().sort((a, b) => {
+      const byStatus = rank[statusOf(records.get(a.id))] - rank[statusOf(records.get(b.id))];
+      if (byStatus) return byStatus;
+      return String(a.student_no || '￿').localeCompare(String(b.student_no || '￿'), 'zh-CN');
+    });
+    const statusLabels = { failed: '未通过', retestPassed: '重默通过', passed: '通过' };
+    const rows = sortedRoster.map((s) => {
+      const current = statusOf(records.get(s.id));
+      const record = records.get(s.id);
+      return `
+        <div class="dct-status-row" data-sid="${App.esc(s.id)}" data-original="${current}">
+          <div class="dct-status-student"><span class="dct-check-no">${App.esc(s.student_no || '—')}</span><strong>${App.esc(s.name)}</strong></div>
+          <div class="dct-status-control" role="radiogroup" aria-label="${App.esc(s.name)}">
+            ${['failed', 'retestPassed', 'passed'].map((value) => `<label>
+              <input type="radio" name="dct-status-${App.esc(s.id)}" value="${value}" data-status="${value}"${current === value ? ' checked' : ''}${((current === 'passed' || current === 'retestPassed') && value !== current) || (current === 'failed' && value === 'passed') ? ' disabled' : ''}>
+              <span>${statusLabels[value]}</span>
+            </label>`).join('')}
+          </div>
+        </div>`;
+    }).join('');
     App.modal(
-      `登记 — ${d.title || ''}（勾选为 Pass）`,
+      `登记 — ${d.title || ''}`,
       `
+        <div class="muted" style="margin-bottom:8px">尚未登记优先显示；重默通过显示在已通过之前。</div>
         <div class="dct-quick">
           <button class="btn btn-sm" id="dct-r-all" type="button">全部通过</button>
-          <button class="btn btn-sm" id="dct-r-none" type="button">全部未过</button>
+          <button class="btn btn-sm" id="dct-r-none" type="button">全部未通过</button>
         </div>
         <div class="dct-check-list" id="dct-r-list">${rows}</div>
         <div class="modal-actions">
@@ -546,41 +569,32 @@
           <button class="btn btn-primary" id="dct-r-save" type="button">提交登记</button>
         </div>`,
       (modal) => {
-        const setAll = (v) =>
-          modal.querySelectorAll('#dct-r-list input[type=checkbox]').forEach((cb) => (cb.checked = v));
-        modal.querySelector('#dct-r-all').onclick = () => setAll(true);
-        modal.querySelector('#dct-r-none').onclick = () => setAll(false);
+        const setAll = (value) => modal.querySelectorAll('#dct-r-list .dct-status-row').forEach((row) => {
+          const input = row.querySelector(`input[value="${value}"]:not(:disabled)`);
+          if (input) input.checked = true;
+        });
+        modal.querySelector('#dct-r-all').onclick = () => setAll('passed');
+        modal.querySelector('#dct-r-none').onclick = () => setAll('failed');
         modal.querySelector('#dct-r-cancel').onclick = App.closeModal;
         modal.querySelector('#dct-r-save').onclick = async () => {
-          const passed = [];
-          const failed = [];
-          modal.querySelectorAll('#dct-r-list input[type=checkbox]').forEach((cb) => {
-            (cb.checked ? passed : failed).push(cb.dataset.sid);
+          const passed = [], failed = [], retestPassed = [];
+          modal.querySelectorAll('#dct-r-list .dct-status-row').forEach((row) => {
+            const selected = row.querySelector('input:checked')?.value;
+            const original = row.dataset.original;
+            if (original === 'unregistered' && selected === 'passed') passed.push(row.dataset.sid);
+            if (original === 'unregistered' && selected === 'failed') failed.push(row.dataset.sid);
+            if (original === 'failed' && selected === 'retestPassed') retestPassed.push(row.dataset.sid);
           });
+          if (!passed.length && !failed.length && !retestPassed.length) {
+            App.toast('没有需要提交的状态变更');
+            return;
+          }
           try {
-            // §58 契约：body 为 { passed, failed }
-            await api.dictations.bulkResults(id, { passed, failed });
+            if (passed.length || failed.length) await api.dictations.bulkResults(id, { passed, failed });
+            if (retestPassed.length) await api.dictations.retest(id, { studentIds: retestPassed, completed: true });
             App.closeModal();
-            App.toast(`已登记：通过 ${passed.length} 人，未过 ${failed.length} 人`);
-            // 就地更新：名单里全是此前未登记的学生，stats 直接累加
-            const d = dictations.find((x) => x.id === id);
-            if (d) {
-              const st = (d.stats = d.stats || { passed: 0, failed: 0, retestRequired: 0, retestCompleted: 0 });
-              st.passed += passed.length;
-              st.retestRequired += failed.length; // 后端 failed 记录带 retest_required=1，计入「需重默」
-              // 全年段下派进度：按涉及学生的班级累加 registered（名单含 class_id）
-              if (Array.isArray(d.classProgress) && d.classProgress.length && Array.isArray(roster)) {
-                const involved = new Set([...passed, ...failed]);
-                const perClass = new Map();
-                roster.forEach((s) => {
-                  if (involved.has(s.id)) perClass.set(s.class_id, (perClass.get(s.class_id) || 0) + 1);
-                });
-                d.classProgress.forEach((p) => {
-                  if (perClass.has(p.classId)) p.registered += perClass.get(p.classId);
-                });
-              }
-            }
-            renderContent();
+            App.toast(`已登记：通过 ${passed.length} 人，未过 ${failed.length} 人，重默通过 ${retestPassed.length} 人`);
+            await loadData();
           } catch (err) {
             App.toast(errMsg(err));
           }
