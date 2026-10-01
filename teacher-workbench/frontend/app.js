@@ -88,7 +88,7 @@ window.App = {
       window.WB_RUNTIME ||
         window.Capacitor?.isNativePlatform?.() ||
         location.protocol === 'capacitor:' ||
-        (location.protocol === 'https:' && location.hostname === 'localhost' && !location.port)
+      (location.protocol === 'https:' && location.hostname === 'localhost' && !location.port)
     );
   },
 
@@ -1142,6 +1142,8 @@ window.App = {
       App._routeGuest();
     } finally {
       App.hideAppLoading();
+      App._bootStarted = false;
+      App._bootCompleted = true;
     }
   },
 };
@@ -1185,7 +1187,7 @@ window.addEventListener('unhandledrejection', (event) => {
   App.showStartupError(event.reason);
 });
 document.addEventListener('DOMContentLoaded', () => {
-  if (!App._bootStarted) App.boot();
+  if (!App._bootStarted && !App._bootCompleted) App.boot();
 });
 
 // hash 路由（#/name）：前进/后退（遍历历史时 popstate 与 hashchange 都会触发）

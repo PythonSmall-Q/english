@@ -149,16 +149,24 @@ jobs:
           const version = process.env.RELEASE_VERSION;
           const force = process.env.FORCE_UPDATE === 'true';
           const base = 'https://fff-file-r2-cloudflare.xmoj-script.uk';
+          const sourcePath = 'teacher-workbench/frontend/app-update.json';
+          const source = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
+          const sourceNotes = (platform) => {
+            const notes = source.platforms?.[platform]?.notes;
+            return Array.isArray(notes) && notes.length ? notes : [`${platform} release ${version}`];
+          };
           const manifest = {
             version,
             updatedAt: new Date().toISOString().slice(0, 10),
             platforms: {
-              android: { version, url: `${base}/teacher-workbench-android.apk`, force, notes: [`Android release ${version}`] },
-              windows: { version, url: `${base}/teacher-workbench-windows.exe`, force, notes: [`Windows release ${version}`] },
-              macos: { version, url: `${base}/teacher-workbench-macos.dmg`, force, notes: [`macOS release ${version}`] },
+              android: { version, url: `${base}/teacher-workbench-android.apk`, force, notes: sourceNotes('android') },
+              windows: { version, url: `${base}/teacher-workbench-windows.exe`, force, notes: sourceNotes('windows') },
+              macos: { version, url: `${base}/teacher-workbench-macos.dmg`, force, notes: sourceNotes('macos') },
             },
           };
-          fs.writeFileSync('r2-assets/app-update.json', JSON.stringify(manifest, null, 2));
+          const output = JSON.stringify(manifest, null, 2) + '\n';
+          fs.writeFileSync('r2-assets/app-update.json', output);
+          fs.writeFileSync(sourcePath, output);
           NODE
 
       - name: Set up Wrangler
@@ -171,6 +179,7 @@ jobs:
         run: |
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
+          wrangler r2 bucket cors set fff --file teacher-workbench/worker/r2-cors.json --force
           wrangler r2 object put fff/teacher-workbench-windows.exe --file r2-assets/teacher-workbench-windows.exe --remote --content-type application/vnd.microsoft.portable-executable
           wrangler r2 object put fff/teacher-workbench-macos.dmg --file r2-assets/teacher-workbench-macos.dmg --remote --content-type application/x-apple-diskimage
           wrangler r2 object put fff/teacher-workbench-android.apk --file r2-assets/teacher-workbench-android.apk --remote --content-type application/vnd.android.package-archive

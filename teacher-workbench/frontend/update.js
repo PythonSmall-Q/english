@@ -1,6 +1,9 @@
 /* 独立 App 版本检查：统一读取在线 app-update.json。 */
 (function () {
-  const UPDATE_URL = 'https://fff-file-r2-cloudflare.xmoj-script.uk/app-update.json';
+  // 版本清单从 Pages 读取：R2 公共域名未配置 CORS，Android WebView 无法直接 fetch。
+  // 清单中的安装包下载地址仍然指向 R2。
+  const R2_UPDATE_URL = 'https://fff-file-r2-cloudflare.xmoj-script.uk/app-update.json';
+  const UPDATE_URL = 'https://fff.xmoj-script.uk/app-update.json';
   const FRONTEND_UPDATE_URL = 'https://fff.xmoj-script.uk/update-manifest.json';
   let checked = false;
 
@@ -35,6 +38,9 @@
         const info = await nativeApp.getInfo();
         if (info?.version) return info.version;
       }
+      // Android 不能回退读取 app-update.json：该文件是发布清单，远端更新时也会被前端缓存覆盖。
+      // 读取不到原生版本时宁可触发一次升级提示，也不能把线上版本误判成本地版本。
+      return '0.0.0';
     }
     const manifestUrl = currentPlatform === 'android' ? 'app-update.json' : 'update-manifest.json';
     const response = await fetch(`${manifestUrl}?local=${Date.now()}`, { cache: 'no-store' });
@@ -54,10 +60,19 @@
   async function onlineVersion() {
     const currentPlatform = platform();
     if (!currentPlatform) return '0.0.0';
-    const response = await fetch(`${UPDATE_URL}?version=${Date.now()}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const manifest = await response.json();
-    return manifest.platforms?.[currentPlatform]?.version || manifest.version || '0.0.0';
+    let latest = '0.0.0';
+    for (const url of [R2_UPDATE_URL, UPDATE_URL]) {
+      try {
+        const response = await fetch(`${url}?version=${Date.now()}`, { cache: 'no-store' });
+        if (!response.ok) continue;
+        const manifest = await response.json();
+        const version = manifest.platforms?.[currentPlatform]?.version || manifest.version || '0.0.0';
+        if (compareVersions(version, latest) > 0) latest = version;
+      } catch (error) {
+        console.warn('[app-update] manifest skipped:', error.message);
+      }
+    }
+    return latest;
   }
 
   // 设置页显示当前安装版本；更新检查另行读取线上清单判断是否需要升级。
@@ -140,14 +155,23 @@
     const currentPlatform = platform();
     if (!currentPlatform) return false;
     try {
-      const [remoteResponse, current] = await Promise.all([
-        fetch(`${UPDATE_URL}?t=${Date.now()}`, { cache: 'no-store' }),
-        localVersion(),
-      ]);
-      if (!remoteResponse.ok) throw new Error(`HTTP ${remoteResponse.status}`);
-      const manifest = await remoteResponse.json();
-      const release = manifest.platforms?.[currentPlatform];
-      if (release?.version && compareVersions(release.version, current) > 0 && release.url) {
+      const current = await localVersion();
+      const manifests = [];
+      // 先读 R2，再读 Pages；任一来源可用即可继续检查。
+      for (const url of [R2_UPDATE_URL, UPDATE_URL]) {
+        try {
+          const response = await fetch(`${url}?t=${Date.now()}`, { cache: 'no-store' });
+          if (response.ok) manifests.push(await response.json());
+        } catch (error) {
+          console.warn('[app-update] manifest skipped:', error.message);
+        }
+      }
+      const releases = manifests
+        .map((manifest) => manifest.platforms?.[currentPlatform])
+        .filter((release) => release?.version && release.url)
+        .sort((left, right) => compareVersions(right.version, left.version));
+      const release = releases[0];
+      if (release && compareVersions(release.version, current) > 0) {
         showUpdate(release, currentPlatform);
         return true;
       }
