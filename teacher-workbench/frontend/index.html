@@ -115,10 +115,13 @@
     window.__startupFallbackTimer = setTimeout(function () {
       var loading = document.getElementById('app-loading');
       var auth = document.getElementById('auth-screen');
-      if (window.App) return;
       if (loading) loading.classList.add('is-hidden');
-      if (auth) auth.classList.remove('hidden');
-    }, 30000);
+      if (window.App && typeof window.App.showAuthScreen === 'function' && !window.App._bootCompleted) {
+        window.App.showAuthScreen('login');
+      } else if (auth) {
+        auth.classList.remove('hidden');
+      }
+    }, 18000);
   </script>
 
   <!-- 全局框架先加载（创建 window.App），视图文件随后注册 -->
