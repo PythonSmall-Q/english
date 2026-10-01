@@ -10,7 +10,7 @@
  *
  * 缓存名带版本号；sw.js 内容变更即触发 activate 清理旧版缓存。
  */
-const CACHE = 'wb-static-v18';
+const CACHE = 'wb-static-v19';
 const UPDATE_BASE = 'https://fff.xmoj-script.uk';
 const UPDATE_MANIFEST = `${UPDATE_BASE}/update-manifest.json`;
 
@@ -85,8 +85,8 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // 同源静态资源：stale-while-revalidate——缓存立即返回（秒开），后台向网络校验，
-  // 有更新才替换缓存（「修改了才更新，否则保留缓存」）；缓存未命中时等网络。
+  // 同源静态资源：network-first——优先使用线上新资源，网络失败再回退缓存，
+  // 避免旧 Service Worker 缓存覆盖新版前端。
   if (url.origin === self.location.origin && !url.pathname.startsWith('/api/')) {
     const isStatic =
       STATIC_PREFIXES.some((p) => url.pathname.startsWith(p)) ||
@@ -103,13 +103,9 @@ self.addEventListener('fetch', (e) => {
             return resp;
           })
           .catch(() => null);
-        // 命中缓存：先返回本地，后台静默更新（下次访问即新版）
-        if (hit) {
-          refresh.catch(() => {});
-          return hit;
-        }
         const resp = await refresh;
         if (resp) return resp;
+        if (hit) return hit;
         // APK/local cache is authoritative when present; use a remotely staged
         // update only as an offline fallback for files missing locally.
         const remoteCaches = (await caches.keys())
