@@ -109,6 +109,39 @@ async function executeCommand(c, command) {
     await saveReceipt(db, tenantId, user.id, command, result);
     return result;
   }
+  if (command.type === 'create_dictation') {
+    const title = String(payload.title || '').trim();
+    const scope = payload.scope === 'grade' ? 'grade' : 'class';
+    const classId = scope === 'class' ? String(payload.class_id || '').trim() : null;
+    if (!title || (scope === 'class' && !classId)) throw new ApiError('VALIDATION_ERROR', '默写标题和班级不能为空');
+    const academicYear = resolveAcademicYear(payload.academic_year || currentAcademicYear());
+    if (classId && !(await canManageClass(db, tenantId, user.id, classId)).ok) throw new ApiError('FORBIDDEN', '没有管理该班级的权限');
+    const id = newId();
+    await db.prepare(
+      `INSERT INTO dictations (id, tenant_id, teacher_id, class_id, title, scope, dictation_date, academic_year, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, tenantId, user.id, classId, title, scope, payload.dictation_date || null, academicYear, now()).run();
+    const result = { type: command.type, id, title, scope, class_id: classId };
+    await audit(db, tenantId, user.id, 'v2创建默写', 'dictation', id, result);
+    await saveReceipt(db, tenantId, user.id, command, result);
+    return result;
+  }
+  if (command.type === 'create_assignment') {
+    const title = String(payload.title || '').trim();
+    const classId = String(payload.class_id || '').trim();
+    if (!title || !classId) throw new ApiError('VALIDATION_ERROR', '作业标题和班级不能为空');
+    if (!(await canManageClass(db, tenantId, user.id, classId)).ok) throw new ApiError('FORBIDDEN', '没有管理该班级的权限');
+    const id = newId();
+    const academicYear = resolveAcademicYear(payload.academic_year || currentAcademicYear());
+    await db.prepare(
+      `INSERT INTO assignments (id, tenant_id, teacher_id, class_id, title, content, deadline, status, academic_year, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`
+    ).bind(id, tenantId, user.id, classId, title, payload.content || null, payload.deadline || null, academicYear, now(), now()).run();
+    const result = { type: command.type, id, title, class_id: classId };
+    await audit(db, tenantId, user.id, 'v2创建作业', 'assignment', id, result);
+    await saveReceipt(db, tenantId, user.id, command, result);
+    return result;
+  }
   throw new ApiError('VALIDATION_ERROR', `不支持的 v2 command：${command.type || 'unknown'}`);
 }
 

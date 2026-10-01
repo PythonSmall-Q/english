@@ -11,10 +11,45 @@
     return items.length ? items.map(render).join('') : `<div class="v2-empty">${esc(empty)}</div>`;
   }
 
+  const workspaceCache = { context: null, students: null, dictations: null, assignments: null, schedules: null };
+  const beijingTime = (value) => {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' }).format(date);
+  };
+  const statusText = (value) => ({ normal: '正常', at_risk: '需关注', pending: '待处理', done: '已完成', active: '进行中', missing: '未提交', submitted: '已提交' }[value] || value || '—');
+  async function getContext(force = false) {
+    if (!force && workspaceCache.context) return workspaceCache.context;
+    workspaceCache.context = (await window.apiV2.context({ academic_year: window.App.state.academicYear || '' })).data || {};
+    return workspaceCache.context;
+  }
+
+  function commandId(prefix) { return `${prefix}-${crypto.randomUUID()}`; }
+
+  function openCreateModal(kind, data, onSaved) {
+    const isDictation = kind === 'dictation';
+    const classes = data.classes || [];
+    App.modal(isDictation ? '新建默写' : '新建作业', `<label class="form-label">${isDictation ? '默写标题' : '作业标题'} *</label><input class="form-input" id="v2-create-title"><label class="form-label">班级 *</label><select class="form-input" id="v2-create-class">${classes.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}</select><label class="form-label">日期 / 截止时间</label><input class="form-input" id="v2-create-date" type="${isDictation ? 'date' : 'datetime-local'}"><div class="modal-actions"><button class="btn" id="v2-create-cancel" type="button">取消</button><button class="btn btn-primary" id="v2-create-save" type="button">创建</button></div>`, (modal) => {
+      modal.querySelector('#v2-create-cancel').onclick = App.closeModal;
+      modal.querySelector('#v2-create-save').onclick = async () => {
+        const title = modal.querySelector('#v2-create-title').value.trim();
+        const classId = modal.querySelector('#v2-create-class').value;
+        if (!title || !classId) return App.toast('请填写标题并选择班级');
+        const date = modal.querySelector('#v2-create-date').value || null;
+        try {
+          await window.apiV2.commands([{ type: isDictation ? 'create_dictation' : 'create_assignment', target: {}, payload: isDictation ? { title, class_id: classId, dictation_date: date } : { title, class_id: classId, deadline: date }, client_mutation_id: commandId(isDictation ? 'dictation' : 'assignment') }]);
+          App.closeModal();
+          App.toast('创建成功');
+          await onSaved();
+        } catch (error) { App.toast(error?.message || '创建失败'); }
+      };
+    });
+  }
+
   async function renderClasses(container) {
     container.innerHTML = `<div class="v2-loading">${esc(t('加载中', 'Loading'))}</div>`;
-    const result = await window.apiV2.context({ academic_year: window.App.state.academicYear || '' });
-    const data = result.data || {};
+    const data = await getContext();
     const classes = data.classes || [];
     container.innerHTML = `
       <section class="v2-page-heading"><div><span class="v2-kicker">TEACHING WORKSPACE</span><h1>我的班级</h1><p>查看班级概况、学生和教学进度</p></div><button class="btn btn-primary" type="button" data-v2-action="students">查看学生</button></section>
@@ -32,14 +67,14 @@
     container.innerHTML = `
       <section class="v2-page-heading"><div><span class="v2-kicker">CLASS WORKSPACE</span><h1>${esc(cls.name || '班级')}</h1><p>${esc(cls.grade || '')} · ${esc(cls.student_count || 0)} 名学生</p></div><button class="btn" type="button" data-v2-back>返回班级</button></section>
       <section class="v2-summary-grid">${summaryCard('学生', cls.student_count || 0, '有效名单')}${summaryCard('作业', data.assignments?.length || 0, '近期记录')}${summaryCard('默写', data.dictations?.length || 0, '近期记录')}${summaryCard('考试', data.exams?.length || 0, '近期记录')}</section>
-      <section class="v2-panel"><div class="v2-panel-heading"><h2>学生名单</h2><span>${data.students?.length || 0} 人</span></div><div class="v2-record-grid">${list(data.students || [], '暂无学生', (item) => `<div class="v2-record"><span>${esc(item.student_no || '—')}</span><strong>${esc(item.name)}</strong><small>${esc(item.status || '')}</small></div>`)}</div></section>`;
+          <section class="v2-panel"><div class="v2-panel-heading"><h2>学生名单</h2><span>${data.students?.length || 0} 人</span></div><div class="v2-record-grid">${list(data.students || [], '暂无学生', (item) => `<div class="v2-record"><span>${esc(item.student_no || '—')}</span><strong>${esc(item.name)}</strong><small>${esc(statusText(item.status))}</small></div>`)}</div></section>`;
     container.querySelector('[data-v2-back]')?.addEventListener('click', () => renderClasses(container));
   }
 
   async function renderStudents(container) {
     container.innerHTML = `<div class="v2-loading">${esc(t('加载中', 'Loading'))}</div>`;
-    const result = await window.apiV2.request('/students', { query: { academic_year: window.App.state.academicYear || '', limit: 200 } });
-    const students = result.data?.students || [];
+    if (!workspaceCache.students) workspaceCache.students = (await window.apiV2.request('/students', { query: { academic_year: window.App.state.academicYear || '', limit: 200 } })).data?.students || [];
+    const students = workspaceCache.students;
     container.innerHTML = `
       <section class="v2-page-heading"><div><span class="v2-kicker">ROSTER WORKSPACE</span><h1>学生管理</h1><p>搜索学生并集中处理名单数据</p></div><button class="btn btn-primary" type="button" data-v2-action="classes">查看班级</button></section>
       <section class="v2-panel"><div class="v2-filter-row"><input class="form-input" id="v2-student-q" placeholder="搜索学号 / 姓名"><span class="v2-filter-count">${students.length} 人</span></div><div class="v2-student-list" id="v2-student-list">${list(students, '暂无学生', (item) => `<button class="v2-student-row" type="button" data-v2-student="${esc(item.id)}"><span>${esc(item.student_no || '—')}</span><strong>${esc(item.name)}</strong><small>${esc(item.class_name || '')}</small></button>`)}</div></section>`;
@@ -63,18 +98,22 @@
 
   async function renderDictations(container) {
     container.innerHTML = `<div class="v2-loading">${esc(t('加载中', 'Loading'))}</div>`;
-    const result = await window.apiV2.request('/dictations', { query: { academic_year: window.App.state.academicYear || '' } });
-    const rows = result.data?.dictations || [];
+    if (!workspaceCache.dictations) workspaceCache.dictations = (await window.apiV2.request('/dictations', { query: { academic_year: window.App.state.academicYear || '' } })).data?.dictations || [];
+    const rows = workspaceCache.dictations;
     const pending = rows.reduce((sum, item) => sum + Number(item.retest_required || 0), 0);
-    container.innerHTML = `<section class="v2-page-heading"><div><span class="v2-kicker">DICTATION WORKSPACE</span><h1>默写管理</h1><p>登记默写结果并处理待重默学生</p></div><button class="btn btn-primary" type="button">新建默写</button></section><section class="v2-summary-grid">${summaryCard('默写次数', rows.length, '当前学年')}${summaryCard('未通过', rows.reduce((sum, item) => sum + Number(item.failed || 0), 0), '已登记结果')}${summaryCard('待重默', pending, '需要跟进', pending ? 'is-warn' : '')}</section><section class="v2-panel"><div class="v2-panel-heading"><h2>最近默写</h2><span>${rows.length} 项</span></div><div class="v2-v2-table">${list(rows, '暂无默写记录', (item) => `<div class="v2-list-row"><b>${esc(item.dictation_date || '—')}</b><strong>${esc(item.title || '未命名默写')}</strong><small>${esc(item.class_name || '全年段')} · 通过 ${esc(item.passed || 0)} · 未通过 ${esc(item.failed || 0)} · 待重默 ${esc(item.retest_required || 0)}</small></div>`)}</div></section>`;
+    const data = await getContext();
+    container.innerHTML = `<section class="v2-page-heading"><div><span class="v2-kicker">DICTATION WORKSPACE</span><h1>默写管理</h1><p>登记默写结果并处理待重默学生</p></div><button class="btn btn-primary" type="button" data-v2-create-dictation>新建默写</button></section><section class="v2-summary-grid">${summaryCard('默写次数', rows.length, '当前学年')}${summaryCard('未通过', rows.reduce((sum, item) => sum + Number(item.failed || 0), 0), '已登记结果')}${summaryCard('待重默', pending, '需要跟进', pending ? 'is-warn' : '')}</section><section class="v2-panel"><div class="v2-panel-heading"><h2>最近默写</h2><span>${rows.length} 项</span></div><div class="v2-v2-table">${list(rows, '暂无默写记录', (item) => `<div class="v2-list-row"><b>${esc(item.dictation_date || '—')}</b><strong>${esc(item.title || '未命名默写')}</strong><small>${esc(item.class_name || '全年段')} · 通过 ${esc(item.passed || 0)} · 未通过 ${esc(item.failed || 0)} · 待重默 ${esc(item.retest_required || 0)}</small></div>`)}</div></section>`;
+    container.querySelector('[data-v2-create-dictation]')?.addEventListener('click', () => openCreateModal('dictation', data, async () => { workspaceCache.dictations = null; await renderDictations(container); }));
   }
 
   async function renderAssignments(container) {
     container.innerHTML = `<div class="v2-loading">${esc(t('加载中', 'Loading'))}</div>`;
-    const result = await window.apiV2.request('/assignments', { query: { academic_year: window.App.state.academicYear || '' } });
-    const rows = result.data?.assignments || [];
+    if (!workspaceCache.assignments) workspaceCache.assignments = (await window.apiV2.request('/assignments', { query: { academic_year: window.App.state.academicYear || '' } })).data?.assignments || [];
+    const rows = workspaceCache.assignments;
     const missing = rows.reduce((sum, item) => sum + Number(item.missing_count || 0), 0);
-    container.innerHTML = `<section class="v2-page-heading"><div><span class="v2-kicker">ASSIGNMENT WORKSPACE</span><h1>作业统计</h1><p>追踪作业提交情况和未交学生</p></div><button class="btn btn-primary" type="button">新建作业</button></section><section class="v2-summary-grid">${summaryCard('作业数量', rows.length, '当前学年')}${summaryCard('已登记提交', rows.reduce((sum, item) => sum + Number(item.submitted_count || 0), 0), '提交记录')}${summaryCard('未提交', missing, '需要跟进', missing ? 'is-warn' : '')}</section><section class="v2-panel"><div class="v2-panel-heading"><h2>最近作业</h2><span>${rows.length} 项</span></div><div class="v2-v2-table">${list(rows, '暂无作业记录', (item) => `<div class="v2-list-row"><b>${esc(item.deadline || '—')}</b><strong>${esc(item.title || '未命名作业')}</strong><small>${esc(item.class_name || '全年段')} · 已登记 ${esc(item.submitted_count || 0)} · 未提交 ${esc(item.missing_count || 0)}</small></div>`)}</div></section>`;
+    const data = await getContext();
+    container.innerHTML = `<section class="v2-page-heading"><div><span class="v2-kicker">ASSIGNMENT WORKSPACE</span><h1>作业统计</h1><p>追踪作业提交情况和未交学生</p></div><button class="btn btn-primary" type="button" data-v2-create-assignment>新建作业</button></section><section class="v2-summary-grid">${summaryCard('作业数量', rows.length, '当前学年')}${summaryCard('已登记提交', rows.reduce((sum, item) => sum + Number(item.submitted_count || 0), 0), '提交记录')}${summaryCard('未提交', missing, '需要跟进', missing ? 'is-warn' : '')}</section><section class="v2-panel"><div class="v2-panel-heading"><h2>最近作业</h2><span>${rows.length} 项</span></div><div class="v2-v2-table">${list(rows, '暂无作业记录', (item) => `<div class="v2-list-row"><b>${esc(item.deadline ? beijingTime(item.deadline) : '—')}</b><strong>${esc(item.title || '未命名作业')}</strong><small>${esc(item.class_name || '全年段')} · 已登记 ${esc(item.submitted_count || 0)} · 未提交 ${esc(item.missing_count || 0)}</small></div>`)}</div></section>`;
+    container.querySelector('[data-v2-create-assignment]')?.addEventListener('click', () => openCreateModal('assignment', data, async () => { workspaceCache.assignments = null; await renderAssignments(container); }));
   }
 
   function renderSettings(container) {
@@ -132,7 +171,7 @@
     container.innerHTML = `<div class="v2-loading">${esc(t('加载中', 'Loading'))}</div>`;
     const result = await window.apiV2.request('/exams', { query: { academic_year: window.App.state.academicYear || '' } });
     const rows = result.data?.exams || [];
-    container.innerHTML = `<section class="v2-page-heading"><div><span class="v2-kicker">EXAM ANALYTICS</span><h1>考试成绩</h1><p>分析考试成绩、趋势和班级表现</p></div><button class="btn btn-primary" type="button">新建考试</button></section><section class="v2-summary-grid">${summaryCard('考试场次', rows.length, '当前学年')}${summaryCard('已录入人数', rows.reduce((sum, item) => sum + Number(item.student_count || 0), 0), '成绩数据')}${summaryCard('平均分', rows[0]?.avg_score ? Number(rows[0].avg_score).toFixed(1) : '—', '最近考试')}</section><section class="v2-panel"><div class="v2-panel-heading"><h2>考试记录</h2><span>${rows.length} 场</span></div>${list(rows, '暂无考试记录', (item) => `<div class="v2-list-row"><b>${esc(item.exam_date || '—')}</b><strong>${esc(item.name)}</strong><small>${esc(item.class_name || '全年段')} · 平均 ${item.avg_score == null ? '—' : Number(item.avg_score).toFixed(1)} · ${esc(item.student_count || 0)} 人</small></div>`)}</section>`;
+    container.innerHTML = `<section class="v2-page-heading"><div><span class="v2-kicker">EXAM ANALYTICS</span><h1>考试成绩</h1><p>分析考试成绩、趋势和班级表现</p></div></section><section class="v2-summary-grid">${summaryCard('考试场次', rows.length, '当前学年')}${summaryCard('已录入人数', rows.reduce((sum, item) => sum + Number(item.student_count || 0), 0), '成绩数据')}${summaryCard('平均分', rows[0]?.avg_score ? Number(rows[0].avg_score).toFixed(1) : '—', '最近考试')}</section><section class="v2-panel"><div class="v2-panel-heading"><h2>考试记录</h2><span>${rows.length} 场</span></div>${list(rows, '暂无考试记录', (item) => `<div class="v2-list-row"><b>${esc(item.exam_date || '—')}</b><strong>${esc(item.name)}</strong><small>${esc(item.class_name || '全年段')} · 平均 ${item.avg_score == null ? '—' : Number(item.avg_score).toFixed(1)} · ${esc(item.student_count || 0)} 人</small></div>`)}</section>`;
   }
 
   async function renderSchedule(container) {
@@ -141,14 +180,15 @@
     const rows = result.data?.schedules || [];
     const days = new Map();
     rows.forEach((item) => { if (!days.has(item.weekday)) days.set(item.weekday, []); days.get(item.weekday).push(item); });
-    container.innerHTML = `<section class="v2-page-heading"><div><span class="v2-kicker">SCHEDULE WORKSPACE</span><h1>教学课表</h1><p>查看本周课程和当天教学安排</p></div><div class="v2-day-switch"><button class="btn btn-sm">昨天</button><button class="btn btn-sm btn-primary">今天</button><button class="btn btn-sm">明天</button></div></section><section class="v2-schedule-grid">${[1, 2, 3, 4, 5, 6, 7].map((day) => `<article class="v2-panel"><div class="v2-panel-heading"><h2>星期${'一二三四五六日'[day - 1]}</h2><span>${days.get(day)?.length || 0} 节</span></div>${list(days.get(day) || [], '暂无课程', (item) => `<div class="v2-list-row"><b>${esc(item.start_time || `第 ${item.period || '—'} 节`)}</b><strong>${esc(item.title || '课程')}</strong><small>${esc(item.class_name || item.room || '')}</small></div>`)}</article>`).join('')}</section>`;
+    container.innerHTML = `<section class="v2-page-heading"><div><span class="v2-kicker">SCHEDULE WORKSPACE</span><h1>教学课表</h1><p>查看本周课程和当天教学安排</p></div><div class="v2-day-switch"><button class="btn btn-sm" type="button" data-v2-day-offset="-1">昨天</button><button class="btn btn-sm btn-primary" type="button" data-v2-day-offset="0">今天</button><button class="btn btn-sm" type="button" data-v2-day-offset="1">明天</button></div></section><section class="v2-schedule-grid">${[1, 2, 3, 4, 5, 6, 7].map((day) => `<article class="v2-panel" data-v2-weekday="${day}"><div class="v2-panel-heading"><h2>星期${'一二三四五六日'[day - 1]}</h2><span>${days.get(day)?.length || 0} 节</span></div>${list(days.get(day) || [], '暂无课程', (item) => `<div class="v2-list-row"><b>${esc(item.start_time || `第 ${item.period || '—'} 节`)}</b><strong>${esc(item.title || '课程')}</strong><small>${esc(item.class_name || item.room || '')}</small></div>`)}</article>`).join('')}</section>`;
+    container.querySelectorAll('[data-v2-day-offset]').forEach((button) => button.addEventListener('click', () => { const offset = Number(button.dataset.v2DayOffset); const date = new Date(); date.setDate(date.getDate() + offset); const weekday = date.getDay() || 7; container.querySelector(`[data-v2-weekday="${weekday}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }); }));
   }
 
   async function renderSimpleWorkspace(container, config) {
     container.innerHTML = `<div class="v2-loading">${esc(t('加载中', 'Loading'))}</div>`;
     const result = await window.apiV2.request(config.path, { query: { academic_year: window.App.state.academicYear || '' } });
     const rows = result.data?.[config.key] || [];
-    container.innerHTML = `<section class="v2-page-heading"><div><span class="v2-kicker">${esc(config.kicker)}</span><h1>${esc(config.title)}</h1><p>${esc(config.description)}</p></div><button class="btn btn-primary" type="button">${esc(config.action)}</button></section><section class="v2-panel"><div class="v2-panel-heading"><h2>${esc(config.section)}</h2><span>${rows.length} 项</span></div>${list(rows, config.empty, (item) => `<div class="v2-list-row"><b>${esc(item.due_date || item.updated_at || item.deleted_at || '—')}</b><strong>${esc(item.title || item.name || item.item_type || '记录')}</strong><small>${esc(item.class_name || item.scope || item.status || item.deleted_by || '')}</small></div>`)}</section>`;
+    container.innerHTML = `<section class="v2-page-heading"><div><span class="v2-kicker">${esc(config.kicker)}</span><h1>${esc(config.title)}</h1><p>${esc(config.description)}</p></div></section><section class="v2-panel"><div class="v2-panel-heading"><h2>${esc(config.section)}</h2><span>${rows.length} 项</span></div>${list(rows, config.empty, (item) => `<div class="v2-list-row"><b>${esc(beijingTime(item.due_date || item.updated_at || item.deleted_at))}</b><strong>${esc(item.title || item.name || item.item_type || '记录')}</strong><small>${esc(item.class_name || item.scope || statusText(item.status) || item.deleted_by || '')}</small></div>`)}</section>`;
   }
 
   async function renderDashboard(container) {
