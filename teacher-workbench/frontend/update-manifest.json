@@ -9,6 +9,7 @@
     "api.js",
     "api-v2.js",
     "v2/shell.js",
+    "assets/teaching-workbench.skill.md",
     "auth.js",
     "landing.js",
     "update.js",
