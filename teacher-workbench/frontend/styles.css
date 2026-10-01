@@ -2617,3 +2617,33 @@ html[data-theme='dark'] .admin-section[open] .admin-section-summary {
     padding: 14px 16px 16px;
   }
 }
+
+/* v2 final palette override: keep the navigation light and separate from the workspace. */
+html[data-ui-version='next'] .sidebar {
+  background: #dcefeb;
+  border-right: 1px solid rgba(29, 79, 74, 0.14);
+  color: #1d4f4a;
+  box-shadow: 8px 0 26px rgba(19, 61, 58, 0.06);
+}
+
+html[data-ui-version='next'] .sidebar-user,
+html[data-ui-version='next'] .sidebar-footer {
+  border-color: rgba(29, 79, 74, 0.14);
+}
+
+html[data-ui-version='next'] .sidebar-user-name,
+html[data-ui-version='next'] .nav-item,
+html[data-ui-version='next'] .sidebar-footer .btn {
+  color: #24534f;
+}
+
+html[data-ui-version='next'] .nav-item:hover {
+  background: rgba(255, 255, 255, 0.56);
+  color: #075e59;
+}
+
+html[data-ui-version='next'] .nav-item.active {
+  background: #bde6df;
+  color: #075e59;
+  box-shadow: inset 3px 0 0 #0f9388;
+}

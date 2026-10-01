@@ -180,7 +180,7 @@ app.get('/context', requireAuth, requireTenant, requireRole(['viewer']), async (
       'SELECT COUNT(*) AS count FROM students WHERE tenant_id = ? AND academic_year = ? AND exempt = 0'
     ).bind(tenantId, academicYear).first(),
     db.prepare(
-      `SELECT s.id, s.title, s.weekday, s.period, s.start_time, s.end_time, s.room, c.name AS class_name
+      `SELECT s.id, s.title, s.weekday, s.period, s.start_time, s.end_time, s.classroom AS room, c.name AS class_name
        FROM schedules s LEFT JOIN classes c ON c.id = s.class_id
        WHERE s.tenant_id = ? AND s.academic_year = ? AND s.weekday = ?
        ORDER BY s.period IS NULL, s.period ASC, s.start_time ASC LIMIT 30`
@@ -386,7 +386,7 @@ app.get('/schedules', requireAuth, requireTenant, requireRole(['viewer']), async
   const tenantId = c.get('tenantId');
   const academicYear = resolveAcademicYear(c.req.query('academic_year') || currentAcademicYear());
   const rows = await db.prepare(
-    `SELECT s.id, s.title, s.weekday, s.period, s.start_time, s.end_time, s.room, s.class_id, c.name AS class_name
+    `SELECT s.id, s.title, s.weekday, s.period, s.start_time, s.end_time, s.classroom AS room, s.class_id, c.name AS class_name
        FROM schedules s LEFT JOIN classes c ON c.id = s.class_id AND c.tenant_id = s.tenant_id
       WHERE s.tenant_id = ? AND s.academic_year = ?
       ORDER BY s.weekday, s.period IS NULL, s.period, s.start_time LIMIT 300`
