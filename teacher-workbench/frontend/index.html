@@ -121,5 +121,9 @@
        各视图在真正需要导入/导出 xlsx 时才懒加载 vendor/xlsx.full.min.js -->
 
   <!-- 13 个视图全部按需懒加载（App.ensureView），首屏只带框架脚本 -->
+  <script>
+    // Android WebView 首次加载偶尔错过 DOMContentLoaded，脚本就绪后补一次启动。
+    if (window.App && !window.App._bootStarted) window.App.boot();
+  </script>
 </body>
 </html>

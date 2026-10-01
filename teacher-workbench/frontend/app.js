@@ -1072,6 +1072,8 @@ window.App = {
 
   /** 应用启动：auth.me 成功→进主框架；失败→登录/注册视图 */
   async boot() {
+    if (App._bootStarted) return;
+    App._bootStarted = true;
     App.showAppLoading();
     // 绑定导航与租户切换器（只绑一次；登录成功后 boot 会再次进入）
     if (!App._bound) {
@@ -1182,7 +1184,9 @@ window.addEventListener('error', (event) => {
 window.addEventListener('unhandledrejection', (event) => {
   App.showStartupError(event.reason);
 });
-document.addEventListener('DOMContentLoaded', () => App.boot());
+document.addEventListener('DOMContentLoaded', () => {
+  if (!App._bootStarted) App.boot();
+});
 
 // hash 路由（#/name）：前进/后退（遍历历史时 popstate 与 hashchange 都会触发）
 // 与页面内 #/ 链接直达视图。showView 的 pushState 不产生事件，故无需抑制标记；

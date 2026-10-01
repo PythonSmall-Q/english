@@ -3,7 +3,7 @@
   "updatedAt": "2026-09-30",
   "platforms": {
     "android": {
-      "version": "3.0.8",
+      "version": "3.0.9",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-android.apk",
       "force": true,
       "notes": ["Android release 3.0.8"]
