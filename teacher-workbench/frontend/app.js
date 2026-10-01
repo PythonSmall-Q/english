@@ -512,6 +512,7 @@ window.App = {
         directory: 'DOCUMENTS',
         recursive: true,
       });
+      App.toast(`${I18n.t('文件已保存到')}：Documents/${filename}`);
       return { saved: true, uri: result.uri || 'Documents' };
     }
     const url = URL.createObjectURL(blob);

@@ -10,7 +10,7 @@
  *
  * 缓存名带版本号；sw.js 内容变更即触发 activate 清理旧版缓存。
  */
-const CACHE = 'wb-static-v17';
+const CACHE = 'wb-static-v18';
 const UPDATE_BASE = 'https://fff.xmoj-script.uk';
 const UPDATE_MANIFEST = `${UPDATE_BASE}/update-manifest.json`;
 
@@ -29,7 +29,6 @@ self.addEventListener('activate', (e) => {
     caches
       .keys()
       .then((keys) => Promise.all(keys.filter((k) => k.startsWith('wb-static-') && k !== CACHE).map((k) => caches.delete(k))))
-      .then(() => updateRemoteCache())
       .then(() => self.clients.claim())
   );
 });
@@ -97,14 +96,6 @@ self.addEventListener('fetch', (e) => {
     if (!isStatic) return;
     e.respondWith(
       caches.open(CACHE).then(async (cache) => {
-        const remoteCaches = (await caches.keys())
-          .filter((key) => key.startsWith('wb-static-remote-'))
-          .sort()
-          .reverse();
-        for (const remoteCacheName of remoteCaches) {
-          const remoteHit = await caches.open(remoteCacheName).then((remoteCache) => remoteCache.match(e.request));
-          if (remoteHit) return remoteHit;
-        }
         const hit = await cache.match(e.request);
         const refresh = fetch(e.request)
           .then((resp) => {
@@ -119,6 +110,16 @@ self.addEventListener('fetch', (e) => {
         }
         const resp = await refresh;
         if (resp) return resp;
+        // APK/local cache is authoritative when present; use a remotely staged
+        // update only as an offline fallback for files missing locally.
+        const remoteCaches = (await caches.keys())
+          .filter((key) => key.startsWith('wb-static-remote-'))
+          .sort()
+          .reverse();
+        for (const remoteCacheName of remoteCaches) {
+          const remoteHit = await caches.open(remoteCacheName).then((remoteCache) => remoteCache.match(e.request));
+          if (remoteHit) return remoteHit;
+        }
         throw new Error('offline and no cache');
       })
     );

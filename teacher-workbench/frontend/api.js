@@ -66,6 +66,7 @@
   // 纳入学年归档过滤/写保护的命名空间（列表 GET 自动带参；非 GET 历史模式拦截）
   const ACADEMIC_LIST_PREFIXES = ['/classes', '/students', '/schedules', '/assignments', '/dictations', '/exams'];
   const ACADEMIC_WRITE_PREFIXES = ['/classes', '/students', '/schedules', '/assignments', '/dictations', '/exams', '/import'];
+  const REQUEST_TIMEOUT_MS = 15000;
 
   async function request(path, { method = 'GET', body, query } = {}) {
     const isAcademicListGet =
@@ -102,16 +103,24 @@
     addD1Bookmarks(headers);
 
     let res;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
       res = await fetch(url, {
         method,
         credentials: 'include',
         headers,
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
       });
       saveD1Bookmarks(res);
     } catch (e) {
-      throw { code: 'NETWORK_ERROR', message: '网络异常，请检查后端服务是否启动' };
+      throw {
+        code: e?.name === 'AbortError' ? 'REQUEST_TIMEOUT' : 'NETWORK_ERROR',
+        message: e?.name === 'AbortError' ? '请求超时，请检查网络后重试' : '网络异常，请检查后端服务是否启动',
+      };
+    } finally {
+      clearTimeout(timeout);
     }
 
     let payload = null;

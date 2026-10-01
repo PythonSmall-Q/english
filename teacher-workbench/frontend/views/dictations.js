@@ -31,6 +31,10 @@
     .dct-check-list { max-height: 46vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; }
     .dct-check-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
     .dct-check-row:last-child { border-bottom: none; }
+    .dct-retest-group { margin: 10px 0 14px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+    .dct-retest-group:last-child { margin-bottom: 0; }
+    .dct-retest-group-title { display: flex; align-items: center; gap: 8px; padding: 9px 12px; font-weight: 600; color: var(--text); background: var(--card-bg); border-bottom: 1px solid var(--border); }
+    .dct-retest-group-count { color: var(--text-muted); font-size: 12px; font-weight: 400; }
     .dct-check-no { width: 62px; color: var(--text-muted); font-size: 13px; }
     .dct-check-sub { color: var(--text-muted); font-size: 12px; }
     .dct-quick { display: flex; gap: 8px; margin: 10px 0; }
@@ -670,15 +674,31 @@
       App.modal(`重默·${clsName}`, '<div class="muted">该班没有待重默的学生 ✓</div>');
       return;
     }
-    const checkRows = rows
+    const retestGroups = [];
+    const retestGroupMap = new Map();
+    rows.forEach((row) => {
+      if (!retestGroupMap.has(row.dictationId)) {
+        const group = { id: row.dictationId, title: row.dictationTitle || '默写', rows: [] };
+        retestGroupMap.set(row.dictationId, group);
+        retestGroups.push(group);
+      }
+      retestGroupMap.get(row.dictationId).rows.push(row);
+    });
+    const checkRows = retestGroups
       .map(
-        (r) => `
-        <label class="dct-check-row">
-          <input type="checkbox" data-did="${App.esc(r.dictationId)}" data-sid="${App.esc(r.studentId)}">
-          <span class="dct-check-no">${App.esc(r.studentNo || '—')}</span>
-          <span>${App.esc(r.name)}</span>
-          <span class="dct-check-sub">${App.esc(r.dictationTitle || '')}</span>
-        </label>`
+        (group) => `
+        <section class="dct-retest-group">
+          <div class="dct-retest-group-title">
+            <span>${App.esc(group.title)}</span>
+            <span class="dct-retest-group-count">未通过 ${group.rows.length} 人</span>
+          </div>
+          ${group.rows.map((r) => `
+            <label class="dct-check-row">
+              <input type="checkbox" data-did="${App.esc(r.dictationId)}" data-sid="${App.esc(r.studentId)}">
+              <span class="dct-check-no">${App.esc(r.studentNo || '—')}</span>
+              <span>${App.esc(r.name)}</span>
+            </label>`).join('')}
+        </section>`
       )
       .join('');
     App.modal(
