@@ -38,6 +38,7 @@ import { purgeExpiredTrials } from './trial.js';
 import { purgeRecycleBin } from './recycle.js';
 import trialRoutes from './routes/trial.js';
 import todoRoutes from './routes/todos.js';
+import v2Routes from './routes/v2.js';
 
 const app = new Hono();
 
@@ -58,6 +59,13 @@ app.use(
     exposeHeaders: ['x-d1-bookmark', 'x-trial-d1-bookmark', 'x-grad-d1-bookmark'],
   })
 );
+
+app.use('/api/v2/*', async (c, next) => {
+  const requestId = c.req.header('X-Request-Id') || crypto.randomUUID();
+  c.set('requestId', requestId);
+  c.header('X-Request-Id', requestId);
+  await next();
+});
 
 app.route('/api/v1/auth', authRoutes);
 app.route('/api/v1/tenants', tenantRoutes);
@@ -81,6 +89,7 @@ app.route('/api/v1/graduated', graduatedRoutes);
 app.route('/api/v1/trials', trialRoutes);
 app.route('/api/v1/recycle', recycleRoutes);
 app.route('/api/v1/todos', todoRoutes);
+app.route('/api/v2', v2Routes);
 
 app.onError(onError);
 app.notFound(notFoundHandler);

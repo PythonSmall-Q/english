@@ -169,6 +169,7 @@ window.App = {
   applyUIVersion(version) {
     const value = version === 'next' ? 'next' : 'legacy';
     document.documentElement.dataset.uiVersion = value;
+    document.querySelectorAll('.v2-only-nav').forEach((item) => item.classList.toggle('hidden', value !== 'next'));
     const button = document.getElementById('ui-version-toggle');
     if (button) {
       const key = value === 'next' ? '返回旧版' : '进入新版';
@@ -184,6 +185,7 @@ window.App = {
     localStorage.setItem(App.UI_VERSION_KEY, next);
     App.applyUIVersion(next);
     App.toast(next === 'next' ? '已进入新版工作台' : '已返回旧版工作台');
+    if (App.state.view) App.showView(App.state.view).catch(() => {});
   },
 
   /**
@@ -371,6 +373,26 @@ window.App = {
   async showView(name) {
     // AI 入口暂时隐藏，保留视图代码和接口但禁止通过地址或旧导航直接打开。
     if (name === 'ai') name = 'dashboard';
+    if (App.currentUIVersion() === 'next' && window.V2Shell?.has(name)) {
+      const container = document.getElementById('view-container');
+      const crumb = document.getElementById('breadcrumb');
+      App.state.view = name;
+      if (crumb) crumb.textContent = window.I18n?.t('dashboard', '工作台首页') || '工作台首页';
+      document.querySelectorAll('.nav-item, .mobile-nav-item').forEach((item) => item.classList.toggle('active', item.dataset.view === name));
+      container.innerHTML = '';
+      if (location.hash !== '#/' + name) {
+        try { history.pushState(null, '', '#/' + name); } catch (e) { /* 忽略 */ }
+      }
+      try {
+        await window.V2Shell.render(name, container);
+      } catch (e) {
+        container.innerHTML = `<div class="card"><div class="card-title">${App.esc(e?.message || '新版页面加载失败')}</div><button class="btn btn-primary" type="button" id="v2-retry-btn">重新加载</button></div>`;
+        document.getElementById('v2-retry-btn')?.addEventListener('click', () => App.showView(name));
+        App.toast(e?.message || '新版页面加载失败');
+      }
+      window.I18n?.apply(container);
+      return;
+    }
     // 懒加载：脚本未下载时先注入再渲染（Service Worker 缓存后二次进入秒开）
     let ready = true;
     try {

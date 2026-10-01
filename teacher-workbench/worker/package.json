@@ -8,7 +8,11 @@
     "migrate:local": "wrangler d1 migrations apply DB --local"
   },
   "dependencies": {
-    "hono": "latest"
+    "@cloudflare/workers-oauth-provider": "^1.2.1",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "agents": "^0.24.0",
+    "hono": "latest",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "wrangler": "latest"

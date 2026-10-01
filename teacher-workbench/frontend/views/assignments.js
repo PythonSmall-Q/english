@@ -189,7 +189,7 @@
           </div>`;
       })
       .join('');
-    content.innerHTML = summary + `<div class="asg-cols">${cols}</div>`;
+    content.innerHTML = (App.currentUIVersion() === 'next' ? summary : '') + `<div class="asg-cols">${cols}</div>`;
   }
 
   // ===== 弹窗：新建作业 =====

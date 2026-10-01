@@ -17,7 +17,7 @@
  */
 
 import { getCookie } from 'hono/cookie';
-import { getSessionUser, SESSION_COOKIE } from './auth-core.js';
+import { getSessionUser, SESSION_COOKIE, sha256Hex } from './auth-core.js';
 import { ApiError, newId, now, currentAcademicYear } from './db.js';
 
 /**
@@ -27,7 +27,26 @@ import { ApiError, newId, now, currentAcademicYear } from './db.js';
  */
 export async function requireAuth(c, next) {
   const token = getCookie(c, SESSION_COOKIE);
-  const user = await getSessionUser(c.env, token);
+  let user = await getSessionUser(c.env, token);
+  if (!user) {
+    const authorization = c.req.header('Authorization') || '';
+    const match = /^Bearer\s+(.+)$/i.exec(authorization);
+    if (match) {
+      const tokenHash = await sha256Hex(match[1]);
+      const row = await c.env.DB.prepare(
+        `SELECT m.id AS mcp_token_id, m.tenant_id AS mcp_tenant_id, m.scopes AS mcp_scopes,
+                m.expires_at AS mcp_expires_at, u.*
+           FROM mcp_tokens m JOIN users u ON u.id = m.user_id
+          WHERE m.token_hash = ? AND m.revoked_at IS NULL`
+      ).bind(tokenHash).first();
+      if (row && (!row.mcp_expires_at || row.mcp_expires_at > new Date().toISOString()) && row.status === 'active') {
+        user = row;
+        c.set('mcpTokenId', row.mcp_token_id);
+        c.set('mcpTenantId', row.mcp_tenant_id);
+        c.set('mcpScopes', String(row.mcp_scopes || '').split(',').filter(Boolean));
+      }
+    }
+  }
   if (!user) throw new ApiError('UNAUTHORIZED', '未登录或会话已过期');
   c.set('user', user);
   await next();
@@ -47,7 +66,7 @@ export async function requireAuth(c, next) {
  * @throws {ApiError} BAD_REQUEST（缺头）/ FORBIDDEN（非成员或租户停用）
  */
 export async function requireTenant(c, next) {
-  const tenantId = c.req.header('X-Tenant-Id');
+  const tenantId = c.req.header('X-Tenant-Id') || c.get('mcpTenantId');
   if (!tenantId) {
     throw new ApiError('BAD_REQUEST', '缺少 X-Tenant-Id 请求头');
   }

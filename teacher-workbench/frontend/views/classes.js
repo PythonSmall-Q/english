@@ -487,7 +487,7 @@ App.registerView('classes', {
       </div>`
       : '';
 
-    el.innerHTML = groupsHtml + summaryHtml + headHtml + bodyHtml + gradHtml;
+    el.innerHTML = groupsHtml + (App.currentUIVersion() === 'next' ? summaryHtml : '') + headHtml + bodyHtml + gradHtml;
 
     // 班级卡片成绩趋势：异步补取后局部插入（不阻塞整页；失败静默不画）
     for (const c of classes) clsLoadTrend(c);

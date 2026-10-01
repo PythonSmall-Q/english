@@ -503,11 +503,11 @@
     const showDownload = isHistory && archivedView && (role === 'owner' || role === 'admin');
     const wrap = document.createElement('div');
     wrap.innerHTML = `
-      <div class="next-summary-grid ex-summary">
+      ${App.currentUIVersion() === 'next' ? `<div class="next-summary-grid ex-summary">
         <div class="next-summary-card"><span>${I18n.t('考试场次')}</span><strong>${exams.length}</strong><small>${I18n.t('当前学年记录')}</small></div>
         <div class="next-summary-card"><span>${I18n.t('已录入人数')}</span><strong>${exams.reduce((sum, e) => sum + (Number(e.student_count) || 0), 0)}</strong><small>${I18n.t('成绩数据')}</small></div>
         <div class="next-summary-card"><span>${I18n.t('最近考试')}</span><strong>${App.esc(exams[0]?.name || '—')}</strong><small>${App.esc(exams[0]?.exam_date || I18n.t('暂无日期'))}</small></div>
-      </div>
+      </div>` : ''}
       <div class="ex-toolbar">
         <span class="muted">共 ${exams.length} 场考试</span>
         <span style="display:flex;gap:8px;flex-wrap:wrap">
