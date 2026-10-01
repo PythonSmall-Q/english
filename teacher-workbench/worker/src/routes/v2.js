@@ -380,6 +380,21 @@ app.get('/dictations', requireAuth, requireTenant, requireRole(['viewer']), asyn
   return c.json({ success: true, data: { dictations: rows.results }, meta: responseMeta(c, academicYear, 'v2-dictations-1') });
 });
 
+app.get('/dictations/:id/workspace', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
+  const db = c.get('tenantDb') || c.env.DB;
+  const tenantId = c.get('tenantId');
+  const id = c.req.param('id');
+  const dictation = await db.prepare('SELECT id, title, class_id, scope, dictation_date FROM dictations WHERE id = ? AND tenant_id = ?').bind(id, tenantId).first();
+  if (!dictation) throw new ApiError('NOT_FOUND', '默写不存在');
+  const students = await db.prepare(
+    `SELECT s.id, s.student_no, s.name, s.class_id, r.passed, r.retest_required, r.retest_completed
+       FROM students s LEFT JOIN dictation_results r ON r.student_id = s.id AND r.dictation_id = ? AND r.tenant_id = s.tenant_id
+      WHERE s.tenant_id = ? AND s.exempt = 0 AND (? = 'grade' OR s.class_id = ?)
+      ORDER BY CASE WHEN r.id IS NULL THEN 0 WHEN r.passed = 0 THEN 1 ELSE 2 END, s.student_no`
+  ).bind(id, tenantId, dictation.scope, dictation.class_id).all();
+  return c.json({ success: true, data: { dictation, students: students.results }, meta: responseMeta(c, resolveAcademicYear(c.req.query('academic_year')), 'v2-dictation-workspace-1') });
+});
+
 app.get('/assignments', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');

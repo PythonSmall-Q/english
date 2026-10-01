@@ -96,14 +96,35 @@
     container.querySelector('[data-v2-back]')?.addEventListener('click', () => renderStudents(container));
   }
 
+  async function openDictationRegister(dictationId, container) {
+    const result = await window.apiV2.request(`/dictations/${encodeURIComponent(dictationId)}/workspace`, { query: { academic_year: window.App.state.academicYear || '' } });
+    const data = result.data || {};
+    const rows = data.students || [];
+    App.modal(`登记：${data.dictation?.title || '默写'}`, `<div class="v2-status-list">${list(rows, '暂无学生', (item) => `<label class="v2-register-row"><span>${esc(item.student_no || '—')}</span><strong>${esc(item.name)}</strong><span class="v2-register-toggle"><input type="checkbox" data-v2-pass="${esc(item.id)}"${item.passed ? ' checked' : ''}><span>通过</span></span></label>`)}</div><div class="modal-actions"><button class="btn" id="v2-register-cancel" type="button">取消</button><button class="btn btn-primary" id="v2-register-save" type="button">提交登记</button></div>`, (modal) => {
+      modal.querySelector('#v2-register-cancel').onclick = App.closeModal;
+      modal.querySelector('#v2-register-save').onclick = async () => {
+        const passed = [], failed = [];
+        modal.querySelectorAll('[data-v2-pass]').forEach((input) => (input.checked ? passed : failed).push(input.dataset.v2Pass));
+        try {
+          await window.apiV2.commands([{ type: 'record_dictation_results', target: { id: dictationId }, payload: { passed, failed }, client_mutation_id: commandId('register') }]);
+          App.closeModal();
+          App.toast('默写登记已保存');
+          workspaceCache.dictations = null;
+          await renderDictations(container);
+        } catch (error) { App.toast(error?.message || '登记失败'); }
+      };
+    });
+  }
+
   async function renderDictations(container) {
     container.innerHTML = `<div class="v2-loading">${esc(t('加载中', 'Loading'))}</div>`;
     if (!workspaceCache.dictations) workspaceCache.dictations = (await window.apiV2.request('/dictations', { query: { academic_year: window.App.state.academicYear || '' } })).data?.dictations || [];
     const rows = workspaceCache.dictations;
     const pending = rows.reduce((sum, item) => sum + Number(item.retest_required || 0), 0);
     const data = await getContext();
-    container.innerHTML = `<section class="v2-page-heading"><div><span class="v2-kicker">DICTATION WORKSPACE</span><h1>默写管理</h1><p>登记默写结果并处理待重默学生</p></div><button class="btn btn-primary" type="button" data-v2-create-dictation>新建默写</button></section><section class="v2-summary-grid">${summaryCard('默写次数', rows.length, '当前学年')}${summaryCard('未通过', rows.reduce((sum, item) => sum + Number(item.failed || 0), 0), '已登记结果')}${summaryCard('待重默', pending, '需要跟进', pending ? 'is-warn' : '')}</section><section class="v2-panel"><div class="v2-panel-heading"><h2>最近默写</h2><span>${rows.length} 项</span></div><div class="v2-v2-table">${list(rows, '暂无默写记录', (item) => `<div class="v2-list-row"><b>${esc(item.dictation_date || '—')}</b><strong>${esc(item.title || '未命名默写')}</strong><small>${esc(item.class_name || '全年段')} · 通过 ${esc(item.passed || 0)} · 未通过 ${esc(item.failed || 0)} · 待重默 ${esc(item.retest_required || 0)}</small></div>`)}</div></section>`;
+    container.innerHTML = `<section class="v2-page-heading"><div><span class="v2-kicker">DICTATION WORKSPACE</span><h1>默写管理</h1><p>登记默写结果并处理待重默学生</p></div><button class="btn btn-primary" type="button" data-v2-create-dictation>新建默写</button></section><section class="v2-summary-grid">${summaryCard('默写次数', rows.length, '当前学年')}${summaryCard('未通过', rows.reduce((sum, item) => sum + Number(item.failed || 0), 0), '已登记结果')}${summaryCard('待重默', pending, '需要跟进', pending ? 'is-warn' : '')}</section><section class="v2-panel"><div class="v2-panel-heading"><h2>最近默写</h2><span>${rows.length} 项</span></div><div class="v2-v2-table">${list(rows, '暂无默写记录', (item) => `<div class="v2-list-row"><b>${esc(item.dictation_date || '—')}</b><strong>${esc(item.title || '未命名默写')}</strong><small>${esc(item.class_name || '全年段')} · 通过 ${esc(item.passed || 0)} · 未通过 ${esc(item.failed || 0)} · 待重默 ${esc(item.retest_required || 0)} <button class="btn btn-sm" type="button" data-v2-register="${esc(item.id)}">登记</button></small></div>`)}</div></section>`;
     container.querySelector('[data-v2-create-dictation]')?.addEventListener('click', () => openCreateModal('dictation', data, async () => { workspaceCache.dictations = null; await renderDictations(container); }));
+    container.querySelectorAll('[data-v2-register]').forEach((button) => button.addEventListener('click', () => openDictationRegister(button.dataset.v2Register, container)));
   }
 
   async function renderAssignments(container) {
