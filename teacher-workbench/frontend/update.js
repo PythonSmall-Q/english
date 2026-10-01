@@ -29,6 +29,13 @@
     if (window.WB_RUNTIME?.getAppVersion) return window.WB_RUNTIME.getAppVersion();
     if (window.WB_RUNTIME?.appVersion) return window.WB_RUNTIME.appVersion;
     const currentPlatform = platform();
+    if (currentPlatform === 'android') {
+      const nativeApp = window.Capacitor?.Plugins?.App;
+      if (nativeApp?.getInfo) {
+        const info = await nativeApp.getInfo();
+        if (info?.version) return info.version;
+      }
+    }
     const manifestUrl = currentPlatform === 'android' ? 'app-update.json' : 'update-manifest.json';
     const response = await fetch(`${manifestUrl}?local=${Date.now()}`, { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -53,8 +60,8 @@
     return manifest.platforms?.[currentPlatform]?.version || manifest.version || '0.0.0';
   }
 
-  // 设置页显示线上发布清单版本；更新检查仍使用 localVersion() 判断本机是否需要升级。
-  App.getCurrentAppVersion = onlineVersion;
+  // 设置页显示当前安装版本；更新检查另行读取线上清单判断是否需要升级。
+  App.getCurrentAppVersion = localVersion;
 
   async function updateAndroidFrontend() {
     if (!navigator.serviceWorker) return false;
