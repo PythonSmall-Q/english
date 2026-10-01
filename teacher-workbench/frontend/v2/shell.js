@@ -113,7 +113,7 @@
 
   async function renderMcp(container) {
     const endpoint = `${new URL(window.apiV2.base).origin}/mcp`;
-    const prompt = `你是英语教师教学工作台的 AI Agent，请帮助用户完成 MCP 的下载、安装、配置和使用。\n\n安装流程：\n1. 从 https://github.com/PythonSmall-Q/english 下载或克隆项目。\n2. 在项目的 mcp 目录执行 npm install。\n3. 配置 MCP 客户端启动 node mcp/src/index.js。\n4. 提示用户打开工作台 v2 的 AI Agent / MCP 页面生成永久 Token。\n5. 请用户把 Token 只提供到 MCP 客户端的 WB_API_TOKEN 环境变量中，不要写入聊天、Prompt、URL、代码或日志。\n6. 完成后先调用 get_workspace_context 做只读测试。\n\nMCP 地址：${endpoint}\n\n规则：先读取租户和学年上下文；只使用授权工具；写入前展示准确变更并等待确认；每次写入使用唯一 client_mutation_id 和 confirm=true；遇到冲突重新读取；不索取密码、Cookie 或其他秘密。`;
+    const prompt = `你是英语教师教学工作台的 AI Agent，请帮助用户完成 MCP 的下载、安装、配置和使用。\n\n安装流程：\n1. 下载 https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-mcp-3.1.0.zip。\n2. 解压 ZIP，并进入解压后的目录执行 npm install。\n3. 配置 MCP 客户端启动 node src/index.js。\n4. 提示用户打开工作台 v2 的 AI Agent / MCP 页面生成永久 Token。\n5. 请用户把 Token 只提供到 MCP 客户端的 WB_API_TOKEN 环境变量中，不要写入聊天、Prompt、URL、代码或日志。\n6. 完成后先调用 get_workspace_context 做只读测试。\n\nMCP 地址：${endpoint}\n\n规则：先读取租户和学年上下文；只使用授权工具；写入前展示准确变更并等待确认；每次写入使用唯一 client_mutation_id 和 confirm=true；遇到冲突重新读取；不索取密码、Cookie 或其他秘密。`;
     const loadTokens = async () => (await window.apiV2.request('/mcp/tokens')).data?.tokens || [];
     const render = async (newToken = '') => {
       const tokens = await loadTokens();
