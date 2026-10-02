@@ -528,10 +528,11 @@
       return;
     }
     const records = new Map(existed.map((r) => [r.studentId, r]));
+    const isNextUI = App.currentUIVersion() === 'next';
     const statusOf = (record) => {
       if (!record) return 'unregistered';
       if (record.passed) return 'passed';
-      if (record.retestCompleted) return 'retestPassed';
+      if (record.retestCompleted && isNextUI) return 'retestPassed';
       return 'failed';
     };
     const rank = { unregistered: 0, failed: 1, retestPassed: 2, passed: 3 };
@@ -540,7 +541,8 @@
       if (byStatus) return byStatus;
       return String(a.student_no || '￿').localeCompare(String(b.student_no || '￿'), 'zh-CN');
     });
-    const statusLabels = { failed: '未通过', retestPassed: '重默通过', passed: '通过' };
+    const statusLabels = isNextUI ? { failed: '未通过', retestPassed: '重默通过', passed: '通过' } : { failed: '不通过', passed: '通过' };
+    const statusOptions = isNextUI ? ['failed', 'retestPassed', 'passed'] : ['failed', 'passed'];
     const rows = sortedRoster.map((s) => {
       const current = statusOf(records.get(s.id));
       const record = records.get(s.id);
@@ -548,8 +550,8 @@
         <div class="dct-status-row" data-sid="${App.esc(s.id)}" data-original="${current}">
           <div class="dct-status-student"><span class="dct-check-no">${App.esc(s.student_no || '—')}</span><strong>${App.esc(s.name)}</strong></div>
           <div class="dct-status-control" role="radiogroup" aria-label="${App.esc(s.name)}">
-            ${['failed', 'retestPassed', 'passed'].map((value) => `<label>
-              <input type="radio" name="dct-status-${App.esc(s.id)}" value="${value}" data-status="${value}"${current === value ? ' checked' : ''}${((current === 'passed' || current === 'retestPassed') && value !== current) || (current === 'failed' && value === 'passed') ? ' disabled' : ''}>
+            ${statusOptions.map((value) => `<label>
+              <input type="radio" name="dct-status-${App.esc(s.id)}" value="${value}" data-status="${value}"${current === value ? ' checked' : ''}${(!isNextUI && current !== 'unregistered' && value !== current) || (isNextUI && ((current === 'passed' || current === 'retestPassed') && value !== current) || (current === 'failed' && value === 'passed')) ? ' disabled' : ''}>
               <span>${statusLabels[value]}</span>
             </label>`).join('')}
           </div>
@@ -558,7 +560,7 @@
     App.modal(
       `登记 — ${d.title || ''}`,
       `
-        <div class="muted" style="margin-bottom:8px">尚未登记优先显示；重默通过显示在已通过之前。</div>
+        <div class="muted" style="margin-bottom:8px">${isNextUI ? '尚未登记优先显示；重默通过显示在已通过之前。' : '选择通过或不通过，重默请使用默写卡片上的原入口。'}</div>
         <div class="dct-quick">
           <button class="btn btn-sm" id="dct-r-all" type="button">全部通过</button>
           <button class="btn btn-sm" id="dct-r-none" type="button">全部未通过</button>
@@ -583,7 +585,7 @@
             const original = row.dataset.original;
             if (original === 'unregistered' && selected === 'passed') passed.push(row.dataset.sid);
             if (original === 'unregistered' && selected === 'failed') failed.push(row.dataset.sid);
-            if (original === 'failed' && selected === 'retestPassed') retestPassed.push(row.dataset.sid);
+            if (isNextUI && original === 'failed' && selected === 'retestPassed') retestPassed.push(row.dataset.sid);
           });
           if (!passed.length && !failed.length && !retestPassed.length) {
             App.toast('没有需要提交的状态变更');
@@ -593,7 +595,7 @@
             if (passed.length || failed.length) await api.dictations.bulkResults(id, { passed, failed });
             if (retestPassed.length) await api.dictations.retest(id, { studentIds: retestPassed, completed: true });
             App.closeModal();
-            App.toast(`已登记：通过 ${passed.length} 人，未过 ${failed.length} 人，重默通过 ${retestPassed.length} 人`);
+            App.toast(isNextUI ? `已登记：通过 ${passed.length} 人，未过 ${failed.length} 人，重默通过 ${retestPassed.length} 人` : `已登记：通过 ${passed.length} 人，不通过 ${failed.length} 人`);
             await loadData();
           } catch (err) {
             App.toast(errMsg(err));

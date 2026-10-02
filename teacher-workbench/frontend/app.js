@@ -166,12 +166,21 @@ window.App = {
   },
 
   UI_VERSION_KEY: 'wb_ui_version',
+  canUseNextUI() {
+    const user = App.state.user;
+    if (!user) return true;
+    const role = App.state.tenant?.role;
+    return user.platformRole === 'platform_admin' || role === 'owner' || role === 'admin';
+  },
   applyUIVersion(version) {
-    const value = version === 'next' ? 'next' : 'legacy';
+    const allowed = App.canUseNextUI();
+    const value = version === 'next' && allowed ? 'next' : 'legacy';
+    if (version === 'next' && !allowed && App.state.user) localStorage.setItem(App.UI_VERSION_KEY, 'legacy');
     document.documentElement.dataset.uiVersion = value;
-    document.querySelectorAll('.v2-only-nav').forEach((item) => item.classList.toggle('hidden', value !== 'next'));
+    document.querySelectorAll('.v2-only-nav').forEach((item) => item.classList.toggle('hidden', value !== 'next' || !allowed));
     const button = document.getElementById('ui-version-toggle');
     if (button) {
+      button.classList.toggle('hidden', !allowed);
       const key = value === 'next' ? '返回旧版' : '进入新版';
       button.dataset.i18n = key;
       button.textContent = window.I18n?.t(key, key) || key;
@@ -1202,6 +1211,7 @@ window.App = {
       // 默认选中 personal 空间，否则第一个（§22）
       const personal = App.state.tenants.find((t) => t.type === 'personal');
       App.state.tenant = personal || App.state.tenants[0] || null;
+      App.applyUIVersion(App.currentUIVersion());
       App.state.quota = App.state.tenant?.quota || null;
       // auth.me 已包含空间套餐；这里只需加载学年列表。
       await Promise.all([App.loadAcademicYears(), App.enterApp()]);

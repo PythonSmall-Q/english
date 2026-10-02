@@ -117,6 +117,7 @@ App.registerView('dashboard', {
             .map(
               (a) => `<button class="btn" type="button" data-dash-view="${App.esc(a.view)}">${a.label}${I18n.t(a.key)}</button>`
             ).join('')}
+          ${App.currentUIVersion() === 'legacy' && App.canUseNextUI?.() ? '<button class="btn btn-primary" type="button" id="dash-open-v2">进入新版聚合工作台</button>' : ''}
         </div>
       </div>`;
 
@@ -225,6 +226,11 @@ App.registerView('dashboard', {
     // 快捷入口跳转
     el.querySelectorAll('[data-dash-view]').forEach((btn) => {
       btn.addEventListener('click', () => App.showView(btn.dataset.dashView));
+    });
+    el.querySelector('#dash-open-v2')?.addEventListener('click', () => {
+      localStorage.setItem(App.UI_VERSION_KEY, 'next');
+      App.applyUIVersion('next');
+      App.showView('dashboard');
     });
     // 待办 tick：PUT status=completed；完成后划线 + 按钮变绿
     el.querySelectorAll('[data-dash-tick]').forEach((btn) => {
