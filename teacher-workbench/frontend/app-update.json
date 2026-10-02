@@ -1,38 +1,41 @@
 {
-  "version": "3.1.0",
+  "version": "3.1.1",
   "updatedAt": "2026-10-01",
   "platforms": {
     "android": {
-      "version": "3.1.0",
+      "version": "3.1.1",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-android.apk",
       "force": false,
       "notes": [
         "全新 v2 教学工作台：首页、班级、学生、默写、作业、考试和课表工作区统一升级",
         "新增默写三状态登记：未通过、重默通过、通过；保留班级重默和批量处理",
         "新增独立 AI Agent / MCP 页面、永久 Token 管理、Skill 文档和配置教程",
-        "优化 Android 侧栏图标、移动端布局、导出文件保存提示和资源加载稳定性"
+        "优化 Android 侧栏图标、移动端布局、导出文件保存提示和资源加载稳定性",
+        "修复首次启动卡在启动页、旧缓存覆盖新版和 v2 首页加载错误"
       ]
     },
     "windows": {
-      "version": "3.1.0",
+      "version": "3.1.1",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-windows.exe",
       "force": false,
       "notes": [
         "全新 v2 教学工作台：首页、班级、学生、默写、作业、考试和课表工作区统一升级",
         "新增默写三状态登记：未通过、重默通过、通过；保留班级重默和批量处理",
         "新增独立 AI Agent / MCP 页面、永久 Token 管理、Skill 文档和配置教程",
-        "优化桌面端导航分组、版本切换记忆、导出体验和页面加载稳定性"
+        "优化桌面端导航分组、版本切换记忆、导出体验和页面加载稳定性",
+        "修复首次启动卡在启动页、旧缓存覆盖新版和 v2 首页加载错误"
       ]
     },
     "macos": {
-      "version": "3.1.0",
+      "version": "3.1.1",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-macos.dmg",
       "force": false,
       "notes": [
         "全新 v2 教学工作台：首页、班级、学生、默写、作业、考试和课表工作区统一升级",
         "新增默写三状态登记：未通过、重默通过、通过；保留班级重默和批量处理",
         "新增独立 AI Agent / MCP 页面、永久 Token 管理、Skill 文档和配置教程",
-        "优化桌面端导航分组、版本切换记忆、导出体验和页面加载稳定性"
+        "优化桌面端导航分组、版本切换记忆、导出体验和页面加载稳定性",
+        "修复首次启动卡在启动页、旧缓存覆盖新版和 v2 首页加载错误"
       ]
     }
   }
