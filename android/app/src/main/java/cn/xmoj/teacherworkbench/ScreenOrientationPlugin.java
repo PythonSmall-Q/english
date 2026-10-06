@@ -1,12 +1,17 @@
 package cn.xmoj.teacherworkbench;
 
 import android.app.Activity;
+import android.app.KeyguardManager;
+import android.content.Context;
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import androidx.activity.result.ActivityResult;
 
 /**
  * 原生屏幕方向锁定插件。
@@ -46,6 +51,32 @@ public class ScreenOrientationPlugin extends Plugin {
         Activity activity = getActivity();
         JSObject ret = new JSObject();
         ret.put("requestedOrientation", activity == null ? ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED : activity.getRequestedOrientation());
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void unlockWithDeviceCredential(PluginCall call) {
+        KeyguardManager keyguard = (KeyguardManager) getContext().getSystemService(Context.KEYGUARD_SERVICE);
+        if (keyguard == null || !keyguard.isDeviceSecure()) {
+            call.resolve(new JSObject().put("unlocked", false).put("available", false));
+            return;
+        }
+        Intent intent = keyguard.createConfirmDeviceCredentialIntent(
+            "解锁教学工作台",
+            "请使用系统锁屏密码或生物识别验证"
+        );
+        if (intent == null) {
+            call.resolve(new JSObject().put("unlocked", false).put("available", false));
+            return;
+        }
+        startActivityForResult(call, intent, "handleCredentialResult");
+    }
+
+    @ActivityCallback
+    private void handleCredentialResult(PluginCall call, ActivityResult result) {
+        JSObject ret = new JSObject();
+        ret.put("unlocked", result.getResultCode() == Activity.RESULT_OK);
+        ret.put("available", true);
         call.resolve(ret);
     }
 }

@@ -156,6 +156,143 @@ window.App = {
   currentOrientation() {
     return localStorage.getItem(App.ORIENTATION_KEY) || '';
   },
+  APP_LOCK_KEY: 'wb_app_lock',
+  _appUnlocked: false,
+  _unlockPromise: null,
+  appLockConfig() {
+    try {
+      const config = JSON.parse(localStorage.getItem(App.APP_LOCK_KEY) || 'null');
+      return config && config.enabled ? config : null;
+    } catch (e) {
+      return null;
+    }
+  },
+  async hashAppPassword(password, salt) {
+    const data = new TextEncoder().encode(String(password));
+    const key = await crypto.subtle.importKey('raw', data, 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: new TextEncoder().encode(salt), iterations: 210000, hash: 'SHA-256' },
+      key,
+      256
+    );
+    return Array.from(new Uint8Array(bits), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  },
+  async setAppLock({ mode, password }) {
+    const normalizedMode = ['password', 'native', 'both'].includes(mode) ? mode : 'password';
+    if (normalizedMode === 'native' && !App.nativeUnlockSupported()) {
+      throw new Error('当前设备不支持系统原生解锁，请选择软件密码');
+    }
+    const config = { enabled: true, mode: normalizedMode, updatedAt: Date.now() };
+    if (normalizedMode === 'password' || normalizedMode === 'both') {
+      if (String(password || '').length < 8) throw new Error('软件密码至少需要 8 位');
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      config.salt = Array.from(salt, (byte) => byte.toString(16).padStart(2, '0')).join('');
+      config.hash = await App.hashAppPassword(password, config.salt);
+    }
+    localStorage.setItem(App.APP_LOCK_KEY, JSON.stringify(config));
+    App._appUnlocked = true;
+    App.updateAppLockButton();
+  },
+  clearAppLock() {
+    localStorage.removeItem(App.APP_LOCK_KEY);
+    App._appUnlocked = true;
+    App.updateAppLockButton();
+  },
+  updateAppLockButton() {
+    document.getElementById('app-lock-btn')?.classList.toggle('hidden', !App.appLockConfig());
+  },
+  async nativeUnlock() {
+    const androidPlugin = window.Capacitor?.Plugins?.ScreenOrientation;
+    if (App.isAndroidApp() && androidPlugin?.unlockWithDeviceCredential) {
+      return (await androidPlugin.unlockWithDeviceCredential()).unlocked === true;
+    }
+    if (window.WB_RUNTIME?.nativeUnlock) {
+      return (await window.WB_RUNTIME.nativeUnlock()).unlocked === true;
+    }
+    return false;
+  },
+  nativeUnlockSupported() {
+    return App.isAndroidApp() ||
+      (window.WB_RUNTIME?.platform === 'darwin' && Boolean(window.WB_RUNTIME?.nativeUnlock));
+  },
+  async verifyAppPassword(password) {
+    const config = App.appLockConfig();
+    if (!config?.hash || !config.salt) return false;
+    return (await App.hashAppPassword(password, config.salt)) === config.hash;
+  },
+  async requireUnlock() {
+    const config = App.appLockConfig();
+    if (!config || App._appUnlocked) return true;
+    if (App._unlockPromise) return App._unlockPromise;
+    App._unlockPromise = new Promise((resolve) => {
+      const finish = (unlocked) => {
+        if (unlocked) App._appUnlocked = true;
+        App._unlockPromise = null;
+        resolve(unlocked);
+      };
+      const nativeAvailable = (App.isAndroidApp() && Boolean(window.Capacitor?.Plugins?.ScreenOrientation?.unlockWithDeviceCredential)) ||
+        Boolean(window.WB_RUNTIME?.nativeUnlock);
+      const canUseNative = nativeAvailable && (config.mode === 'native' || config.mode === 'both');
+      App.modal(
+        '解锁软件',
+        `<p class="muted">${App.esc(I18n.t('appLockHint', '请输入软件密码，或使用系统原生凭据解锁。'))}</p>
+         ${config.mode === 'password' || config.mode === 'both' ? '<input class="form-input" id="app-unlock-password" type="password" autocomplete="current-password" placeholder="软件密码">' : ''}
+         <div class="modal-actions">
+           ${canUseNative ? '<button class="btn" id="app-native-unlock" type="button">使用系统原生解锁</button>' : ''}
+           ${config.mode === 'password' || config.mode === 'both' ? '<button class="btn btn-primary" id="app-password-unlock" type="button">解锁</button>' : ''}
+         </div>
+         <div class="auth-error hidden" id="app-unlock-error"></div>`,
+        (modal) => {
+          modal.closest('.modal-mask').dataset.locked = 'true';
+          modal.querySelector('.modal-close').classList.add('hidden');
+          const error = modal.querySelector('#app-unlock-error');
+          const showError = (message) => {
+            error.textContent = message;
+            error.classList.remove('hidden');
+          };
+          modal.querySelector('#app-password-unlock')?.addEventListener('click', async () => {
+            const button = modal.querySelector('#app-password-unlock');
+            button.disabled = true;
+            try {
+              if (await App.verifyAppPassword(modal.querySelector('#app-unlock-password').value)) {
+                App.closeModal();
+                finish(true);
+              } else {
+                showError(I18n.t('appLockInvalid', '密码不正确'));
+              }
+            } catch (e) {
+              showError(I18n.t('appLockFailed', '解锁失败，请重试'));
+            } finally {
+              button.disabled = false;
+            }
+          });
+          modal.querySelector('#app-native-unlock')?.addEventListener('click', async () => {
+            try {
+              if (await App.nativeUnlock()) {
+                App.closeModal();
+                finish(true);
+              } else {
+                showError(I18n.t('appNativeUnlockUnavailable', '系统原生解锁未完成，请使用软件密码'));
+              }
+            } catch (e) {
+              showError(I18n.t('appNativeUnlockUnavailable', '系统原生解锁未完成，请使用软件密码'));
+            }
+          });
+        }
+      );
+    });
+    return App._unlockPromise;
+  },
+  lockNow() {
+    if (!App.appLockConfig()) return;
+    App._appUnlocked = false;
+    document.getElementById('app-frame')?.classList.add('hidden');
+    App.requireUnlock().then((unlocked) => {
+      if (unlocked && App.state.user) {
+        document.getElementById('app-frame')?.classList.remove('hidden');
+      }
+    });
+  },
 
   /** 白天/黑夜模式：本机 localStorage 持久化 */
   THEME_KEY: 'wb_theme',
@@ -1108,6 +1245,7 @@ window.App = {
     // 平台管理员才显示「平台管理」（§72）
     const isAdmin = App.state.user?.platformRole === 'platform_admin';
     document.getElementById('nav-admin')?.classList.toggle('hidden', !isAdmin);
+    App.updateAppLockButton();
     // 右下角浮动英语词典（登录后挂载）
     window.DictFloat?.mount?.();
     App.updateTenantSwitcher();
@@ -1164,6 +1302,12 @@ window.App = {
     App._bootStarted = true;
     App.applyUIVersion(App.currentUIVersion());
     App.showAppLoading();
+    if (App.appLockConfig() && !App._appUnlocked) App.hideAppLoading();
+    if (!(await App.requireUnlock())) {
+      App.hideAppLoading();
+      App._bootStarted = false;
+      return;
+    }
     // 绑定导航与租户切换器（只绑一次；登录成功后 boot 会再次进入）
     if (!App._bound) {
       App._bound = true;
@@ -1194,7 +1338,9 @@ window.App = {
       }
       const themeBtn = document.getElementById('theme-toggle');
       if (themeBtn) themeBtn.addEventListener('click', () => App.toggleTheme());
-      const versionBtn = document.getElementById('ui-version-toggle');
+        const lockBtn = document.getElementById('app-lock-btn');
+        if (lockBtn) lockBtn.addEventListener('click', () => App.lockNow());
+        const versionBtn = document.getElementById('ui-version-toggle');
       if (versionBtn) versionBtn.addEventListener('click', () => App.toggleUIVersion());
     }
 
@@ -1220,8 +1366,9 @@ window.App = {
       App.state.tenant = personal || App.state.tenants[0] || null;
       App.applyUIVersion(App.currentUIVersion());
       App.state.quota = App.state.tenant?.quota || null;
-      // auth.me 已包含空间套餐；这里只需加载学年列表。
-      await Promise.all([App.loadAcademicYears(), App.enterApp()]);
+      // auth/me 已包含空间套餐；学年列表不应阻塞首屏，进入工作台后后台补齐。
+      App.loadAcademicYears();
+      await App.enterApp();
       // 学年归档提醒（§63）：进入工作台后异步检查，9/15–9/30 每日一次
       App.checkArchiveReminder();
       // 3 天试用：落地页点了「免费试用」的，进入工作台后自动创建试用空间（仅一次）
@@ -1244,6 +1391,7 @@ window.App = {
 App.applyDeviceMode(App.currentDeviceMode() || 'desktop');
 App.applyOrientation(App.currentOrientation() || (App.currentDeviceMode() === 'tablet' ? 'landscape' : 'portrait'));
 App.applyTheme(localStorage.getItem(App.THEME_KEY) || 'light');
+App.updateAppLockButton();
 // 浏览器和 Capacitor 使用静态缓存；Electron 由主进程负责覆盖更新。
 if ('serviceWorker' in navigator) {
   const electron = Boolean(window.WB_RUNTIME || location.protocol === 'file:');

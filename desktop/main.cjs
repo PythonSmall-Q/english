@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, ipcMain, Menu } = require('electron');
+const { app, BrowserWindow, shell, dialog, ipcMain, Menu, safeStorage, systemPreferences } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
@@ -17,6 +17,16 @@ app.on('second-instance', () => {
 });
 
 ipcMain.handle('get-app-version', () => app.getVersion());
+ipcMain.handle('native-unlock', async () => {
+  if (process.platform === 'darwin' && typeof systemPreferences.promptTouchID === 'function') {
+    await systemPreferences.promptTouchID('验证后解锁英语教师教学工作台');
+    return { unlocked: true, method: 'touch-id' };
+  }
+  if (safeStorage.isEncryptionAvailable()) {
+    return { unlocked: false, available: false, reason: '当前 Electron 平台没有可调用的交互式系统凭据提示' };
+  }
+  return { unlocked: false, available: false, reason: '系统安全存储不可用' };
+});
 ipcMain.handle('open-external', async (_event, url) => {
   const parsed = new URL(String(url || ''));
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('仅允许打开 HTTP(S) 下载地址');

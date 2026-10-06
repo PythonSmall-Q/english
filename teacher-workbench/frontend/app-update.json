@@ -1,12 +1,15 @@
 {
-  "version": "3.1.1",
-  "updatedAt": "2026-10-01",
+  "version": "3.2.0",
+  "updatedAt": "2026-10-06",
   "platforms": {
     "android": {
-      "version": "3.1.1",
+      "version": "3.2.0",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-android.apk",
       "force": false,
       "notes": [
+        "启动流程优化：学年列表改为后台加载，减少首屏等待和转圈时间",
+        "新增软件安全锁：支持软件密码、Android 系统密码/生物识别，顶栏可立即锁定",
+        "Android 原生方向锁定与系统凭据解锁桥接增强",
         "全新 v2 教学工作台：首页、班级、学生、默写、作业、考试和课表工作区统一升级",
         "新增默写三状态登记：未通过、重默通过、通过；保留班级重默和批量处理",
         "新增独立 AI Agent / MCP 页面、永久 Token 管理、Skill 文档和配置教程",
@@ -15,10 +18,13 @@
       ]
     },
     "windows": {
-      "version": "3.1.1",
+      "version": "3.2.0",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-windows.exe",
       "force": false,
       "notes": [
+        "启动流程优化：减少首屏等待和转圈时间",
+        "新增软件安全锁：支持软件密码、macOS Touch ID，顶栏可立即锁定",
+        "Electron 原生安全桥接增强",
         "全新 v2 教学工作台：首页、班级、学生、默写、作业、考试和课表工作区统一升级",
         "新增默写三状态登记：未通过、重默通过、通过；保留班级重默和批量处理",
         "新增独立 AI Agent / MCP 页面、永久 Token 管理、Skill 文档和配置教程",
@@ -27,10 +33,13 @@
       ]
     },
     "macos": {
-      "version": "3.1.1",
+      "version": "3.2.0",
       "url": "https://fff-file-r2-cloudflare.xmoj-script.uk/teacher-workbench-macos.dmg",
       "force": false,
       "notes": [
+        "启动流程优化：减少首屏等待和转圈时间",
+        "新增软件安全锁：支持软件密码和 macOS Touch ID，顶栏可立即锁定",
+        "Electron 原生安全桥接增强",
         "全新 v2 教学工作台：首页、班级、学生、默写、作业、考试和课表工作区统一升级",
         "新增默写三状态登记：未通过、重默通过、通过；保留班级重默和批量处理",
         "新增独立 AI Agent / MCP 页面、永久 Token 管理、Skill 文档和配置教程",

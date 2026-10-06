@@ -64,6 +64,7 @@
         <div class="topbar-right">
           <!-- 白天/黑夜模式切换（本机记忆） -->
           <button type="button" id="theme-toggle" class="theme-toggle" title="切换黑夜/白天模式">🌙</button>
+          <button type="button" id="app-lock-btn" class="theme-toggle hidden" data-i18n-title="lockApp" aria-label="锁定软件">🔒</button>
           <button type="button" id="ui-version-toggle" class="version-toggle hidden" data-i18n="进入新版">进入新版</button>
           <!-- 身份查看（仅平台管理员）：选择以某成员身份查看与管理本空间 -->
           <div id="viewas-switcher" class="tenant-switcher hidden">
@@ -116,7 +117,7 @@
       var loading = document.getElementById('app-loading');
       var auth = document.getElementById('auth-screen');
       if (loading) loading.classList.add('is-hidden');
-      if (window.App && typeof window.App.showAuthScreen === 'function' && !window.App._bootCompleted) {
+      if (window.App && typeof window.App.showAuthScreen === 'function' && !window.App._bootCompleted && !window.App._unlockPromise) {
         window.App.showAuthScreen('login');
       } else if (auth) {
         auth.classList.remove('hidden');

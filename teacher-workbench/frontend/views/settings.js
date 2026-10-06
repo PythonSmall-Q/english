@@ -158,6 +158,38 @@ App.registerView('settings', {
         <div class="muted" style="font-size:12px;margin-top:10px">${I18n.t('macDesktopHint', 'macOS 首次打开若提示无法验证开发者，请到“系统设置 → 隐私与安全性”中点击“仍要打开”。')}</div>
       </div>`}
 
+      ${isStandalone ? `
+      <div class="card">
+        <div class="card-title">${I18n.t('appLockTitle', '软件安全锁')}</div>
+        <div class="muted" style="margin-bottom:12px">${I18n.t('appLockSettingsHint', '关闭并重新打开软件时需要解锁；密码只保存在本机，不会上传。')}</div>
+        <div class="form-row" style="align-items:flex-end">
+          <div>
+            <label class="form-label">${I18n.t('appLockMode', '解锁方式')}</label>
+            <select class="form-input" id="app-lock-mode" style="min-width:280px">
+              <option value="password">${I18n.t('appLockPassword', '软件密码')}</option>
+              <option value="both">${I18n.t('appLockBoth', '软件密码 + 系统原生解锁')}</option>
+              <option value="native">${I18n.t('appLockNative', '仅系统原生解锁')}</option>
+            </select>
+          </div>
+          <div class="muted" style="font-size:12.5px;padding-bottom:8px">${I18n.t('appLockNativeHint', 'Android 使用设备密码/生物识别；macOS 使用 Touch ID。')}</div>
+        </div>
+        <div id="app-lock-password-fields" class="form-row" style="margin-top:10px">
+          <div>
+            <label class="form-label">${I18n.t('appLockNewPassword', '新软件密码（至少 8 位）')}</label>
+            <input class="form-input" id="app-lock-password" type="password" autocomplete="new-password">
+          </div>
+          <div>
+            <label class="form-label">${I18n.t('appLockConfirmPassword', '确认软件密码')}</label>
+            <input class="form-input" id="app-lock-password-confirm" type="password" autocomplete="new-password">
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-primary" id="app-lock-save" type="button">${I18n.t('appLockSave', '启用/更新安全锁')}</button>
+          <button class="btn" id="app-lock-clear" type="button">${I18n.t('appLockClear', '关闭安全锁')}</button>
+          <span class="muted" id="app-lock-status"></span>
+        </div>
+      </div>` : ''}
+
       <!-- 1. 个人资料 -->
       <div class="card">
         <div class="card-title">个人资料</div>
@@ -367,6 +399,7 @@ App.registerView('settings', {
     // 平台 AI 已弃用：保留旧逻辑与接口，仅移除用户可见入口。
     document.getElementById('ai-mode-platform-label')?.remove();
     document.getElementById('ai-panel-platform')?.remove();
+    bindAppLock();
     bindDeviceMode();
     bindLocale();
     const checkUpdateButton = document.getElementById('check-app-update');
@@ -381,6 +414,43 @@ App.registerView('settings', {
         checkUpdateButton.textContent = I18n.t('checkUpdate', '检查更新');
       }
     });
+
+    function bindAppLock() {
+      const mode = document.getElementById('app-lock-mode');
+      if (!mode) return;
+      const config = App.appLockConfig();
+      if (!App.nativeUnlockSupported()) mode.querySelector('option[value="native"]')?.remove();
+      mode.value = config?.mode || 'password';
+      const passwordFields = document.getElementById('app-lock-password-fields');
+      const syncFields = () => passwordFields?.classList.toggle('hidden', mode.value === 'native');
+      syncFields();
+      mode.addEventListener('change', syncFields);
+      const status = document.getElementById('app-lock-status');
+      if (config) status.textContent = I18n.t('appLockEnabled', '安全锁已启用');
+      document.getElementById('app-lock-save')?.addEventListener('click', async () => {
+        const selected = mode.value;
+        const password = document.getElementById('app-lock-password')?.value || '';
+        const confirm = document.getElementById('app-lock-password-confirm')?.value || '';
+        if ((selected === 'password' || selected === 'both') && password !== confirm) {
+          App.toast(I18n.t('appLockMismatch', '两次密码不一致'));
+          return;
+        }
+        try {
+          await App.setAppLock({ mode: selected, password });
+          status.textContent = I18n.t('appLockEnabled', '安全锁已启用');
+          document.getElementById('app-lock-password').value = '';
+          document.getElementById('app-lock-password-confirm').value = '';
+          App.toast(I18n.t('appLockSaved', '安全锁设置已保存'));
+        } catch (e) {
+          App.toast(e.message || I18n.t('appLockFailed', '保存失败'));
+        }
+      });
+      document.getElementById('app-lock-clear')?.addEventListener('click', () => {
+        App.clearAppLock();
+        status.textContent = I18n.t('appLockDisabled', '安全锁已关闭');
+        App.toast(I18n.t('appLockDisabled', '安全锁已关闭'));
+      });
+    }
     await renderSpace();
     await renderMyQuota();
     bindDataManagement();

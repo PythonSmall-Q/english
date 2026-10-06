@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('WB_RUNTIME', {
   platform: process.platform,
   appVersion: process.env.npm_package_version || '3.0.0',
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  nativeUnlock: () => ipcRenderer.invoke('native-unlock'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   saveFile: (filename, data) => ipcRenderer.invoke('save-file', { filename, data }),
 });
