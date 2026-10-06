@@ -140,10 +140,17 @@ window.App = {
   applyOrientation(orientation) {
     const value = orientation === 'portrait' ? 'portrait' : 'landscape';
     document.documentElement.dataset.orientation = value;
+    // Android 原生外壳：WebView 中 screen.orientation.lock() 需要全屏态才生效，
+    // 普通 Activity 下会被静默忽略，必须走原生插件在 Activity 层锁定方向。
+    const nativeScreenOrientation = window.Capacitor?.Plugins?.ScreenOrientation;
+    if (App.isAndroidApp() && nativeScreenOrientation?.setOrientation) {
+      nativeScreenOrientation.setOrientation({ orientation: value }).catch(() => {});
+      return;
+    }
     try {
       if (window.screen?.orientation?.lock) window.screen.orientation.lock(value).catch(() => {});
     } catch (e) {
-      /* 浏览器或 WebView 不支持锁定时保留本机设置 */
+      /* 浏览器或桌面端不支持锁定时保留本机设置 */
     }
   },
   currentOrientation() {
