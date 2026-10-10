@@ -291,7 +291,7 @@ app.get('/classes/:id/workspace', requireAuth, requireTenant, requireRole(['view
     ).bind(tenantId, academicYear, classId).all(),
     db.prepare(
       `SELECT e.id, e.name, e.exam_date, e.total_score,
-          (SELECT AVG(es.score) FROM exam_scores es WHERE es.exam_id = e.id AND es.tenant_id = e.tenant_id) AS avg_score
+          (SELECT AVG(es.score) FROM exam_scores es WHERE es.exam_id = e.id AND es.tenant_id = e.tenant_id AND es.score IS NOT NULL AND es.absent = 0) AS avg_score
          FROM exams e
        WHERE tenant_id = ? AND academic_year = ? AND (scope = 'grade' OR class_id = ?)
        ORDER BY exam_date DESC, created_at DESC LIMIT 10`
@@ -418,7 +418,7 @@ app.get('/exams', requireAuth, requireTenant, requireRole(['viewer']), async (c)
   const academicYear = resolveAcademicYear(c.req.query('academic_year') || currentAcademicYear());
   const rows = await db.prepare(
     `SELECT e.id, e.name, e.subject, e.exam_date, e.total_score, e.scope, e.class_id, c.name AS class_name,
-            COUNT(s.student_id) AS student_count,
+            COUNT(CASE WHEN s.score IS NOT NULL AND s.absent = 0 THEN s.student_id END) AS student_count,
             AVG(s.score) AS avg_score
        FROM exams e LEFT JOIN exam_scores s ON s.exam_id = e.id AND s.tenant_id = e.tenant_id
        LEFT JOIN classes c ON c.id = e.class_id AND c.tenant_id = e.tenant_id

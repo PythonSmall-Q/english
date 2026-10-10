@@ -3,7 +3,7 @@
  *
  * 约定：
  * - 读操作 viewer 起；写操作（新建/编辑/删除/导入）teacher 起
- * - 成绩导入匹配优先级：学号精确 → 姓名+班级名（均限 tenant 内）；未匹配行不写入
+ * - 成绩导入匹配优先级：学号精确 → tenant 内唯一姓名；未匹配行不写入
  * - 导入/级联删除使用 db.batch 保证事务性（§79）
  * - 分数段口径：<60 / 60-69.9 / 70-79.9 / 80-89.9 / ≥90
  * - 薄弱题型口径：得分率（score/max_score）低于 60%
@@ -58,7 +58,7 @@ async function canManageExam(db, tenantId, user, exam) {
 function listScoresStmt(db, tenantId, examId) {
   return db
     .prepare(
-      `SELECT s.id, s.score, s.student_id, s.created_at,
+      `SELECT s.id, s.score, s.absent, s.student_id, s.created_at,
               st.name AS student_name, st.student_no, st.class_id,
               c.name AS class_name
        FROM exam_scores s
@@ -83,9 +83,9 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   const rows = await db
     .prepare(
       `SELECT e.*, e.archived_stats, cl.name AS class_name,
-              (SELECT COUNT(*) FROM exam_scores s WHERE s.exam_id = e.id) AS student_count,
+              (SELECT COUNT(*) FROM exam_scores s WHERE s.exam_id = e.id AND s.score IS NOT NULL AND s.absent = 0) AS student_count,
               (SELECT ROUND(AVG(s.score), 2) FROM exam_scores s
-                WHERE s.exam_id = e.id AND s.score IS NOT NULL) AS avg_score
+                WHERE s.exam_id = e.id AND s.score IS NOT NULL AND s.absent = 0) AS avg_score
        FROM exams e
        LEFT JOIN classes cl ON cl.id = e.class_id AND cl.tenant_id = e.tenant_id
        WHERE e.tenant_id = ? AND e.academic_year = ?
@@ -416,20 +416,17 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
 });
 
 /**
- * 导入行 → 学生匹配：学号精确 → 姓名+班级名（tenant 内）。
+ * 导入行 → 学生匹配：学号精确 → tenant 内唯一姓名。
  * @param {object} row 导入行
  * @param {Map} byNo 学号 → 学生
- * @param {Map} byNameClass "姓名|班级名" → 学生
+ * @param {Map} byName 唯一姓名 → 学生
+ * @param {Set} duplicateNames 重名学生姓名
  */
-function matchStudent(row, byNo, byNameClass) {
+function matchStudent(row, byNo, byName, duplicateNames) {
   const no = row.studentNo !== undefined && row.studentNo !== null ? String(row.studentNo).trim() : '';
   if (no && byNo.has(no)) return byNo.get(no);
   const name = row.name !== undefined && row.name !== null ? String(row.name).trim() : '';
-  const className =
-    row.className !== undefined && row.className !== null ? String(row.className).trim() : '';
-  if (name && className && byNameClass.has(`${name}|${className}`)) {
-    return byNameClass.get(`${name}|${className}`);
-  }
+  if (name && byName.has(name) && !duplicateNames.has(name)) return byName.get(name);
   return null;
 }
 
@@ -469,10 +466,15 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
     .bind(tenantId)
     .all();
   const byNo = new Map();
-  const byNameClass = new Map();
+  const byName = new Map();
+  const duplicateNames = new Set();
   for (const st of studentRows.results) {
     if (st.student_no) byNo.set(String(st.student_no).trim(), st);
-    if (st.name && st.class_name) byNameClass.set(`${String(st.name).trim()}|${String(st.class_name).trim()}`, st);
+    if (st.name) {
+      const name = String(st.name).trim();
+      if (byName.has(name)) duplicateNames.add(name);
+      else byName.set(name, st);
+    }
   }
 
   // 导入权限：班级管理者（班主任/任课老师/年级组长/owner/admin）可导入，按学生所属班判定
@@ -485,7 +487,7 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
   const fullScore = exam.total_score !== null && exam.total_score !== undefined ? Number(exam.total_score) : null;
 
   for (const row of body.rows) {
-    const student = matchStudent(row, byNo, byNameClass);
+    const student = matchStudent(row, byNo, byName, duplicateNames);
     if (!student) {
       unmatched.push(row);
       continue;
@@ -500,14 +502,20 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
         continue;
       }
     }
-    // 空分数视为无效行跳过（Number('')===0 会把缺考误录成 0 分）
+    // 缺考保留为 NULL，和真实 0 分区分；其他无效分数跳过
     const rawScore = row.score;
-    const score = rawScore === '' || rawScore == null ? NaN : Number(rawScore);
-    if (!Number.isFinite(score)) {
+    const absent = row.absent === true || rawScore === null || rawScore === '' || rawScore == null;
+    const score = absent ? null : Number(rawScore);
+    if (score === null) {
+      if (type !== 'scores') {
+        failed++;
+        continue;
+      }
+    } else if (!Number.isFinite(score)) {
       failed++;
       continue;
     }
-    if (type === 'scores' && fullScore !== null && score > fullScore) {
+    if (type === 'scores' && score !== null && fullScore !== null && score > fullScore) {
       failed++;
       unmatched.push({ row, reason: `成绩不能超过考试总分 ${fullScore}` });
       continue;
@@ -521,18 +529,18 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
       if (existing) {
         stmts.push(
           db
-            .prepare('UPDATE exam_scores SET score = ?, created_at = ? WHERE id = ?')
-            .bind(score, ts, existing.id)
+            .prepare('UPDATE exam_scores SET score = ?, absent = ?, created_at = ? WHERE id = ?')
+            .bind(score, absent ? 1 : 0, ts, existing.id)
         );
         updated++;
       } else {
         stmts.push(
           db
             .prepare(
-              `INSERT INTO exam_scores (id, tenant_id, exam_id, student_id, score, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)`
+              `INSERT INTO exam_scores (id, tenant_id, exam_id, student_id, score, absent, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`
             )
-            .bind(newId(), tenantId, exam.id, student.id, score, ts)
+            .bind(newId(), tenantId, exam.id, student.id, score, absent ? 1 : 0, ts)
         );
         created++;
       }
@@ -623,7 +631,7 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
 
   const scoresRes = await listScoresStmt(db, tenantId, exam.id).all();
   const scores = scoresRes.results;
-  const allValid = scores.filter((s) => s.score !== null && s.score !== undefined);
+  const allValid = scores.filter((s) => s.score !== null && s.score !== undefined && s.absent !== 1);
   const valid = filterClassId ? allValid.filter((s) => s.class_id === filterClassId) : allValid;
 
   // 总分概览 + 分数段分布
@@ -793,14 +801,14 @@ app.put('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['te
     .first();
   if (existing) {
     await db
-      .prepare('UPDATE exam_scores SET score = ?, created_at = ? WHERE id = ?')
+      .prepare('UPDATE exam_scores SET score = ?, absent = 0, created_at = ? WHERE id = ?')
       .bind(score, now(), existing.id)
       .run();
   } else {
     await db
       .prepare(
-        `INSERT INTO exam_scores (id, tenant_id, exam_id, student_id, score, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO exam_scores (id, tenant_id, exam_id, student_id, score, absent, created_at)
+         VALUES (?, ?, ?, ?, ?, 0, ?)`
       )
       .bind(newId(), tenantId, exam.id, student.id, score, now())
       .run();

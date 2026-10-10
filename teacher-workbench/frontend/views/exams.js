@@ -4,7 +4,7 @@
  * 功能：
  * - 考试列表（名称/科目/日期/参考人数/均分）+ 新建/编辑/删除
  * - 导入成绩（总分）/ 导入小分：.xlsx / .csv / .json / 粘贴文本 四种来源
- *   · .xlsx 自动识别：班级报表《学生成绩》（取「英语分数」列）→ 学科网《小题分》（按大题汇总），
+ *   · .xlsx 支持选择学科网或智学网；学科网识别班级报表/《小题分》，智学网识别自定义考号成绩表
  *     识别结果仍走预览确认流程；都不是则走通用行解析
  *   · 成绩行：学号,分数 或 姓名,班级,分数
  *   · 小分行：学号,题型,得分,满分 或 姓名,班级,题型,得分,满分
@@ -51,6 +51,12 @@
 .ex-scope-row label { display: inline-flex; align-items: center; gap: 5px; margin: 0; font-size: 13px; color: #333; cursor: pointer; }
 .ex-analysis-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; font-size: 13px; color: #555; }
 .ex-analysis-bar select { max-width: 220px; }
+.ex-format-options { display: flex; gap: 8px; flex-wrap: wrap; }
+.ex-format-option { display: inline-flex; align-items: center; gap: 6px; margin: 0 !important; padding: 7px 12px; border: 1px solid #cfd6e2; border-radius: 8px; cursor: pointer; color: #333; }
+.ex-format-option:has(input:checked) { border-color: #4f8ef7; background: #f0f6ff; color: #2458b8; }
+#exi-file-wrap { margin-top: 14px; }
+#exi-file { width: 100%; min-height: 44px; padding: 8px 10px; box-sizing: border-box; }
+#exi-file::file-selector-button { margin-right: 8px; padding: 5px 12px; }
 .ex-score-btn { margin-left: 8px; }
 .ex-subscore { display: inline-block; margin: 2px 6px 2px 0; }
 .ex-stu-select { max-width: 360px; }
@@ -72,6 +78,10 @@
     s.id = 'exams-view-style';
     s.textContent = CSS;
     document.head.appendChild(s);
+  }
+
+  function isAbsenceValue(value) {
+    return value === '' || value == null || /缺考|未扫|未参加|未考|旷考|不计排名|无成绩/.test(String(value).trim());
   }
 
   /** 统一错误处理：QUOTA_EXCEEDED 用固定文案，其余 toast 后端 message */
@@ -196,8 +206,8 @@
     return loadXLSX._p;
   }
 
-  /** 读取 .xlsx → 行列数组（第一个工作表；懒加载 XLSX） */
-  async function readXlsxMatrix(file) {
+  /** 读取 .xlsx → 全部工作表的行列数组（懒加载 XLSX） */
+  async function readXlsxMatrices(file) {
     const XLSX = await loadXLSX();
     const buf = await new Promise((resolve, reject) => {
       const r = new FileReader();
@@ -206,9 +216,68 @@
       r.readAsArrayBuffer(file);
     });
     const wb = XLSX.read(buf, { type: 'array' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    if (!ws) throw new Error('表格中没有工作表');
-    return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    const matrices = wb.SheetNames.map((name) => XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '' }));
+    if (!matrices.length) throw new Error('表格中没有工作表');
+    return matrices;
+  }
+
+  /**
+   * 智学网成绩表识别：在所有工作表中寻找「自定义考号/姓名/班级/得分（或总分）」表头。
+   * 智学网导出的工作簿通常同时包含得分明细、简表和汇总，优先使用有效成绩行最多的工作表。
+   */
+  function tryParseZhixue(matrices) {
+    if (!Array.isArray(matrices)) return null;
+    let best = null;
+    for (const matrix of matrices) {
+      if (!Array.isArray(matrix) || matrix.length < 3) continue;
+      for (let h = 0; h < Math.min(matrix.length, 10); h++) {
+        const header = matrix[h] || [];
+        const indexes = {};
+        let scoreLabel = '';
+        for (let c = 0; c < header.length; c++) {
+          const key = String(header[c] == null ? '' : header[c]).trim();
+          if (key === '姓名') indexes.name = c;
+          if (key === '班级') indexes.className = c;
+          if (key === '自定义考号' || key === '自定义学号' || key === '自定义编号') indexes.studentNo = c;
+          if (key === '得分' || key === '总分') {
+            if (indexes.score === undefined || key === '得分') {
+              indexes.score = c;
+              scoreLabel = key;
+            }
+          }
+        }
+        if (indexes.name === undefined || indexes.studentNo === undefined || indexes.score === undefined) continue;
+        const rows = [];
+        for (let i = h + 1; i < matrix.length; i++) {
+          const row = matrix[i] || [];
+          const name = String(row[indexes.name] == null ? '' : row[indexes.name]).trim();
+          if (!name || /^(班级平均|年级平均|平均|合计|总计)$/.test(name)) continue;
+          const studentNo = String(row[indexes.studentNo] == null ? '' : row[indexes.studentNo]).trim();
+          if (!studentNo || studentNo === '-') continue;
+          const rawScore = row[indexes.score];
+          const score = isAbsenceValue(rawScore) || rawScore === '-' ? NaN : Number(rawScore);
+          if (!Number.isFinite(score) && !isAbsenceValue(rawScore) && rawScore !== '-') continue;
+          const item = {
+            studentNo,
+            name,
+            score: Number.isFinite(score) ? Math.round(score * 10) / 10 : null,
+          };
+          if (!Number.isFinite(score)) item.absent = true;
+          const className = indexes.className === undefined ? '' : String(row[indexes.className] == null ? '' : row[indexes.className]).trim();
+          if (className) item.className = className;
+          rows.push(item);
+        }
+        if (
+          rows.length &&
+          (!best ||
+            (scoreLabel === '得分' && best.scoreLabel !== '得分') ||
+            (scoreLabel === best.scoreLabel && rows.length > best.rows.length))
+        ) {
+          best = { kind: 'zhixue', rows, scoreLabel };
+        }
+      }
+    }
+    return best;
   }
 
   /**
@@ -253,9 +322,13 @@
       if (!nm || nm === '班级平均' || nm === '年级平均' || nm === '平均') continue;
       // 空分数视为缺考跳过（与旧版 parseFloat 语义一致；Number('')===0 会误判）
       const rawScore = r[engIdx];
-      const v = rawScore === '' || rawScore == null ? NaN : Number(rawScore);
-      if (!Number.isFinite(v)) continue;
+      const v = isAbsenceValue(rawScore) ? NaN : Number(rawScore);
+      if (!Number.isFinite(v) && !isAbsenceValue(rawScore)) continue;
       const row = { name: nm, score: Math.round(v * 10) / 10 };
+      if (!Number.isFinite(v)) {
+        row.score = null;
+        row.absent = true;
+      }
       const no = noIdx >= 0 ? String(r[noIdx] == null ? '' : r[noIdx]).trim() : '';
       if (no) row.studentNo = no;
       const cn = clsIdx >= 0 ? String(r[clsIdx] == null ? '' : r[clsIdx]).trim() : '';
@@ -345,8 +418,9 @@
       }
       if (totalIdx >= 0) {
         const tv = r[totalIdx];
-        const tf = tv === null || tv === '' || tv === '-' ? NaN : Number(tv);
+        const tf = isAbsenceValue(tv) || tv === '-' ? NaN : Number(tv);
         if (Number.isFinite(tf)) totalRows.push({ name, score: Math.round(tf * 10) / 10 });
+        else if (isAbsenceValue(tv) || tv === '-') totalRows.push({ name, score: null, absent: true });
       }
     }
     if (!subRows.length) return null;
@@ -357,11 +431,18 @@
    * 统一入口：来源 + 文件/文本 → { rows, detected }
    * .xlsx 识别顺序：班级报表《学生成绩》 → 学科网《小题分》 → 通用行解析（detected=null）
    */
-  async function parseRows(source, type, file, pasteText) {
+  async function parseRows(source, type, file, pasteText, format) {
     if (source === 'paste') return { rows: parseDelimitedText(pasteText, type), detected: null };
     if (!file) throw new Error('请先选择文件');
     if (source === 'xlsx') {
-      const matrix = await readXlsxMatrix(file);
+      const matrices = await readXlsxMatrices(file);
+      if (format === 'zhixue') {
+        if (type !== 'scores') throw new Error('智学网文件仅支持导入总分');
+        const zhixue = tryParseZhixue(matrices);
+        if (!zhixue) throw new Error('未识别到智学网成绩表，请确认文件包含自定义考号、姓名和得分列');
+        return { rows: zhixue.rows, detected: zhixue };
+      }
+      const matrix = matrices[0];
       const cls = tryParseClassSheet(matrix);
       if (cls) return { rows: cls.rows, detected: cls };
       const xkw = tryParseXkw(matrix);
@@ -369,10 +450,7 @@
         // 「导入成绩」窗口只取每人总分；「导入小分」窗口预览小分行（确认时总分一并导入）
         return { rows: type === 'scores' ? xkw.totalRows : xkw.subRows, detected: xkw };
       }
-      const lines = matrix
-        .filter((r) => Array.isArray(r) && r.some((c) => String(c).trim() !== ''))
-        .map((r) => r.map((c) => String(c).trim()).join('\t'));
-      return { rows: parseDelimitedText(lines.join('\n'), type), detected: null };
+      throw new Error('未识别为学科网成绩格式，可能选错了成绩平台');
     }
     if (source === 'csv') return { rows: parseDelimitedText(await readFileText(file), type), detected: null };
     if (source === 'json') return { rows: parseJsonText(await readFileText(file), type), detected: null };
@@ -859,6 +937,7 @@
     const title = isScores ? '导入成绩（总分）' : '导入小分（分题型）';
     let pendingRows = null;
     let pendingDetected = null; // 自动识别结果（class-sheet / xkw），null = 通用解析
+    let pendingMatchInfo = null;
     let pendingFilter = '全部'; // 班级报表识别的按班过滤值
 
     App.modal(
@@ -872,6 +951,11 @@
           <option value="json">.json 文件</option>
           <option value="paste">粘贴文本</option>
         </select>
+        <label>${I18n.t('成绩平台')}</label>
+        <div class="ex-format-options" id="exi-format">
+          <label class="ex-format-option"><input type="radio" name="exi-format" value="xueke" checked> ${I18n.t('学科网')}</label>
+          <label class="ex-format-option"><input type="radio" name="exi-format" value="zhixue"> ${I18n.t('智学网')}</label>
+        </div>
         <div id="exi-file-wrap"><input class="form-input" id="exi-file" type="file"></div>
         <div id="exi-paste-wrap" class="hidden">
           <textarea class="form-input" id="exi-paste" rows="6" placeholder=""></textarea>
@@ -888,6 +972,7 @@
       (modalEl) => {
         modalEl.classList.add('ex-modal-wide');
         const sourceSel = modalEl.querySelector('#exi-source');
+        const formatSel = modalEl.querySelector('#exi-format');
         const fileWrap = modalEl.querySelector('#exi-file-wrap');
         const fileInput = modalEl.querySelector('#exi-file');
         const pasteWrap = modalEl.querySelector('#exi-paste-wrap');
@@ -899,8 +984,8 @@
 
         const HINTS = {
           xlsx: isScores
-            ? '成绩行格式：学号,分数 或 姓名,班级,分数（取第一个工作表；可自动识别班级报表《学生成绩》与学科网《小题分》）'
-            : '小分行格式：学号,题型,得分,满分 或 姓名,班级,题型,得分,满分（取第一个工作表；可自动识别学科网《小题分》与班级报表《学生成绩》）',
+            ? '学科网格式：选择学科网成绩报表或《小题分》文件，系统将自动识别并导入'
+            : '学科网格式：选择《小题分》文件，系统将按大题汇总导入小分',
           csv: isScores
             ? '成绩行格式：学号,分数 或 姓名,班级,分数（逗号 / 制表符 / 空格分隔）'
             : '小分行格式：学号,题型,得分,满分 或 姓名,班级,题型,得分,满分',
@@ -911,26 +996,40 @@
             ? '每行一条：学号,分数 或 姓名,班级,分数（支持逗号 / 制表符 / 空格分隔）'
             : '每行一条：学号,题型,得分,满分 或 姓名,班级,题型,得分,满分',
         };
+        function currentHint() {
+          if (sourceSel.value === 'xlsx' && formatSel.value === 'zhixue') {
+            return isScores
+              ? '智学网格式：自定义考号,姓名,班级,得分（自动遍历工作表，使用自定义考号或姓名匹配）'
+              : '智学网文件仅支持导入总分，请切换到“导入成绩（总分）”';
+          }
+          return HINTS[sourceSel.value];
+        }
         const ACCEPTS = { xlsx: '.xlsx', csv: '.csv,.txt', json: '.json' };
 
         function syncSource() {
           const src = sourceSel.value;
-          hintEl.textContent = HINTS[src];
+          hintEl.textContent = currentHint();
           fileWrap.classList.toggle('hidden', src === 'paste');
           pasteWrap.classList.toggle('hidden', src !== 'paste');
           fileInput.accept = ACCEPTS[src] || '';
           pendingRows = null;
           pendingDetected = null;
+          pendingMatchInfo = null;
           previewEl.innerHTML = '';
           resultEl.innerHTML = '';
           importBtn.classList.add('hidden');
+          importBtn.disabled = false;
+          formatSel.querySelectorAll('input').forEach((input) => {
+            input.disabled = src !== 'xlsx';
+          });
         }
         sourceSel.addEventListener('change', syncSource);
+        formatSel.addEventListener('change', syncSource);
         syncSource();
 
         modalEl.querySelector('#exi-close').onclick = () => App.closeModal();
 
-        /** 前端预匹配：与后端 matchStudent 同规则（学号精确 → 姓名+班级名），用于预览标记未匹配行 */
+        /** 前端预匹配：与后端 matchStudent 同规则（学号 → 唯一姓名），用于预览标记未匹配行 */
         async function buildMatchInfo(rows) {
           let stuData;
           try {
@@ -939,19 +1038,21 @@
             return null; // 拿不到名单则不做预览标记
           }
           const byNo = new Map();
-          const byNameClass = new Map();
+          const byName = new Map();
+          const duplicateNames = new Set();
           for (const st of stuData.students || []) {
             if (st.student_no) byNo.set(String(st.student_no).trim(), st);
-            if (st.name && st.class_name) {
-              byNameClass.set(`${String(st.name).trim()}|${String(st.class_name).trim()}`, st);
+            if (st.name) {
+              const name = String(st.name).trim();
+              if (byName.has(name)) duplicateNames.add(name);
+              else byName.set(name, st);
             }
           }
           return rows.map((r) => {
             const no = r.studentNo !== undefined && r.studentNo !== null ? String(r.studentNo).trim() : '';
             if (no && byNo.has(no)) return true;
             const name = r.name !== undefined && r.name !== null ? String(r.name).trim() : '';
-            const cn = r.className !== undefined && r.className !== null ? String(r.className).trim() : '';
-            return !!(name && cn && byNameClass.has(`${name}|${cn}`));
+            return !!(name && byName.has(name) && !duplicateNames.has(name));
           });
         }
 
@@ -990,11 +1091,13 @@
               if (pendingFilter !== '全部') view = view.filter((p) => p.r.className === pendingFilter);
             }
           }
-          const head = view.slice(0, 8);
+          const head = view;
           const cols = Object.keys(rows[0] || {});
           const detectNote =
             d && d.kind === 'class-sheet'
               ? '<div class="ex-detect-ok">✓ 已识别为班级报表《学生成绩》，将按英语总分导入</div>'
+              : d && d.kind === 'zhixue'
+                ? '<div class="ex-detect-ok">✓ 已按智学网格式识别，将使用自定义考号匹配学生并导入总分</div>'
               : d && d.kind === 'xkw'
                 ? `<div class="ex-detect-ok">✓ 已识别为学科网小题分文档，将按大题（${esc(d.parts.join(' / '))}）汇总导入小分${
                     type === 'scores' ? '（本窗口仅导入每人总分）' : ''
@@ -1005,10 +1108,15 @@
             d && d.kind === 'xkw'
               ? `共识别 <b>${d.stuCount}</b> 名学生 · <b>${d.parts.length}</b> 个大题 → <b>${d.subRows.length}</b> 行小分${
                   d.totalRows.length ? `，另含 <b>${d.totalRows.length}</b> 行总分` : ''
-                }，预览前 ${head.length} 行：`
-              : `共解析 <b>${view.length}</b> 行，预览前 ${head.length} 行：`;
+                }，共显示 ${head.length} 行：`
+              : `共解析 <b>${view.length}</b> 行：`;
+          const noMatchNote =
+            matchInfo && view.length && !view.some((p) => p.m)
+              ? '<div class="ex-detect-ok" style="color:#a15c00;background:#fff7e6">⚠ 没有匹配到任何学生，可能选错了成绩平台或学号/姓名不一致，已禁止导入</div>'
+              : '';
           previewEl.innerHTML = `
             ${detectNote}
+            ${noMatchNote}
             ${filterBar}
             <div class="ex-hint">${info}${matchInfo && unmatchedCount ? ` <span class="ex-weak">${unmatchedCount} 行未匹配学生</span>` : ''}</div>
             <div class="ex-preview-table"><table class="table">
@@ -1031,31 +1139,44 @@
             });
           }
           syncImportBtn(view.length);
+          importBtn.disabled = !!(matchInfo && view.length && !view.some((p) => p.m));
         }
 
         modalEl.querySelector('#exi-parse').onclick = async () => {
           previewEl.innerHTML = '<div class="muted">解析中…</div>';
           resultEl.innerHTML = '';
           try {
-            const { rows, detected } = await parseRows(sourceSel.value, type, fileInput.files[0], pasteEl.value);
+            const { rows, detected } = await parseRows(
+              sourceSel.value,
+              type,
+              fileInput.files[0],
+              pasteEl.value,
+              formatSel.querySelector('input:checked')?.value || 'xueke'
+            );
             if (!rows.length) throw new Error('未解析到有效数据行');
             pendingRows = rows;
             pendingDetected = detected;
+            pendingMatchInfo = await buildMatchInfo(rows);
             pendingFilter = detected && detected.kind === 'class-sheet' && detected.clsSugg ? detected.clsSugg : '全部';
-            const matchInfo = await buildMatchInfo(rows);
-            renderPreview(matchInfo);
+            renderPreview(pendingMatchInfo);
             importBtn.classList.remove('hidden');
           } catch (err) {
             pendingRows = null;
             pendingDetected = null;
+            pendingMatchInfo = null;
             previewEl.innerHTML = '';
             importBtn.classList.add('hidden');
+            importBtn.disabled = false;
             App.toast(err.message || '解析失败');
           }
         };
 
         importBtn.onclick = async () => {
           if (!pendingRows) return;
+          if (pendingMatchInfo && !pendingMatchInfo.some(Boolean)) {
+            App.toast('没有匹配到任何学生，可能选错了成绩平台，请重新选择后解析');
+            return;
+          }
           importBtn.disabled = true;
           try {
             const d = pendingDetected;
@@ -1064,6 +1185,8 @@
               // 学科网：先每人总分（scores），再按大题汇总的小分（subscores，仅「导入小分」窗口）
               if (d.totalRows.length) resList.push(await api.exams.import(examId, { type: 'scores', rows: d.totalRows }));
               if (type === 'subscores') resList.push(await api.exams.import(examId, { type: 'subscores', rows: d.subRows }));
+            } else if (d && d.kind === 'zhixue') {
+              resList.push(await api.exams.import(examId, { type: 'scores', rows: pendingRows }));
             } else {
               // 班级报表《学生成绩》无论在本窗口类型如何，都按英语总分导入；按班过滤生效
               const importType = d && d.kind === 'class-sheet' ? 'scores' : type;
@@ -1147,6 +1270,9 @@
     const editable = (classId) => isAdmin || manageMap.get(classId);
     // 全体学生（当前学年）按班分组；成绩来自本次考试记录，无记录显示 —
     const scoreBySid = new Map((det.scores || []).map((s) => [s.student_id, s.score]));
+    const absentSids = new Set(
+      (det.scores || []).filter((s) => s.absent || s.score === null).map((s) => s.student_id)
+    );
     const groups = new Map();
     // 豁免登记学生不参与成绩登记名单
     for (const st of (stuData.students || []).filter((s) => !s.exempt)) {
@@ -1177,7 +1303,13 @@
                 .map((st) => {
                   const sc = scoreBySid.get(st.id);
                   const scoreCell =
-                    sc === null || sc === undefined ? '<span class="muted">—</span>' : fmtScore(sc);
+                    !scoreBySid.has(st.id)
+                      ? '<span class="muted">未导入</span>'
+                      : absentSids.has(st.id)
+                      ? '<span class="muted">缺考</span>'
+                      : sc === null || sc === undefined
+                        ? '<span class="muted">—</span>'
+                        : fmtScore(sc);
                   return `<tr>
                     <td>${esc(st.student_no || '—')}</td>
                     <td>${esc(st.name)}</td>
@@ -1229,6 +1361,7 @@
             try {
               await api.exams.setScore(examId, sid, num);
               scoreBySid.set(sid, num);
+              absentSids.delete(sid);
               App.toast(`已保存 ${name} 的成绩`);
               // 同步考试列表行的参考人数/均分（本地推算，不 refetch）
               const item = examsCache.find((x) => x.id === examId);

@@ -286,6 +286,32 @@ App.registerView('settings', {
         <div class="muted">导出全部数据：下载当前空间的完整备份 JSON（§51 Backup 结构）；恢复数据：选择备份 JSON 文件恢复。</div>
       </div>` : ''}
 
+      ${isAdmin ? `
+      <div class="card">
+        <div class="card-title">${I18n.t('归档解析', '归档解析')}</div>
+        <div class="muted" style="margin-bottom:10px">解析已下载的学年归档 gzip+base64 JSON 文件，查看数据表和条目数量，并下载解压后的 JSON。</div>
+        <div class="form-row" style="align-items:flex-end">
+          <div>
+            <label class="form-label">${I18n.t('选择归档文件', '选择归档文件')}</label>
+            <input type="file" id="archive-parse-file" accept=".json,application/json">
+          </div>
+          <button class="btn btn-primary" id="archive-parse" type="button">${I18n.t('解析文件', '解析文件')}</button>
+        </div>
+        <div id="archive-parse-result" class="muted" style="margin-top:10px">尚未选择文件</div>
+      </div>
+      <div class="card">
+        <div class="card-title">${I18n.t('毕业班数据解析', '毕业班数据解析')}</div>
+        <div class="muted" style="margin-bottom:10px">解析已下载的毕业班归档 gzip+base64 JSON 文件，查看班级、学生和考试等数据，并下载解压后的 JSON。</div>
+        <div class="form-row" style="align-items:flex-end">
+          <div>
+            <label class="form-label">${I18n.t('选择毕业班文件', '选择毕业班文件')}</label>
+            <input type="file" id="graduated-parse-file" accept=".json,application/json">
+          </div>
+          <button class="btn btn-primary" id="graduated-parse" type="button">${I18n.t('解析文件', '解析文件')}</button>
+        </div>
+        <div id="graduated-parse-result" class="muted" style="margin-top:10px">尚未选择文件</div>
+      </div>` : ''}
+
       <!-- 4. 数据导入（§47） -->
       <div class="card">
         <div class="card-title">数据导入</div>
@@ -454,6 +480,7 @@ App.registerView('settings', {
     await renderSpace();
     await renderMyQuota();
     bindDataManagement();
+    bindArchiveParsers();
     bindImportEntries();
     await bindAiSettings();
     await bindBrandSettings();
@@ -1091,6 +1118,153 @@ function bindDataManagement() {
       fileInput.value = '';
     }
   });
+}
+
+/** 本地解析学年/毕业归档容器，不上传归档内容 */
+function bindArchiveParsers() {
+  const bindings = [
+    { fileId: 'archive-parse-file', buttonId: 'archive-parse', resultId: 'archive-parse-result', kind: 'archive' },
+    { fileId: 'graduated-parse-file', buttonId: 'graduated-parse', resultId: 'graduated-parse-result', kind: 'graduated' },
+  ];
+  bindings.forEach(({ fileId, buttonId, resultId, kind }) => {
+    const fileInput = document.getElementById(fileId);
+    const button = document.getElementById(buttonId);
+    const result = document.getElementById(resultId);
+    if (!fileInput || !button || !result) return;
+    let downloadUrl = '';
+    button.addEventListener('click', async () => {
+      const file = fileInput.files?.[0];
+      if (!file) {
+        App.toast(kind === 'graduated' ? '请选择毕业班归档文件' : '请选择归档文件');
+        return;
+      }
+      button.disabled = true;
+      result.textContent = '解析中…';
+      if (downloadUrl) URL.revokeObjectURL(downloadUrl);
+      downloadUrl = '';
+      try {
+        const { envelope, inner } = await decodeArchiveEnvelope(await file.text());
+        if (kind === 'graduated' && envelope.module !== 'graduated') {
+          throw new Error('所选文件不是毕业班归档');
+        }
+        if (kind === 'archive' && envelope.module === 'graduated') {
+          throw new Error('所选文件是毕业班归档，请使用毕业班数据解析入口');
+        }
+        const tables = collectArchiveTables(inner);
+        const tableText = tables.length
+          ? tables.map((table) => `${table.name}：${table.rows.length} 行`).join('；')
+          : '未发现可展示的数据表';
+        const metadata = [
+          `文件：${file.name}`,
+          envelope.module ? `模块：${envelope.module}` : '',
+          envelope.academicYear ? `学年：${envelope.academicYear}` : '',
+          envelope.className ? `班级：${envelope.className}` : '',
+          `数据：${tableText}`,
+        ].filter(Boolean).join('　');
+        const output = JSON.stringify(inner, null, 2);
+        const blob = new Blob([output], { type: 'application/json;charset=utf-8' });
+        downloadUrl = URL.createObjectURL(blob);
+        const xlsx = await buildArchiveWorkbook(tables);
+        const excelUrl = URL.createObjectURL(new Blob([xlsx], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        }));
+        result.innerHTML = `${App.esc(metadata)}　<a class="btn" href="${downloadUrl}" download="${App.esc(file.name.replace(/\.json$/i, '') + '-解压.json')}">下载解压 JSON</a> <a class="btn" href="${excelUrl}" download="${App.esc(file.name.replace(/\.json$/i, '') + '-解压.xlsx')}">下载 Excel</a>`;
+      } catch (e) {
+        result.textContent = e.message || '解析失败';
+        App.toast(e.message || '归档解析失败');
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+}
+
+function loadArchiveXLSX() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (loadArchiveXLSX.promise) return loadArchiveXLSX.promise;
+  loadArchiveXLSX.promise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'vendor/xlsx.full.min.js';
+    script.onload = () => resolve(window.XLSX);
+    script.onerror = () => reject(new Error('表格组件加载失败，无法生成 Excel'));
+    document.head.appendChild(script);
+  });
+  return loadArchiveXLSX.promise;
+}
+
+async function buildArchiveWorkbook(tables) {
+  const XLSX = await loadArchiveXLSX();
+  const workbook = XLSX.utils.book_new();
+  const usedNames = new Set();
+  tables.forEach((table, index) => {
+    if (!table.rows.length) return;
+    const baseName = String(table.name || `数据表${index + 1}`)
+      .replace(/[\\/?*[\]:]/g, '')
+      .slice(0, 31) || `数据表${index + 1}`;
+    let sheetName = baseName;
+    let suffix = 2;
+    while (usedNames.has(sheetName)) {
+      const suffixText = `-${suffix}`;
+      sheetName = `${baseName.slice(0, 31 - suffixText.length)}${suffixText}`;
+      suffix += 1;
+    }
+    usedNames.add(sheetName);
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(table.rows), sheetName);
+  });
+  if (!workbook.SheetNames.length) {
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['归档中没有可导出的数据表']]), '说明');
+  }
+  return XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+}
+
+async function decodeArchiveEnvelope(text) {
+  let envelope;
+  try {
+    envelope = JSON.parse(text);
+  } catch {
+    throw new Error('文件不是有效的 JSON');
+  }
+  if (!envelope || envelope.format !== 'teacher-workbench-archive') {
+    throw new Error('不是有效的教学工作台归档文件');
+  }
+  if (envelope.encoding !== 'gzip+base64' || typeof envelope.data !== 'string') {
+    throw new Error(`不支持的归档编码：${envelope.encoding || '未知'}`);
+  }
+  if (typeof DecompressionStream !== 'function') {
+    throw new Error('当前应用不支持 gzip 解压，请升级应用后重试');
+  }
+  let binary;
+  try {
+    binary = atob(envelope.data);
+  } catch {
+    throw new Error('归档内容不是有效的 Base64');
+  }
+  const compressed = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'));
+  const bytes = await new Response(stream).arrayBuffer();
+  let inner;
+  try {
+    inner = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new Error('归档解压后不是有效的 JSON');
+  }
+  return { envelope, inner };
+}
+
+function collectArchiveTables(inner) {
+  const tables = [];
+  if (Array.isArray(inner?.items)) tables.push({ name: '条目列表', rows: inner.items });
+  if (inner?.class && typeof inner.class === 'object') tables.push({ name: '班级信息', rows: [inner.class] });
+  if (Array.isArray(inner?.students)) tables.push({ name: '学生名单', rows: inner.students });
+  const addGroups = (group) => {
+    if (!group || typeof group !== 'object' || Array.isArray(group)) return;
+    Object.keys(group).forEach((name) => {
+      if (Array.isArray(group[name])) tables.push({ name, rows: group[name] });
+    });
+  };
+  addGroups(inner?.items);
+  addGroups(inner?.children);
+  return tables;
 }
 
 /** 数据导入入口：弹说明 modal，解析后调用 api.import.*（§47-§49） */

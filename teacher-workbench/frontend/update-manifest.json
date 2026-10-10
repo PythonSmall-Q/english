@@ -1,5 +1,5 @@
 {
-  "version": "3.2.0",
+  "version": "3.2.11",
   "files": [
     "index.html",
     "styles.css",
@@ -30,6 +30,7 @@
     "views/settings.js",
     "views/students.js",
     "views/todos.js",
+    "vendor/xlsx.full.min.js",
     "assets/dict-featured.json",
     "assets/dict-gaokao.json"
   ]

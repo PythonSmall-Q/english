@@ -112,9 +112,9 @@ const MAIN_QUERIES = {
    WHERE a.tenant_id = ? AND a.academic_year = ?
    ORDER BY a.created_at DESC`,
   exams: `SELECT e.*, cl.name AS class_name,
-     (SELECT COUNT(*) FROM exam_scores s WHERE s.exam_id = e.id) AS student_count,
+     (SELECT COUNT(*) FROM exam_scores s WHERE s.exam_id = e.id AND s.score IS NOT NULL AND s.absent = 0) AS student_count,
      (SELECT ROUND(AVG(s.score), 2) FROM exam_scores s
-       WHERE s.exam_id = e.id AND s.score IS NOT NULL) AS avg_score
+       WHERE s.exam_id = e.id AND s.score IS NOT NULL AND s.absent = 0) AS avg_score
    FROM exams e
    LEFT JOIN classes cl ON cl.id = e.class_id AND cl.tenant_id = e.tenant_id
    WHERE e.tenant_id = ? AND e.academic_year = ?
