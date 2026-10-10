@@ -61,7 +61,11 @@
 
   App.getServiceWorkerVersion = async function () {
     if (!navigator.serviceWorker) return '—';
-    const registration = await navigator.serviceWorker.ready;
+    const registration = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+    if (!registration) return '—';
     if (!registration.active) return '—';
     return new Promise((resolve) => {
       const channel = new MessageChannel();

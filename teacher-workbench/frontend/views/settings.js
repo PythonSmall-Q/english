@@ -138,8 +138,6 @@ App.registerView('settings', {
     if (isStandalone) {
       try { appVersion = await App.getCurrentAppVersion?.() || '—'; } catch (e) { /* 使用占位版本 */ }
     }
-    try { frontendVersion = await App.getFrontendVersion?.() || '—'; } catch (e) { /* 使用占位版本 */ }
-    try { serviceWorkerVersion = await App.getServiceWorkerVersion?.() || '—'; } catch (e) { /* 使用占位版本 */ }
     // 个人资料偏好允许存 localStorage（§52：UI 偏好）
     const prefs = JSON.parse(localStorage.getItem('profile_prefs') || '{}');
 
@@ -420,6 +418,15 @@ App.registerView('settings', {
         </div>
       </div>`;
 
+    Promise.allSettled([
+      Promise.resolve().then(() => App.getFrontendVersion?.() || '—'),
+      Promise.resolve().then(() => App.getServiceWorkerVersion?.() || '—'),
+    ]).then(([frontendResult, serviceWorkerResult]) => {
+      const frontendLabel = document.getElementById('frontend-manifest-version');
+      const serviceWorkerLabel = document.getElementById('service-worker-version');
+      if (frontendLabel && frontendResult.status === 'fulfilled') frontendLabel.textContent = frontendResult.value;
+      if (serviceWorkerLabel && serviceWorkerResult.status === 'fulfilled') serviceWorkerLabel.textContent = serviceWorkerResult.value;
+    });
     bindProfile();
     // 平台 AI 已弃用：保留旧逻辑与接口，仅移除用户可见入口。
     document.getElementById('ai-mode-platform-label')?.remove();
