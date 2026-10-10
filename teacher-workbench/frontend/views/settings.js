@@ -5,7 +5,7 @@
  * 1. 个人资料：姓名（可修改，同步侧边栏）/邮箱/学科/年级/绑定教材
  * 2. 当前空间：空间名称/类型/成员列表/配额用量条（数据来自 auth.me 的 quota 与租户详情 usage）
  * 3. 数据管理：导出全部数据（backup JSON）/恢复数据/导出学生名单
- * 4. 数据导入：班级名单/课表/成绩/小分 四个入口
+ * 4. 归档解析：学年归档与毕业班归档本地解析
  */
 
 /** 配额资源 → 中文名（§71） */
@@ -133,9 +133,13 @@ App.registerView('settings', {
       : Boolean(window.WB_RUNTIME || window.Capacitor?.isNativePlatform?.() || location.protocol === 'capacitor:');
     const isAndroid = typeof App.isAndroidApp === 'function' ? App.isAndroidApp() : false;
     let appVersion = '—';
+    let frontendVersion = '—';
+    let serviceWorkerVersion = '—';
     if (isStandalone) {
       try { appVersion = await App.getCurrentAppVersion?.() || '—'; } catch (e) { /* 使用占位版本 */ }
     }
+    try { frontendVersion = await App.getFrontendVersion?.() || '—'; } catch (e) { /* 使用占位版本 */ }
+    try { serviceWorkerVersion = await App.getServiceWorkerVersion?.() || '—'; } catch (e) { /* 使用占位版本 */ }
     // 个人资料偏好允许存 localStorage（§52：UI 偏好）
     const prefs = JSON.parse(localStorage.getItem('profile_prefs') || '{}');
 
@@ -146,6 +150,10 @@ App.registerView('settings', {
         <div class="app-version-row">
           <strong id="app-current-version">${App.esc(appVersion)}</strong>
           <button class="btn btn-primary" id="check-app-update" type="button">${I18n.t('checkUpdate', '检查更新')}</button>
+        </div>
+        <div class="muted" style="margin-top:10px;font-size:12.5px">
+          ${I18n.t('前端资源版本', '前端资源版本')}：<b id="frontend-manifest-version">${App.esc(frontendVersion)}</b>
+          <span style="margin-left:18px">${I18n.t('Service Worker版本', 'Service Worker版本')}：<b id="service-worker-version">${App.esc(serviceWorkerVersion)}</b></span>
         </div>
       </div>` : `
       <div class="card desktop-download-card">
@@ -312,16 +320,7 @@ App.registerView('settings', {
         <div id="graduated-parse-result" class="muted" style="margin-top:10px">尚未选择文件</div>
       </div>` : ''}
 
-      <!-- 4. 数据导入（§47） -->
-      <div class="card">
-        <div class="card-title">数据导入</div>
-        <div class="toolbar">
-          ${IMPORT_ENTRIES.map((en) => `<button class="btn" data-import="${en.key}" type="button">${en.label}</button>`).join('')}
-        </div>
-        <div class="muted">支持 .xlsx / .csv / .json / 直接粘贴；导入在服务端解析校验后写入，匹配失败的数据会明确返回。</div>
-      </div>
-
-      <!-- 5. 显示（设备模式与语言） -->
+      <!-- 4. 显示（设备模式与语言） -->
       <div class="card">
         <div class="card-title">显示</div>
         <div class="form-row" style="align-items:flex-end">
@@ -481,7 +480,6 @@ App.registerView('settings', {
     await renderMyQuota();
     bindDataManagement();
     bindArchiveParsers();
-    bindImportEntries();
     await bindAiSettings();
     await bindBrandSettings();
   },

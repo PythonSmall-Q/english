@@ -35,6 +35,8 @@
     '选择归档文件': ['Choose archive file', '選擇歸檔檔案'],
     '选择毕业班文件': ['Choose graduated-class file', '選擇畢業班檔案'],
     '解析文件': ['Parse file', '解析檔案'],
+    '前端资源版本': ['Frontend manifest', '前端資源版本'],
+    'Service Worker版本': ['Service Worker version', 'Service Worker 版本'],
     '成绩平台': ['Score platform', '成績平台'],
     '学科网': ['Xueke Network', '學科網'],
     '智学网': ['Zhixue Network', '智學網'],

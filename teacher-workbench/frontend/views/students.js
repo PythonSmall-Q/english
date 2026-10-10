@@ -545,6 +545,51 @@
     }
   }
 
+  function openStudentImportModal() {
+    App.modal(
+      '导入班级名单',
+      `<p class="muted" style="margin-top:0">支持 JSON 文件或直接粘贴 JSON 数组。字段：学号 studentNo、姓名 name、班级 className、性别 gender。</p>
+       <p class="muted">班级名称必须匹配当前空间中的班级，匹配不到的行不会写入。</p>
+       <pre class="import-example">[
+  { "studentNo": "2027001", "name": "张三", "className": "高三6班", "gender": "男" }
+]</pre>
+       <div class="toolbar">
+         <button class="btn" id="stu-import-pick" type="button">选择 JSON 文件</button>
+         <input type="file" id="stu-import-file" accept=".json,application/json" class="hidden">
+         <span class="muted" id="stu-import-name"></span>
+       </div>
+       <textarea class="form-input" id="stu-import-paste" placeholder="粘贴学生名单 JSON 数组"></textarea>
+       <div class="modal-actions">
+         <button class="btn" id="stu-import-cancel" type="button">取消</button>
+         <button class="btn btn-primary" id="stu-import-submit" type="button">开始导入</button>
+       </div>`,
+      () => {
+        const fileInput = document.getElementById('stu-import-file');
+        document.getElementById('stu-import-pick').onclick = () => fileInput.click();
+        fileInput.onchange = () => {
+          document.getElementById('stu-import-name').textContent = fileInput.files[0]?.name || '';
+        };
+        document.getElementById('stu-import-cancel').onclick = App.closeModal;
+        document.getElementById('stu-import-submit').onclick = async () => {
+          try {
+            let text = document.getElementById('stu-import-paste').value.trim();
+            if (!text && fileInput.files[0]) text = await fileInput.files[0].text();
+            if (!text) throw new Error('请选择 JSON 文件或粘贴数据');
+            const rows = JSON.parse(text);
+            if (!Array.isArray(rows)) throw new Error('JSON 必须是数组');
+            const result = await api.import.students({ rows });
+            App.closeModal();
+            const unmatched = Array.isArray(result?.unmatched) ? result.unmatched.length : 0;
+            App.toast(`班级名单导入完成：新增 ${result?.created ?? rows.length} 条${unmatched ? `，未匹配 ${unmatched} 行` : ''}`);
+            await loadData();
+          } catch (error) {
+            App.toast(error.message || '导入失败');
+          }
+        };
+      }
+    );
+  }
+
   // ===== 导出班级统计（.xlsx，三 sheet：作业上交 / 默写情况 / 考试成绩）=====
 
   /** 考试列名：重名时加日期后缀区分 */
@@ -708,6 +753,7 @@
           <span class="spacer"></span>
           <button id="stu-btn-export-stats" class="btn" type="button">导出班级统计</button>
           <button id="stu-btn-export" class="btn" type="button">导出名单</button>
+          <button id="stu-btn-import" class="btn" type="button">导入班级名单</button>
           <button id="stu-btn-add" class="btn btn-primary" type="button">添加学生</button>
         </div>
         <div id="stu-content"></div>`;
@@ -736,6 +782,7 @@
       });
       el.querySelector('#stu-btn-export').addEventListener('click', exportStudents);
       el.querySelector('#stu-btn-export-stats').addEventListener('click', openExportStatsModal);
+      el.querySelector('#stu-btn-import').addEventListener('click', openStudentImportModal);
       el.querySelector('#stu-btn-add').addEventListener('click', () => {
         if (!classes.length) {
           App.toast('当前空间还没有班级，请先在「我的班级」中创建');

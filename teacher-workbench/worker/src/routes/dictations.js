@@ -157,7 +157,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
            WHERE r.dictation_id = d.id AND r.retest_completed = 1) AS retest_completed_count
        FROM dictations d
        WHERE d.tenant_id = ? AND d.academic_year = ? ${classId ? 'AND d.class_id = ?' : ''}
-       ORDER BY d.dictation_date DESC, d.created_at DESC`
+       ORDER BY d.created_at DESC, d.dictation_date DESC`
     )
     .bind(...(classId ? [tenantId, academicYear, classId] : [tenantId, academicYear]))
     .all();

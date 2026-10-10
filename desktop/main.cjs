@@ -66,7 +66,13 @@ async function updateFrontend() {
   let activeRoot = bundledRoot;
   try {
     const remoteManifest = await fetchJson(`${frontendUpdateBase}/update-manifest.json`);
-    if (isNewerVersion(remoteManifest.version, bundledManifest.version)) {
+    let activeManifest = bundledManifest;
+    try {
+      activeManifest = JSON.parse(await fs.readFile(path.join(overlayRoot, 'update-manifest.json'), 'utf8'));
+    } catch (_) {
+      // 首次启动或旧版本覆盖目录不存在时使用随包清单。
+    }
+    if (isNewerVersion(remoteManifest.version, activeManifest.version)) {
       for (const file of remoteManifest.files || []) {
         if (file.includes('..') || path.isAbsolute(file)) throw new Error('非法更新文件路径');
         const response = await fetch(`${frontendUpdateBase}/${file}`, { signal: AbortSignal.timeout(15000) });
@@ -77,12 +83,17 @@ async function updateFrontend() {
       }
       await fs.writeFile(path.join(overlayRoot, 'update-manifest.json'), JSON.stringify(remoteManifest, null, 2));
       activeRoot = overlayRoot;
-    } else {
-      const overlayManifest = JSON.parse(await fs.readFile(path.join(overlayRoot, 'update-manifest.json'), 'utf8'));
-      if (overlayManifest.version === remoteManifest.version) activeRoot = overlayRoot;
+    } else if (isNewerVersion(activeManifest.version, bundledManifest.version)) {
+      activeRoot = overlayRoot;
     }
   } catch (error) {
     console.warn('[frontend-update] skipped:', error.message);
+    try {
+      const overlayManifest = JSON.parse(await fs.readFile(path.join(overlayRoot, 'update-manifest.json'), 'utf8'));
+      if (isNewerVersion(overlayManifest.version, bundledManifest.version)) activeRoot = overlayRoot;
+    } catch (_) {
+      // 网络和覆盖目录均不可用时使用随包前端。
+    }
   }
   return activeRoot;
 }
@@ -136,11 +147,17 @@ async function createWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
-  // 先显示随包前端，联网更新在后台执行，不阻塞窗口出现。
-  window.loadFile(path.join(frontendRoot, 'index.html'));
-  updateFrontend().then((activeRoot) => {
-    if (activeRoot !== bundledRoot && !window.isDestroyed()) window.loadFile(path.join(activeRoot, 'index.html'));
-  }).catch((error) => console.warn('[frontend-update] skipped:', error.message));
+  // 启动时先完成前端版本选择，避免首屏已经加载随包旧资源后才在第二次启动切换。
+  updateFrontend()
+    .then((activeRoot) => {
+      if (!window.isDestroyed()) return window.loadFile(path.join(activeRoot, 'index.html'));
+      return null;
+    })
+    .catch((error) => {
+      console.warn('[frontend-update] skipped:', error.message);
+      if (!window.isDestroyed()) return window.loadFile(path.join(frontendRoot, 'index.html'));
+      return null;
+    });
 }
 
 if (hasSingleInstanceLock) app.whenReady().then(() => {

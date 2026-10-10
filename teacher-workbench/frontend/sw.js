@@ -10,7 +10,7 @@
  *
  * 缓存名带版本号；sw.js 内容变更即触发 activate 清理旧版缓存。
  */
-const CACHE = 'wb-static-v29';
+const CACHE = 'wb-static-v32';
 const UPDATE_BASE = 'https://fff.xmoj-script.uk';
 const UPDATE_MANIFEST = `${UPDATE_BASE}/update-manifest.json`;
 
@@ -58,6 +58,10 @@ async function updateRemoteCache() {
 }
 
 self.addEventListener('message', (event) => {
+  if (event.data?.type === 'GET_VERSION') {
+    event.ports[0]?.postMessage({ version: CACHE.replace(/^wb-static-/, '') });
+    return;
+  }
   if (event.data?.type !== 'UPDATE_REMOTE_CACHE') return;
   event.waitUntil(
     updateRemoteCache().then((updated) => {
@@ -96,6 +100,15 @@ self.addEventListener('fetch', (e) => {
     if (!isStatic) return;
     e.respondWith(
       caches.open(CACHE).then(async (cache) => {
+        // Android 更新完成后，刷新应立即使用刚下载的远程资源，而不是再次读取 APK 内置文件。
+        const remoteCaches = (await caches.keys())
+          .filter((key) => key.startsWith('wb-static-remote-'))
+          .sort()
+          .reverse();
+        for (const remoteCacheName of remoteCaches) {
+          const remoteHit = await caches.open(remoteCacheName).then((remoteCache) => remoteCache.match(e.request));
+          if (remoteHit) return remoteHit;
+        }
         const hit = await cache.match(e.request);
         const refresh = fetch(e.request)
           .then((resp) => {
@@ -108,11 +121,11 @@ self.addEventListener('fetch', (e) => {
         if (hit) return hit;
         // APK/local cache is authoritative when present; use a remotely staged
         // update only as an offline fallback for files missing locally.
-        const remoteCaches = (await caches.keys())
+        const fallbackRemoteCaches = (await caches.keys())
           .filter((key) => key.startsWith('wb-static-remote-'))
           .sort()
           .reverse();
-        for (const remoteCacheName of remoteCaches) {
+        for (const remoteCacheName of fallbackRemoteCaches) {
           const remoteHit = await caches.open(remoteCacheName).then((remoteCache) => remoteCache.match(e.request));
           if (remoteHit) return remoteHit;
         }

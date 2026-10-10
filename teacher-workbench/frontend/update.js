@@ -57,6 +57,23 @@
     return manifest.version || '0.0.0';
   }
 
+  App.getFrontendVersion = localFrontendVersion;
+
+  App.getServiceWorkerVersion = async function () {
+    if (!navigator.serviceWorker) return '—';
+    const registration = await navigator.serviceWorker.ready;
+    if (!registration.active) return '—';
+    return new Promise((resolve) => {
+      const channel = new MessageChannel();
+      const timeout = setTimeout(() => resolve('—'), 3000);
+      channel.port1.onmessage = (event) => {
+        clearTimeout(timeout);
+        resolve(event.data?.version || '—');
+      };
+      registration.active.postMessage({ type: 'GET_VERSION' }, [channel.port2]);
+    });
+  };
+
   async function onlineVersion() {
     const currentPlatform = platform();
     if (!currentPlatform) return '0.0.0';
