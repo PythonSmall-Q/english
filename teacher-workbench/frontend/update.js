@@ -114,6 +114,48 @@
     return window.I18n?.t(key, fallback) || fallback;
   }
 
+  let frontendPromptTimer = null;
+
+  function hasActiveUserInteraction() {
+    if (document.querySelector('.modal-mask:not(.hidden)')) return true;
+    const active = document.activeElement;
+    return Boolean(active && (
+      active.matches('input, textarea, select, [contenteditable="true"]') ||
+      active.closest('form')
+    ));
+  }
+
+  function showFrontendUpdatedPrompt(reload) {
+    if (hasActiveUserInteraction()) {
+      if (!frontendPromptTimer) {
+        frontendPromptTimer = setInterval(() => {
+          if (!hasActiveUserInteraction()) {
+            clearInterval(frontendPromptTimer);
+            frontendPromptTimer = null;
+            showFrontendUpdatedPrompt(reload);
+          }
+        }, 2000);
+      }
+      return;
+    }
+    App.modal(
+      text('前端已更新', '前端已更新'),
+      `<p>${App.esc(text('前端更新提示', '新的前端已下载。为避免打断正在进行的工作，请确认当前页面已保存后再使用新前端。'))}</p>
+       <div class="modal-actions">
+         <button class="btn btn-primary" type="button" id="use-new-frontend">${App.esc(text('使用新前端', '使用新前端'))}</button>
+       </div>`,
+      (dialog) => {
+        dialog.querySelector('#use-new-frontend').addEventListener('click', () => {
+          if (reload) {
+            window.location.reload();
+          } else {
+            App.closeModal();
+          }
+        });
+      }
+    );
+  }
+
   async function openDownload(url) {
     if (!url) throw new Error('missing update URL');
     if (window.WB_RUNTIME?.openExternal) {
@@ -200,7 +242,7 @@
           if (compareVersions(frontendManifest.version, await localFrontendVersion()) > 0) {
             const updated = await updateAndroidFrontend();
             if (updated) {
-              window.location.reload();
+              showFrontendUpdatedPrompt(true);
               return true;
             }
           }
@@ -216,6 +258,9 @@
   const boot = App.boot;
   App.boot = async function (...args) {
     const result = await boot.apply(this, args);
+    if (new URLSearchParams(window.location.search).get('frontendUpdated') === '1') {
+      showFrontendUpdatedPrompt(false);
+    }
     App.checkForUpdates();
     return result;
   };

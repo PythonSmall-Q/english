@@ -10,7 +10,7 @@
  *
  * 缓存名带版本号；sw.js 内容变更即触发 activate 清理旧版缓存。
  */
-const CACHE = 'wb-static-v32';
+const CACHE = 'wb-static-v37';
 const UPDATE_BASE = 'https://fff.xmoj-script.uk';
 const UPDATE_MANIFEST = `${UPDATE_BASE}/update-manifest.json`;
 

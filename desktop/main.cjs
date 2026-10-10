@@ -64,6 +64,7 @@ async function updateFrontend() {
   const overlayRoot = path.join(app.getPath('userData'), 'frontend');
   const bundledManifest = JSON.parse(await fs.readFile(path.join(bundledRoot, 'update-manifest.json'), 'utf8'));
   let activeRoot = bundledRoot;
+  let updated = false;
   try {
     const remoteManifest = await fetchJson(`${frontendUpdateBase}/update-manifest.json`);
     let activeManifest = bundledManifest;
@@ -83,6 +84,7 @@ async function updateFrontend() {
       }
       await fs.writeFile(path.join(overlayRoot, 'update-manifest.json'), JSON.stringify(remoteManifest, null, 2));
       activeRoot = overlayRoot;
+      updated = true;
     } else if (isNewerVersion(activeManifest.version, bundledManifest.version)) {
       activeRoot = overlayRoot;
     }
@@ -95,7 +97,7 @@ async function updateFrontend() {
       // 网络和覆盖目录均不可用时使用随包前端。
     }
   }
-  return activeRoot;
+  return { activeRoot, updated };
 }
 
 async function createWindow() {
@@ -149,8 +151,12 @@ async function createWindow() {
   });
   // 启动时先完成前端版本选择，避免首屏已经加载随包旧资源后才在第二次启动切换。
   updateFrontend()
-    .then((activeRoot) => {
-      if (!window.isDestroyed()) return window.loadFile(path.join(activeRoot, 'index.html'));
+    .then(({ activeRoot, updated }) => {
+      if (!window.isDestroyed()) {
+        return window.loadFile(path.join(activeRoot, 'index.html'), {
+          query: updated ? { frontendUpdated: '1' } : undefined,
+        });
+      }
       return null;
     })
     .catch((error) => {
