@@ -326,47 +326,30 @@ app.put('/:id/grade-avgs', requireAuth, requireTenant, requireRole(['teacher']),
   await assertCurrentYear(db, tenantId, 'exams', exam.id);
 
   const body = await c.req.json().catch(() => ({}));
-  const avgs = body.avgs;
-  if (!avgs || typeof avgs !== 'object' || Array.isArray(avgs)) {
-    throw new ApiError('VALIDATION_ERROR', 'avgs 必须是 {班级名: 分数|null} 对象');
-  }
-
-  const clsRows = await db
-    .prepare('SELECT name FROM classes WHERE tenant_id = ? AND academic_year = ?')
-    .bind(tenantId, currentAcademicYear())
-    .all();
-  const classNames = new Set(clsRows.results.map((r) => r.name));
+  let average = body.average;
   const fullScore = await examFullScore(db, tenantId, exam.id);
-
-  const cleaned = {};
-  for (const [key, value] of Object.entries(avgs)) {
-    const name = String(key).trim();
-    if (!classNames.has(name)) {
-      throw new ApiError('VALIDATION_ERROR', `班级「${name}」在当前学年不存在`);
+  if (average === null || average === undefined || average === '') {
+    average = null;
+  } else {
+    average = Number(average);
+    if (!Number.isFinite(average) || average < 0) {
+      throw new ApiError('VALIDATION_ERROR', '年级均分必须是非负数字');
     }
-    if (value === null || value === undefined || value === '') {
-      cleaned[name] = null; // 清空：回退自动计算/无数据
-      continue;
+    if (fullScore !== null && average > fullScore) {
+      throw new ApiError('VALIDATION_ERROR', `年级均分不能超过满分 ${fullScore}`);
     }
-    const num = Number(value);
-    if (!Number.isFinite(num) || num < 0) {
-      throw new ApiError('VALIDATION_ERROR', `班级「${name}」的均分必须是非负数字`);
-    }
-    if (fullScore !== null && num > fullScore) {
-      throw new ApiError('VALIDATION_ERROR', `班级「${name}」的均分不能超过满分 ${fullScore}`);
-    }
-    cleaned[name] = round2(num);
+    average = round2(average);
   }
 
   await db
-    .prepare('UPDATE exams SET grade_avgs = ? WHERE tenant_id = ? AND id = ?')
-    .bind(JSON.stringify(cleaned), tenantId, exam.id)
+    .prepare('UPDATE exams SET grade_average = ? WHERE tenant_id = ? AND id = ?')
+    .bind(average, tenantId, exam.id)
     .run();
   await audit(db, tenantId, user.id, 'set_exam_grade_avgs', '考试', exam.id, {
     name: exam.name,
-    count: Object.keys(cleaned).length,
+    average,
   });
-  return c.json({ success: true, data: { avgs: cleaned } });
+  return c.json({ success: true, data: { average } });
 });
 
 /**
@@ -663,44 +646,6 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
     }))
     .sort((a, b) => a.className.localeCompare(b.className, 'zh-Hans-CN'));
 
-  // 年级均分（§三-8，通用化：不硬编码班级）——当前学年全部班级，
-  // 优先取 grade_avgs 手工值（manual），否则该班有成绩则自动算 AVG(score)（auto），
-  // 都没有 avg=null（none）
-  const clsRows = await db
-    .prepare('SELECT id, name FROM classes WHERE tenant_id = ? AND academic_year = ?')
-    .bind(tenantId, currentAcademicYear())
-    .all();
-  let manualAvgs = {};
-  if (exam.grade_avgs) {
-    try {
-      const parsed = JSON.parse(exam.grade_avgs);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) manualAvgs = parsed;
-    } catch (e) {
-      /* 非法 JSON 视为无手工均分 */
-    }
-  }
-  const autoAvgMap = new Map();
-  for (const s of allValid) {
-    if (!s.class_name) continue;
-    if (!autoAvgMap.has(s.class_name)) autoAvgMap.set(s.class_name, { sum: 0, n: 0 });
-    const g = autoAvgMap.get(s.class_name);
-    g.sum += s.score;
-    g.n += 1;
-  }
-  const gradeAvgs = clsRows.results
-    .map((cl) => {
-      const manual = manualAvgs[cl.name];
-      if (manual !== undefined && manual !== null && Number.isFinite(Number(manual))) {
-        return { classId: cl.id, class_name: cl.name, avg: round2(Number(manual)), source: 'manual' };
-      }
-      const g = autoAvgMap.get(cl.name);
-      if (g && g.n) {
-        return { classId: cl.id, class_name: cl.name, avg: round2(g.sum / g.n), source: 'auto' };
-      }
-      return { classId: cl.id, class_name: cl.name, avg: null, source: 'none' };
-    })
-    .sort((a, b) => a.class_name.localeCompare(b.class_name, 'zh-Hans-CN'));
-
   // 各题型均分与得分率（得分率 = Σscore / Σmax_score）；传 class_id 时仅统计该班
   let subSql = `SELECT question_type, COUNT(*) AS count,
               AVG(score) AS avg_score,
@@ -751,13 +696,13 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
 
   return c.json({
     success: true,
-    data: { exam, overview, classCompare, gradeAvgs, questionTypes, rankings },
+    data: { exam, overview, classCompare, gradeAverage: exam.grade_average ?? null, questionTypes, rankings },
   });
 });
 
 /**
  * PUT /api/v1/exams/:id/students/:studentId — 单独登记/修改某学生总分（UPSERT）
- * body: { score: number }
+ * body: { score: number|null, absent?: boolean }
  * 班级考试 → 可管理考试所在班；全年段考试 → 可管理该生所在班（未分班学生需为年级组组长/备课组长/管理员）。
  */
 app.put('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
@@ -770,11 +715,12 @@ app.put('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['te
   await assertCurrentYear(db, tenantId, 'exams', exam.id);
 
   const body = await c.req.json().catch(() => ({}));
-  if (typeof body.score !== 'number' || !Number.isFinite(body.score)) {
-    throw new ApiError('VALIDATION_ERROR', 'score 必须为有限数字');
+  const absent = body.absent === true;
+  if (!absent && (typeof body.score !== 'number' || !Number.isFinite(body.score))) {
+    throw new ApiError('VALIDATION_ERROR', 'score 必须为有限数字，缺考时可勾选缺考');
   }
-  const score = body.score;
-  if (exam.total_score !== null && exam.total_score !== undefined && score > Number(exam.total_score)) {
+  const score = absent ? null : body.score;
+  if (!absent && exam.total_score !== null && exam.total_score !== undefined && score > Number(exam.total_score)) {
     throw new ApiError('VALIDATION_ERROR', `成绩不能超过考试总分 ${exam.total_score}`);
   }
 
@@ -801,16 +747,16 @@ app.put('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['te
     .first();
   if (existing) {
     await db
-      .prepare('UPDATE exam_scores SET score = ?, absent = 0, created_at = ? WHERE id = ?')
-      .bind(score, now(), existing.id)
+      .prepare('UPDATE exam_scores SET score = ?, absent = ?, created_at = ? WHERE id = ?')
+      .bind(score, absent ? 1 : 0, now(), existing.id)
       .run();
   } else {
     await db
       .prepare(
         `INSERT INTO exam_scores (id, tenant_id, exam_id, student_id, score, absent, created_at)
-         VALUES (?, ?, ?, ?, ?, 0, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
-      .bind(newId(), tenantId, exam.id, student.id, score, now())
+      .bind(newId(), tenantId, exam.id, student.id, score, absent ? 1 : 0, now())
       .run();
   }
   await audit(db, tenantId, user.id, 'set_exam_score', '考试', exam.id, {
@@ -818,6 +764,7 @@ app.put('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['te
     studentId: student.id,
     studentName: student.name,
     score,
+    absent,
   });
   return c.json({ success: true, data: { exam_id: exam.id, student_id: student.id, score } });
 });

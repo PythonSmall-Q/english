@@ -417,6 +417,9 @@ app.post('/:id/results/bulk', requireAuth, requireTenant, async (c) => {
   const failed = Array.isArray(body.failed) ? body.failed.map(String) : [];
   const allIds = [...new Set([...passed, ...failed])];
   if (allIds.length === 0) throw new ApiError('VALIDATION_ERROR', '结果名单为空');
+  if (passed.some((studentId) => failed.includes(studentId))) {
+    throw new ApiError('VALIDATION_ERROR', '同一学生不能同时登记为通过和未通过');
+  }
 
   // 校验学生归属：班级默写须属于该班；全年段默写须属于当前租户（可来自任何班）
   const placeholders = allIds.map(() => '?').join(',');
@@ -440,32 +443,61 @@ app.post('/:id/results/bulk', requireAuth, requireTenant, async (c) => {
     await requireDictationResultRegistrar(db, tenantId, user, dictation, allIds);
   }
 
-  // UPSERT：全部语句一次 batch 提交（D1 batch 具有事务性）
+  const existingRows = await db
+    .prepare(
+      `SELECT student_id FROM dictation_results
+       WHERE tenant_id = ? AND dictation_id = ? AND student_id IN (${placeholders})`
+    )
+    .bind(tenantId, dictation.id, ...allIds)
+    .all();
+  const existingIds = new Set(existingRows.results.map((row) => row.student_id));
+
+  // 初次登记未通过才产生重默任务；修改已有登记只更新状态，不产生重默。
   const ts = now();
   const statements = [];
   for (const studentId of new Set(passed)) {
-    statements.push(
-      db
-        .prepare(
-          `INSERT INTO dictation_results (id, tenant_id, dictation_id, student_id, passed, retest_required, retest_completed, created_at)
-           VALUES (?, ?, ?, ?, 1, 0, 0, ?)
-           ON CONFLICT(dictation_id, student_id)
-           DO UPDATE SET passed = 1, retest_required = 0`
-        )
-        .bind(newId(), tenantId, dictation.id, studentId, ts)
-    );
+    if (existingIds.has(studentId)) {
+      statements.push(
+        db
+          .prepare(
+            `UPDATE dictation_results
+             SET passed = 1, retest_required = 0, retest_completed = 0
+             WHERE tenant_id = ? AND dictation_id = ? AND student_id = ?`
+          )
+          .bind(tenantId, dictation.id, studentId)
+      );
+    } else {
+      statements.push(
+        db
+          .prepare(
+            `INSERT INTO dictation_results (id, tenant_id, dictation_id, student_id, passed, retest_required, retest_completed, created_at)
+             VALUES (?, ?, ?, ?, 1, 0, 0, ?)`
+          )
+          .bind(newId(), tenantId, dictation.id, studentId, ts)
+      );
+    }
   }
   for (const studentId of new Set(failed)) {
-    statements.push(
-      db
-        .prepare(
-          `INSERT INTO dictation_results (id, tenant_id, dictation_id, student_id, passed, retest_required, retest_completed, created_at)
-           VALUES (?, ?, ?, ?, 0, 1, 0, ?)
-           ON CONFLICT(dictation_id, student_id)
-           DO UPDATE SET passed = 0, retest_required = 1`
-        )
-        .bind(newId(), tenantId, dictation.id, studentId, ts)
-    );
+    if (existingIds.has(studentId)) {
+      statements.push(
+        db
+          .prepare(
+            `UPDATE dictation_results
+             SET passed = 0, retest_required = 0, retest_completed = 0
+             WHERE tenant_id = ? AND dictation_id = ? AND student_id = ?`
+          )
+          .bind(tenantId, dictation.id, studentId)
+      );
+    } else {
+      statements.push(
+        db
+          .prepare(
+            `INSERT INTO dictation_results (id, tenant_id, dictation_id, student_id, passed, retest_required, retest_completed, created_at)
+             VALUES (?, ?, ?, ?, 0, 1, 0, ?)`
+          )
+          .bind(newId(), tenantId, dictation.id, studentId, ts)
+      );
+    }
   }
   await db.batch(statements);
   await audit(db, tenantId, user.id, '批量登记默写', 'dictation', dictation.id, {

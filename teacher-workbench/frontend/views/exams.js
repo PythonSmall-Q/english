@@ -460,9 +460,9 @@
   // ============================== 图表（原生 SVG） ==============================
 
   /** 垂直柱状图：items = [{ label, value }] */
-  function exBarChart(items, { width = 520, height = 210, color = '#4f8ef7', valueFmt = (v) => v } = {}) {
+  function exBarChart(items, { width = 520, height = 210, color = '#4f8ef7', valueFmt = (v) => v, referenceLine = null } = {}) {
     if (!items.length) return '<div class="muted">暂无数据</div>';
-    const max = Math.max(...items.map((i) => i.value), 1);
+    const max = Math.max(...items.map((i) => i.value), referenceLine ?? 0, 1);
     const padL = 36, padR = 8, padT = 16, padB = 30;
     const cw = width - padL - padR;
     const ch = height - padT - padB;
@@ -474,6 +474,11 @@
       const y = padT + ch - (ch * g) / 4;
       svg += `<line x1="${padL}" y1="${y}" x2="${width - padR}" y2="${y}" stroke="#e8ebf2" stroke-width="1"/>`;
       svg += `<text x="${padL - 6}" y="${y + 4}" text-anchor="end" font-size="10" fill="#9aa4b5">${valueFmt(Math.round((max * g) / 4))}</text>`;
+    }
+    if (referenceLine !== null && referenceLine !== undefined) {
+      const y = padT + ch - (referenceLine / max) * ch;
+      svg += `<line x1="${padL}" y1="${y}" x2="${width - padR}" y2="${y}" stroke="#d64545" stroke-width="2" stroke-dasharray="7 4"/>`;
+      svg += `<text x="${width - padR - 2}" y="${y - 5}" text-anchor="end" font-size="10" fill="#d64545">年级均分 ${valueFmt(referenceLine)}</text>`;
     }
     items.forEach((it, i) => {
       const h = (it.value / max) * ch;
@@ -1341,7 +1346,7 @@
           const old = scoreBySid.get(sid);
           const scoreTd = tr.children[2];
           const opsTd = tr.children[3];
-          scoreTd.innerHTML = `<input type="number" step="0.5" min="0" class="form-input" id="exs-in" style="width:96px;padding:4px 8px" value="${old ?? ''}">`;
+          scoreTd.innerHTML = `<input type="number" step="0.5" min="0" class="form-input" id="exs-in" style="width:96px;padding:4px 8px" value="${absentSids.has(sid) ? '' : old ?? ''}"> <label class="muted"><input type="checkbox" id="exs-absent"${absentSids.has(sid) ? ' checked' : ''}> 缺考</label>`;
           opsTd.innerHTML = `<button class="btn btn-sm btn-primary" id="exs-save" type="button">保存</button> <button class="btn btn-sm" id="exs-cancel" type="button">取消</button>`;
           const input = scoreTd.querySelector('#exs-in');
           input.focus();
@@ -1349,20 +1354,22 @@
           opsTd.querySelector('#exs-cancel').addEventListener('click', draw);
           opsTd.querySelector('#exs-save').addEventListener('click', async () => {
             const v = input.value.trim();
-            if (v === '') {
+            const absent = scoreTd.querySelector('#exs-absent').checked;
+            if (!absent && v === '') {
               App.toast('请输入分数');
               return;
             }
             const num = Number(v);
-            if (!Number.isFinite(num)) {
+            if (!absent && !Number.isFinite(num)) {
               App.toast('请输入有效分数');
               return;
             }
             try {
-              await api.exams.setScore(examId, sid, num);
-              scoreBySid.set(sid, num);
-              absentSids.delete(sid);
-              App.toast(`已保存 ${name} 的成绩`);
+              await api.exams.setScore(examId, sid, absent ? null : num, absent);
+              scoreBySid.set(sid, absent ? null : num);
+              if (absent) absentSids.add(sid);
+              else absentSids.delete(sid);
+              App.toast(absent ? `已将 ${name} 标记为缺考` : `已保存 ${name} 的成绩`);
               // 同步考试列表行的参考人数/均分（本地推算，不 refetch）
               const item = examsCache.find((x) => x.id === examId);
               if (item) {
@@ -1409,33 +1416,7 @@
           const { overview, classCompare, questionTypes, rankings } = data;
           const kpi = (num, label) => `<div class="ex-kpi"><div class="ex-kpi-num">${num}</div><div class="ex-kpi-label">${label}</div></div>`;
 
-          // —— 🏫 年级均分（§三-8，通用化：班级来自当前学年 classes，不硬编码）——
-          // 本班：班级考试 = 考试所属班；全年段考试 = 分析弹窗当前所选班级（未选则无高亮/摘要）
-          const gradeAvgs = data.gradeAvgs || [];
-          const ownGaClassId =
-            analysisClassId || (data.exam?.scope === 'class' ? data.exam?.class_id : null);
-          const gaSrcLabel = { manual: '手工填写', auto: '自动计算', none: '无数据' };
-          const gaWithData = gradeAvgs.filter((g) => g.avg !== null && g.avg !== undefined);
-          const gaRows = gradeAvgs
-            .map((g) => {
-              const isOwn = !!ownGaClassId && g.classId === ownGaClassId;
-              const badgeClass = g.source === 'manual' ? 'badge-info' : g.source === 'auto' ? 'badge-success' : '';
-              return `<tr class="${isOwn ? 'ex-ga-own' : ''}">
-                <td>${esc(g.class_name)}${isOwn ? ' <span class="ex-badge">本班</span>' : ''}</td>
-                <td>${fmtScore(g.avg)}</td>
-                <td><span class="badge ${badgeClass}">${gaSrcLabel[g.source] || esc(g.source)}</span></td>
-              </tr>`;
-            })
-            .join('');
-          let gaSummary = '<span class="muted">暂无可对比数据</span>';
-          const mineGa = ownGaClassId ? gradeAvgs.find((g) => g.classId === ownGaClassId) : null;
-          if (mineGa && mineGa.avg !== null && mineGa.avg !== undefined && gaWithData.length) {
-            const rank = 1 + gaWithData.filter((g) => g.avg > mineGa.avg).length;
-            const first = [...gaWithData].sort((a, b) => b.avg - a.avg)[0];
-            const gradeAvg = gaWithData.reduce((a, g) => a + g.avg, 0) / gaWithData.length;
-            const diff = Math.round((mineGa.avg - gradeAvg) * 100) / 100;
-            gaSummary = `本班年级第 ${rank} 名 · 与第 1 名差 ${Math.round((first.avg - mineGa.avg) * 100) / 100} · 与年级均分差 ${diff >= 0 ? '+' : ''}${diff}`;
-          }
+          const gradeAverage = data.gradeAverage;
           // 填写入口：owner/admin 恒可见；其余按可管理班级近似（拿不到列表时不隐藏，后端 403 兜底）
           const role = App.state.tenant?.role;
           const canFillGradeAvgs =
@@ -1504,25 +1485,15 @@
             <div class="ex-sec-title">分数段分布</div>
             <div class="ex-chart-wrap">${exBarChart((overview.bands || []).map((b) => ({ label: b.label, value: b.count })), { color: '#4f8ef7' })}</div>
             <div class="ex-sec-title">各班均分对比</div>
-            <div class="ex-chart-wrap">${exBarChart((classCompare || []).map((c) => ({ label: c.className, value: c.avg || 0 })), { color: '#38b2a8' })}</div>
+            <div class="ex-chart-wrap">${exBarChart(
+              (classCompare || []).map((c) => ({ label: c.className, value: c.avg || 0 })),
+              { color: '#38b2a8', referenceLine: gradeAverage }
+            )}</div>
             <div class="ex-sec-title ex-ga-head">
-              <span>🏫 年级均分</span>
+              <span>🏫 手工年级均分：${fmtScore(gradeAverage)}</span>
               ${canFillGradeAvgs ? '<button class="btn btn-sm" id="exa-fill-ga" type="button">填写年级均分</button>' : ''}
             </div>
-            <div class="ex-ga-summary">${gaSummary}</div>
-            <div class="ex-chart-wrap">${exBarChart(
-              gaWithData.map((g) => ({
-                label: g.class_name,
-                value: g.avg,
-                color: ownGaClassId && g.classId === ownGaClassId ? '#4f8ef7' : '#c3cad6',
-              })),
-              { color: '#c3cad6' }
-            )}</div>
-            ${
-              gaRows
-                ? `<table class="table"><thead><tr><th>班级</th><th>均分</th><th>来源</th></tr></thead><tbody>${gaRows}</tbody></table>`
-                : '<div class="muted">当前学年还没有班级。</div>'
-            }
+            <div class="ex-ga-summary">${gradeAverage === null || gradeAverage === undefined ? '<span class="muted">未填写年级均分，图表不显示对比线</span>' : '图中红色虚线为手工输入的年级均分'}</div>
             <div class="ex-sec-title">各题型均分与得分率</div>
             ${
               questionTypes && questionTypes.length
@@ -1546,8 +1517,8 @@
             });
           });
           const fillGaBtn = body.querySelector('#exa-fill-ga');
-          if (fillGaBtn) {
-            fillGaBtn.addEventListener('click', () => openGradeAvgsModal(examId, examName, gradeAvgs));
+           if (fillGaBtn) {
+            fillGaBtn.addEventListener('click', () => openGradeAverageModal(examId, examName, gradeAverage));
           }
         }
 
@@ -1576,61 +1547,32 @@
    * 预填已存手工值，placeholder 提示自动计算值或「无成绩」；空输入 = 清除该项。
    * 保存后重开分析弹窗（App.modal 不堆叠，直接重拉 analysis 刷新板块）。
    */
-  function openGradeAvgsModal(examId, examName, gradeAvgs) {
+  function openGradeAverageModal(examId, examName, gradeAverage) {
     App.modal(
       `填写年级均分 · ${examName}`,
       `
-      <div id="exga-body"><div class="muted">加载中…</div></div>
-      <div class="ex-hint muted">留空表示清除该项（分析页将改用自动计算值或显示无数据）。</div>
+      <div id="exga-body">
+        <label class="form-label">年级均分</label>
+        <input class="form-input" id="exga-input" type="number" step="0.01" min="0" value="${gradeAverage ?? ''}" placeholder="留空表示清除">
+      </div>
+      <div class="ex-hint muted">年级均分是全体年级的手工参考值，不需要逐班填写；保存后在各班均分图中以红色虚线显示。</div>
       <div class="modal-actions">
         <button class="btn" id="exga-cancel" type="button">取消</button>
         <button class="btn btn-primary" id="exga-save" type="button">保存</button>
       </div>`,
       async (modalEl) => {
-        const body = modalEl.querySelector('#exga-body');
-        let classes;
-        try {
-          classes = (await api.classes.list()).classes || [];
-        } catch (err) {
-          body.innerHTML = `<div class="muted">班级列表加载失败：${esc((err && err.message) || '未知错误')}</div>`;
-          return;
-        }
-        if (!classes.length) {
-          body.innerHTML = '<div class="muted">当前学年还没有班级，请先在「班级管理」中创建。</div>';
-          return;
-        }
-        const infoByName = new Map((gradeAvgs || []).map((g) => [g.class_name, g]));
-        body.innerHTML = classes
-          .map((c) => {
-            const info = infoByName.get(c.name);
-            const manual = info && info.source === 'manual' && info.avg !== null && info.avg !== undefined;
-            const placeholder = info && info.avg !== null && info.avg !== undefined ? `自动计算 ${info.avg}` : '无成绩';
-            return `<div class="ex-ga-row">
-              <span class="ex-ga-name">${esc(c.name)}</span>
-              <input class="form-input" type="number" step="0.01" min="0" data-cls="${esc(c.name)}" value="${manual ? info.avg : ''}" placeholder="${esc(placeholder)}" style="width:170px">
-            </div>`;
-          })
-          .join('');
         modalEl.querySelector('#exga-cancel').addEventListener('click', () => App.closeModal());
         modalEl.querySelector('#exga-save').addEventListener('click', async (ev) => {
-          const avgs = {};
-          for (const input of body.querySelectorAll('input[data-cls]')) {
-            const v = input.value.trim();
-            if (v === '') {
-              avgs[input.dataset.cls] = null;
-              continue;
-            }
-            const num = Number(v);
-            if (!Number.isFinite(num) || num < 0) {
-              App.toast(`「${input.dataset.cls}」的均分必须是非负数字`);
-              return;
-            }
-            avgs[input.dataset.cls] = num;
+          const raw = modalEl.querySelector('#exga-input').value.trim();
+          const average = raw === '' ? null : Number(raw);
+          if (average !== null && (!Number.isFinite(average) || average < 0)) {
+            App.toast('年级均分必须是非负数字');
+            return;
           }
           const btn = ev.currentTarget;
           btn.disabled = true;
           try {
-            await api.exams.setGradeAvgs(examId, avgs);
+            await api.exams.setGradeAverage(examId, average);
             App.closeModal();
             App.toast('年级均分已保存');
             openAnalysis(examId, examName);
@@ -1652,6 +1594,7 @@
         <div style="margin:8px 0">学生：<b>${esc(studentName)}</b></div>
         <label>总分</label>
         <input class="form-input" id="exs-score" type="number" step="any" value="${esc(currentScore)}">
+        <label class="muted"><input type="checkbox" id="exs-absent"> 缺考</label>
       </div>
       <div class="modal-actions">
         <button class="btn" id="exs-cancel" type="button">取消</button>
@@ -1661,12 +1604,13 @@
         document.getElementById('exs-cancel').onclick = () => App.closeModal();
         document.getElementById('exs-ok').onclick = async () => {
           const raw = document.getElementById('exs-score').value.trim();
+          const absent = document.getElementById('exs-absent').checked;
           const score = Number(raw);
-          if (raw === '' || !Number.isFinite(score)) return App.toast('请输入有效分数');
+          if (!absent && (raw === '' || !Number.isFinite(score))) return App.toast('请输入有效分数');
           const btn = document.getElementById('exs-ok');
           btn.disabled = true;
           try {
-            await api.exams.setScore(examId, studentId, score);
+            await api.exams.setScore(examId, studentId, absent ? null : score, absent);
             App.closeModal();
             App.toast('成绩已保存');
             refresh();

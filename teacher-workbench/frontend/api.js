@@ -319,13 +319,13 @@
     update: (id, body) => request(`/exams/${id}`, { method: 'PUT', body }),
     remove: (id) => request(`/exams/${id}`, { method: 'DELETE' }),
     import: (id, body) => request(`/exams/${id}/import`, { method: 'POST', body }),
-    /** 填写/清除年级均分（可管理该考试者）；avgs: {班级名: number|null}，null/空串=清空该项 */
-    setGradeAvgs: (id, avgs) => request(`/exams/${id}/grade-avgs`, { method: 'PUT', body: { avgs } }),
+    /** 填写/清除单一手工年级均分（可管理该考试者） */
+    setGradeAverage: (id, average) => request(`/exams/${id}/grade-avgs`, { method: 'PUT', body: { average } }),
     /** 成绩分析；传 classId 时 overview/分数段/题型/班内排名仅统计该班（各班均分对比始终为全校） */
     analysis: (id, classId) => request(`/exams/${id}/analysis`, { query: classId ? { class_id: classId } : {} }),
     /** 单独登记/修改某生总分（班主任/任课老师可登记本班，年段考可登记本班学生） */
-    setScore: (examId, studentId, score) =>
-      request(`/exams/${examId}/students/${studentId}`, { method: 'PUT', body: { score } }),
+    setScore: (examId, studentId, score, absent = false) =>
+      request(`/exams/${examId}/students/${studentId}`, { method: 'PUT', body: { score, absent } }),
     studentReport: (id, studentId) => request(`/exams/${id}/students/${studentId}`),
     /** 「📥 导出成绩」：该学年学生 × 历次考试总分矩阵（任何成员可读） */
     exportTotals: (query) => request('/exams/export-totals', { query }),
