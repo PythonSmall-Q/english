@@ -91,9 +91,9 @@ const MAIN_QUERIES = {
      (SELECT COUNT(*) FROM dictation_results r
        WHERE r.dictation_id = d.id AND r.passed = 1) AS passed_count,
      (SELECT COUNT(*) FROM dictation_results r
-       WHERE r.dictation_id = d.id AND r.passed = 0 AND r.retest_required = 0) AS failed_count,
+       WHERE r.dictation_id = d.id AND r.passed = 0) AS failed_count,
      (SELECT COUNT(*) FROM dictation_results r
-       WHERE r.dictation_id = d.id AND r.retest_required = 1) AS retest_required_count,
+       WHERE r.dictation_id = d.id AND r.passed = 0 AND r.retest_completed = 0) AS retest_required_count,
      (SELECT COUNT(*) FROM dictation_results r
        WHERE r.dictation_id = d.id AND r.retest_completed = 1) AS retest_completed_count
    FROM dictations d

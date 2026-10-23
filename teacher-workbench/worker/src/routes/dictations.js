@@ -150,9 +150,9 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
          (SELECT COUNT(*) FROM dictation_results r
            WHERE r.dictation_id = d.id AND r.passed = 1) AS passed_count,
          (SELECT COUNT(*) FROM dictation_results r
-           WHERE r.dictation_id = d.id AND r.passed = 0 AND r.retest_required = 0) AS failed_count,
+           WHERE r.dictation_id = d.id AND r.passed = 0) AS failed_count,
          (SELECT COUNT(*) FROM dictation_results r
-           WHERE r.dictation_id = d.id AND r.retest_required = 1) AS retest_required_count,
+           WHERE r.dictation_id = d.id AND r.passed = 0 AND r.retest_completed = 0) AS retest_required_count,
          (SELECT COUNT(*) FROM dictation_results r
            WHERE r.dictation_id = d.id AND r.retest_completed = 1) AS retest_completed_count
        FROM dictations d
@@ -285,7 +285,8 @@ app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) =
     classId: r.student_class_id,
     className: r.class_name,
     passed: !!r.passed,
-    retestRequired: !!r.retest_required,
+    // 未通过且尚未完成重默的旧记录也视为待重默，兼容早期错误清零 retest_required 的数据。
+    retestRequired: !r.passed && !r.retest_completed,
     retestCompleted: !!r.retest_completed,
     exempt: !!r.exempt,
   }));
@@ -452,7 +453,7 @@ app.post('/:id/results/bulk', requireAuth, requireTenant, async (c) => {
     .all();
   const existingIds = new Set(existingRows.results.map((row) => row.student_id));
 
-  // 初次登记未通过才产生重默任务；修改已有登记只更新状态，不产生重默。
+  // 未通过状态始终产生待重默任务；通过状态会清除当前重默任务。
   const ts = now();
   const statements = [];
   for (const studentId of new Set(passed)) {
@@ -483,7 +484,7 @@ app.post('/:id/results/bulk', requireAuth, requireTenant, async (c) => {
         db
           .prepare(
             `UPDATE dictation_results
-             SET passed = 0, retest_required = 0, retest_completed = 0
+             SET passed = 0, retest_required = 1, retest_completed = 0
              WHERE tenant_id = ? AND dictation_id = ? AND student_id = ?`
           )
           .bind(tenantId, dictation.id, studentId)

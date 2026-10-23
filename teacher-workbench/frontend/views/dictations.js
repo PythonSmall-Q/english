@@ -386,7 +386,7 @@
         ${progress}
         <div class="dct-item-stats">
           <span>通过 <strong>${st.passed}</strong></span>
-          <span>未过 <strong class="${st.failed ? '' : ''}" style="color:${st.failed ? 'var(--danger)' : 'inherit'}">${st.failed}</strong></span>
+          <span>未通过 <strong class="${st.failed ? '' : ''}" style="color:${st.failed ? 'var(--danger)' : 'inherit'}">${st.failed}</strong></span>
           <span>需重默 <strong style="color:${st.retestRequired ? 'var(--warning)' : 'inherit'}">${st.retestRequired}</strong></span>
         </div>
         <div class="dct-item-ops">
@@ -559,7 +559,7 @@
     App.modal(
       `登记 — ${d.title || ''}`,
       `
-        <div class="muted" style="margin-bottom:8px">可修改已登记状态；修改为通过或未通过不会自动产生重默任务。</div>
+        <div class="muted" style="margin-bottom:8px">可修改已登记状态；未通过的学生会进入待重默名单。</div>
         <div class="dct-quick">
           <button class="btn btn-sm" id="dct-r-all" type="button">全部通过</button>
           <button class="btn btn-sm" id="dct-r-none" type="button">全部未通过</button>
@@ -786,7 +786,7 @@
             );
             App.closeModal();
             App.toast(`已标记 ${total} 人重默完成`);
-            // 就地更新：重默完成后这些学生从「需重默」转入「未过且已重默」
+            // 就地更新：重默完成后只减少待重默人数，未通过总人数不变。
             updatedMap.forEach((n, did) => {
               if (!n) return;
               const d = dictations.find((x) => x.id === did);
@@ -794,7 +794,6 @@
               const st = (d.stats = d.stats || { passed: 0, failed: 0, retestRequired: 0, retestCompleted: 0 });
               st.retestCompleted += n;
               st.retestRequired = Math.max(0, st.retestRequired - n);
-              st.failed += n;
             });
             renderContent();
           } catch (err) {
@@ -884,13 +883,12 @@
             const updated = (res && res.updated) || 0;
             App.closeModal();
             App.toast(`已记录 ${updated} 人重默通过`);
-            // 就地更新：后端完成后记录变为 passed=0, retest_required=0，从「需重默」转入「未过且已重默」
+            // 就地更新：重默完成后只减少待重默人数，未通过总人数不变。
             const dd = dictations.find((x) => x.id === id);
             if (dd && updated) {
               const st = (dd.stats = dd.stats || { passed: 0, failed: 0, retestRequired: 0, retestCompleted: 0 });
               st.retestCompleted += updated;
               st.retestRequired = Math.max(0, st.retestRequired - updated);
-              st.failed += updated;
             }
             renderContent();
           } catch (err) {
