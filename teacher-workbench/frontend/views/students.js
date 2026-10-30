@@ -25,6 +25,9 @@
     .stu-detail-grid dd { margin: 0; }
     .stu-alert-box { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #fffbeb; border: 1px solid #fde68a; }
     .stu-alert-box .badge { margin-right: 4px; }
+    .stu-detail-list { margin: 8px 0 0; padding-left: 20px; }
+    .stu-detail-list li { margin: 5px 0; line-height: 1.5; }
+    .stu-detail-list .muted { margin-left: -20px; }
     .stu-ov-sec { margin-top: 16px; }
     .stu-ov-sec-title { font-weight: 600; margin-bottom: 8px; }
     .stu-ov-kpis { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
@@ -325,6 +328,27 @@
     }
     const a = s.alert || {};
     const cls = classes.find((c) => c.id === s.class_id);
+    const unsubmittedAssignments = Array.isArray(s.unsubmitted_assignments) ? s.unsubmitted_assignments : [];
+    const failedDictations = Array.isArray(s.failed_dictations) ? s.failed_dictations : [];
+    const formatDate = (value) => value ? String(value).slice(0, 10) : '未设置日期';
+    const detailListsHtml = s.exempt
+      ? ''
+      : `<div class="stu-ov-sec">
+           <div class="stu-ov-sec-title">未交作业（${unsubmittedAssignments.length}）</div>
+           ${unsubmittedAssignments.length
+             ? `<ul class="stu-detail-list">${unsubmittedAssignments.map((item) =>
+                 `<li>${App.esc(item.title || '未命名作业')} <span class="muted">（截止 ${App.esc(formatDate(item.deadline))}）</span></li>`
+               ).join('')}</ul>`
+             : '<div class="muted">暂无未交作业 ✓</div>'}
+         </div>
+         <div class="stu-ov-sec">
+           <div class="stu-ov-sec-title">未通过默写（${failedDictations.length}）</div>
+           ${failedDictations.length
+             ? `<ul class="stu-detail-list">${failedDictations.map((item) =>
+                 `<li>${App.esc(item.title || '未命名默写')} <span class="muted">（${App.esc(formatDate(item.dictation_date))}${item.retest_completed ? '，已重默' : item.retest_required ? '，待重默' : ''}）</span></li>`
+               ).join('')}</ul>`
+             : '<div class="muted">暂无未通过默写 ✓</div>'}
+         </div>`;
     // 豁免生不参与预警明细
     const alertHtml = s.exempt
       ? '<div class="muted" style="margin-top:12px">该学生已豁免登记，不参与作业/默写登记、预警与导出。</div>'
@@ -350,6 +374,7 @@
           <dt>豁免登记</dt><dd>${s.exempt ? '已豁免（不参与作业/默写登记、预警与导出）' : '否'}</dd>
         </dl>
         ${alertHtml}
+        ${detailListsHtml}
         <div class="modal-actions">
           <button class="btn" id="stu-d-analysis" type="button">个性化成绩分析</button>
           <button class="btn btn-primary" id="stu-d-close" type="button">关闭</button>

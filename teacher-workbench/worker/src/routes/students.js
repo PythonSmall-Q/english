@@ -4,7 +4,7 @@
  * 约定：
  * - 成功响应 { success: true, data }；错误 { success: false, error: { code, message } }
  * - 写操作 teacher 起；POST 前 checkQuota students；class 必须属于本 tenant
- * - GET /:id 返回详情 + 预警统计（§28 口径）：
+ * - GET /:id 返回详情 + 预警统计（§28 口径）及未交作业、未通过默写清单：
  *   · 本周作业未交次数 missing_homework_this_week（状态非 submitted，按作业截止/登记时间落在本周）
  *   · 默写未过且未重默次数 failed_dictations_not_retested
  *   · 需重默 needs_retest（存在 retest_required=1 且未重默）
@@ -245,7 +245,7 @@ async function getAlertStats(db, tenantId, studentId) {
   };
 }
 
-/** GET /api/v1/students/:id — 详情 + 预警统计 */
+/** GET /api/v1/students/:id — 详情 + 预警统计、未交作业与未通过默写清单 */
 app.get('/:id', requireAuth, requireTenant, async (c) => {
   const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
@@ -254,7 +254,63 @@ app.get('/:id', requireAuth, requireTenant, async (c) => {
     ? await db.prepare('SELECT id, name FROM classes WHERE id = ? AND tenant_id = ?').bind(student.class_id, tenantId).first()
     : null;
   const stats = await getAlertStats(db, tenantId, student.id);
-  return c.json({ success: true, data: { ...student, exempt: !!student.exempt, class_name: cls?.name ?? null, alert: stats } });
+  const academicYear = currentAcademicYear();
+  const [assignmentRows, dictationRows] = await Promise.all([
+    student.class_id
+      ? db
+          .prepare(
+            `SELECT a.id, a.title, a.deadline, a.class_id, c.name AS class_name,
+                    COALESCE(sub.status, 'pending') AS submission_status
+               FROM assignments a
+               LEFT JOIN assignment_submissions sub
+                 ON sub.assignment_id = a.id AND sub.student_id = ? AND sub.tenant_id = a.tenant_id
+               LEFT JOIN classes c ON c.id = a.class_id AND c.tenant_id = a.tenant_id
+              WHERE a.tenant_id = ? AND a.class_id = ? AND a.academic_year = ?
+                AND COALESCE(sub.status, 'pending') != 'submitted'
+              ORDER BY a.deadline IS NULL, a.deadline DESC, a.created_at DESC`
+          )
+          .bind(student.id, tenantId, student.class_id, academicYear)
+          .all()
+      : { results: [] },
+    db
+      .prepare(
+        `SELECT d.id, d.title, d.dictation_date, d.scope, r.retest_required, r.retest_completed
+           FROM dictation_results r
+           JOIN dictations d ON d.id = r.dictation_id
+          WHERE r.tenant_id = ? AND r.student_id = ? AND d.academic_year = ?
+            AND (d.scope = 'grade' OR (d.scope = 'class' AND d.class_id = ?))
+            AND r.passed = 0
+          ORDER BY d.dictation_date IS NULL, d.dictation_date DESC, d.created_at DESC`
+      )
+      .bind(tenantId, student.id, academicYear, student.class_id || '')
+      .all(),
+  ]);
+  const unsubmittedAssignments = assignmentRows.results.map((r) => ({
+    id: r.id,
+    title: r.title,
+    deadline: r.deadline,
+    class_name: r.class_name,
+    status: r.submission_status,
+  }));
+  const failedDictations = dictationRows.results.map((r) => ({
+    id: r.id,
+    title: r.title,
+    dictation_date: r.dictation_date,
+    scope: r.scope,
+    retest_required: !!r.retest_required,
+    retest_completed: !!r.retest_completed,
+  }));
+  return c.json({
+    success: true,
+    data: {
+      ...student,
+      exempt: !!student.exempt,
+      class_name: cls?.name ?? null,
+      alert: stats,
+      unsubmitted_assignments: unsubmittedAssignments,
+      failed_dictations: failedDictations,
+    },
+  });
 });
 
 /** PUT /api/v1/students/:id — 更新学生（该班管理者） */
