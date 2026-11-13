@@ -1,5 +1,5 @@
 {
-  "version": "3.2.23",
+  "version": "3.2.25",
   "files": [
     "index.html",
     "styles.css",
@@ -31,6 +31,14 @@
     "views/students.js",
     "views/todos.js",
     "vendor/xlsx.full.min.js",
+    "vendor/retest/pdfmake.min.js",
+    "vendor/retest/docx.iife.js",
+    "vendor/retest/jszip.min.js",
+    "vendor/retest/NotoSansSC.vfs.js",
+    "vendor/retest/pdfmake.LICENSE",
+    "vendor/retest/docx.LICENSE",
+    "vendor/retest/jszip.LICENSE",
+    "vendor/retest/NotoSansSC.LICENSE",
     "assets/dict-featured.json",
     "assets/dict-gaokao.json"
   ]

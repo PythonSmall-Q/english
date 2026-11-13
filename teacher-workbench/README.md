@@ -152,6 +152,9 @@ Worker 已接入 D1 Sessions API。启用 Global Read Replication 后，API 会�
    （支持 .xlsx / .csv / .json / 粘贴，班级名在 tenant 内匹配，未匹配行会明确返回）。
 5. 开始使用：备课中心、教学课表、作业统计、默写管理、考试成绩、AI 教学助手。
 
+默写管理的重默名单支持导出长图 PNG、A4 分页图片 ZIP、PDF 和 Word（DOCX）。
+PDF 和 Word 使用文字表格；A4 图片按名单行分页。导出文件在本机生成，不会上传学生名单。
+
 数据导出与备份恢复在「设置」页：备份为 JSON（`version: 3`），恢复是
 **先清空当前空间全部业务数据再按备份写入**（事务性，owner/admin 可用），
 且只允许恢复到备份来源的同一空间（禁止跨租户恢复）。

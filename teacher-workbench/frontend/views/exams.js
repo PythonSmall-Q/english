@@ -4,8 +4,7 @@
  * 功能：
  * - 考试列表（名称/科目/日期/参考人数/均分）+ 新建/编辑/删除
  * - 导入成绩（总分）/ 导入小分：.xlsx / .csv / .json / 粘贴文本 四种来源
- *   · .xlsx 支持选择学科网或智学网；学科网识别班级报表/《小题分》，智学网识别自定义考号成绩表
- *     识别结果仍走预览确认流程；都不是则走通用行解析
+ *   · .xlsx 支持学科网、智学网及其他平台，其他平台可确认或手动选择列
  *   · 成绩行：学号,分数 或 姓名,班级,分数
  *   · 小分行：学号,题型,得分,满分 或 姓名,班级,题型,得分,满分
  * - 上传试卷：api.files.upload → R2，URL 存入 paper_url
@@ -425,6 +424,134 @@
     }
     if (!subRows.length) return null;
     return { kind: 'xkw', subRows, totalRows, parts, stuCount };
+  }
+
+  // ---------- 其他平台：智能匹配列 + 手动选择 ----------
+  const GENERIC_ROLE_ALIASES = {
+    studentNo: [/^(自定义|自定義)?(学号|學號|考号|考號|考生号|考生號|准考证号|准考證號|student(?:no|number|id)|id)$/i, /学号|學號|考号|考號|考生号|考生號|准考证号|准考證號/i],
+    name: [/^(学生|學生|考生)?姓名$|^(student)?name$/i, /姓名/],
+    className: [/^(班级|班級|行政班|班别|班別|class|classname)$/i],
+    score: [
+      /^(英语|英語|english)(成绩|成績|分数|分數|得分|总分|總分|score|marks?)?$/i,
+      /^(总分|總分|总得分|總得分|totalscore|totalmarks?|total)$/i,
+      /^(得分|分数|分數|成绩|成績|score|marks?|grade)$/i,
+      /^(?:(?:本次|期中|期末)(?:考试|考試)?|考试|考試|最终|最終|卷面|试卷|試卷|实得|實得|原始)(成绩|成績|分数|分數|得分|分)$/,
+      /(英语|英語|english).*(得分|分数|分數|成绩|成績|score)/i,
+    ],
+    questionType: [/^(题型|題型|大题|大題|题目类型|題目類型|questiontype|section)$/i],
+    maxScore: [/^(满分|滿分|题目满分|題目滿分|总分值|總分值|maxscore|fullscore|maximumscore)$/i],
+  };
+  const GENERIC_EXCLUDE = /排名|名次|位次|序号|序號|等级|等級|比例|百分|平均|满分|滿分|分值|率|rank|ranking|percent|average|max(?:imum)?score|fullscore/i;
+
+  function genericRoles(type) {
+    return type === 'subscores'
+      ? ['studentNo', 'name', 'className', 'questionType', 'score', 'maxScore']
+      : ['studentNo', 'name', 'className', 'score'];
+  }
+  function genericColLetter(i) {
+    let s = '';
+    for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+    return s;
+  }
+  function genericCellText(v) {
+    return v === undefined || v === null ? '' : String(v).trim();
+  }
+  function genericHeader(v) {
+    return genericCellText(v).normalize('NFKC').replace(/\(\s*\d+(?:\.\d+)?\s*分?\s*\)/g, '').replace(/[\s_\-:：()（）[\]【】]/g, '').toLowerCase();
+  }
+  function genericAliasRank(role, value) {
+    const text = genericHeader(value);
+    if (!text || (role === 'score' && GENERIC_EXCLUDE.test(text))) return -1;
+    return GENERIC_ROLE_ALIASES[role].findIndex((re) => re.test(text));
+  }
+
+  function genericGuessHeaderRow(matrix, type) {
+    const roles = genericRoles(type);
+    let best = 0;
+    let bestHits = -1;
+    for (let i = 0; i < Math.min(10, matrix.length); i++) {
+      const cells = matrix[i] || [];
+      const hits = roles.reduce((sum, role) => {
+        const found = cells.some((cell) => genericAliasRank(role, cell) >= 0);
+        return sum + (found ? (role === 'score' || role === 'name' ? 3 : 1) : 0);
+      }, 0);
+      if (hits > bestHits) {
+        best = i;
+        bestHits = hits;
+      }
+    }
+    return { row: bestHits > 0 ? best : -1, hits: bestHits };
+  }
+  function genericWidth(matrix, headerRow) {
+    return Math.max(0, ...matrix.slice(0, Math.max(10, headerRow + 31)).map((r) => (r || []).length));
+  }
+
+  function genericGuessMap(matrix, headerRow, type) {
+    const header = matrix[headerRow] || [];
+    const width = genericWidth(matrix, headerRow);
+    const map = {};
+    const used = new Set();
+    const ambiguous = new Set();
+    for (const role of genericRoles(type)) {
+      map[role] = -1;
+      const candidates = Array.from({ length: width }, (_, i) => ({ i, rank: genericAliasRank(role, header[i]) }))
+        .filter((c) => c.rank >= 0 && !used.has(c.i))
+        .sort((a, b) => a.rank - b.rank);
+      if (candidates.length && (candidates.length === 1 || candidates[0].rank < candidates[1].rank)) {
+        map[role] = candidates[0].i;
+        used.add(candidates[0].i);
+      } else if (candidates.length) {
+        ambiguous.add(role);
+      }
+    }
+    const sample = matrix.slice(headerRow + 1, headerRow + 31);
+    const ratio = (i, test) => {
+      const vals = sample.map((r) => genericCellText((r || [])[i])).filter(Boolean);
+      return vals.length ? vals.filter(test).length / vals.length : 0;
+    };
+    const free = Array.from({ length: width }, (_, i) => i).filter((i) => !used.has(i) && !genericHeader(header[i]));
+    if (map.score < 0 && !ambiguous.has('score')) {
+      const candidates = free.filter((i) => ratio(i, (v) => v !== '' && Number.isFinite(Number(v))) >= 0.8);
+      if (candidates.length === 1) {
+        map.score = candidates[0];
+        used.add(candidates[0]);
+      }
+    }
+    if (map.name < 0 && !ambiguous.has('name')) {
+      const candidates = free.filter((i) => !used.has(i) && ratio(i, (v) => /^[\u3400-\u9fff·]{2,8}$|^[A-Za-z][A-Za-z .'-]{1,50}$/.test(v)) >= 0.8);
+      if (candidates.length === 1) {
+        map.name = candidates[0];
+        used.add(candidates[0]);
+      }
+    }
+    return map;
+  }
+  function genericBuildRows(matrix, headerRow, map, type) {
+    const rows = [];
+    for (const r of matrix.slice(headerRow + 1)) {
+      const get = (role) => (map[role] >= 0 ? genericCellText((r || [])[map[role]]) : '');
+      const scoreText = get('score');
+      const absent = type === 'scores' && scoreText !== '' && isAbsenceValue(scoreText);
+      if (!absent && (scoreText === '' || !Number.isFinite(Number(scoreText)))) continue;
+      const row = {};
+      for (const role of ['studentNo', 'name', 'className']) {
+        const v = get(role);
+        if (v) row[role] = v;
+      }
+      if (!row.studentNo && !row.name) continue;
+      if (/^(班级平均|班級平均|年级平均|年級平均|平均|合计|合計|总计|總計)$/.test(row.name || '')) continue;
+      row.score = absent ? null : Number(scoreText);
+      if (absent) row.absent = true;
+      if (type === 'subscores') {
+        const maxText = get('maxScore');
+        const qt = get('questionType');
+        if (!qt || maxText === '' || !Number.isFinite(Number(maxText))) continue;
+        row.questionType = qt;
+        row.maxScore = Number(maxText);
+      }
+      rows.push(row);
+    }
+    return rows;
   }
 
   /**
@@ -960,6 +1087,7 @@
         <div class="ex-format-options" id="exi-format">
           <label class="ex-format-option"><input type="radio" name="exi-format" value="xueke" checked> ${I18n.t('学科网')}</label>
           <label class="ex-format-option"><input type="radio" name="exi-format" value="zhixue"> ${I18n.t('智学网')}</label>
+          <label class="ex-format-option"><input type="radio" name="exi-format" value="other"> ${I18n.t('非智学网/学科网')}</label>
         </div>
         <div id="exi-file-wrap"><input class="form-input" id="exi-file" type="file"></div>
         <div id="exi-paste-wrap" class="hidden">
@@ -967,6 +1095,7 @@
         </div>
         <div class="ex-hint muted" id="exi-hint"></div>
         <button class="btn" id="exi-parse" type="button">解析预览</button>
+        <div id="exi-map"></div>
         <div id="exi-preview"></div>
         <div id="exi-result"></div>
       </div>
@@ -984,6 +1113,7 @@
         const pasteEl = modalEl.querySelector('#exi-paste');
         const hintEl = modalEl.querySelector('#exi-hint');
         const previewEl = modalEl.querySelector('#exi-preview');
+        const mapEl = modalEl.querySelector('#exi-map');
         const resultEl = modalEl.querySelector('#exi-result');
         const importBtn = modalEl.querySelector('#exi-import');
 
@@ -1002,16 +1132,21 @@
             : '每行一条：学号,题型,得分,满分 或 姓名,班级,题型,得分,满分',
         };
         function currentHint() {
-          if (sourceSel.value === 'xlsx' && formatSel.value === 'zhixue') {
+          if (sourceSel.value === 'xlsx' && formatSel.querySelector('input:checked')?.value === 'zhixue') {
             return isScores
               ? '智学网格式：自定义考号,姓名,班级,得分（自动遍历工作表，使用自定义考号或姓名匹配）'
               : '智学网文件仅支持导入总分，请切换到“导入成绩（总分）”';
           }
+          if (sourceSel.value === 'xlsx' && formatSel.querySelector('input:checked')?.value === 'other') {
+            return I18n.t('其他平台：选择表头行和各字段所在列，系统会智能匹配，请确认后导入');
+          }
           return HINTS[sourceSel.value];
         }
         const ACCEPTS = { xlsx: '.xlsx', csv: '.csv,.txt', json: '.json' };
+        let parseVersion = 0;
 
         function syncSource() {
+          parseVersion++;
           const src = sourceSel.value;
           hintEl.textContent = currentHint();
           fileWrap.classList.toggle('hidden', src === 'paste');
@@ -1021,15 +1156,148 @@
           pendingDetected = null;
           pendingMatchInfo = null;
           previewEl.innerHTML = '';
+          mapEl.innerHTML = '';
           resultEl.innerHTML = '';
           importBtn.classList.add('hidden');
           importBtn.disabled = false;
+          gen = null;
           formatSel.querySelectorAll('input').forEach((input) => {
             input.disabled = src !== 'xlsx';
           });
+          if (src !== 'xlsx') {
+            const first = formatSel.querySelector('input[value="xueke"]');
+            if (first) first.checked = true;
+          }
+          hintEl.textContent = currentHint();
+        }
+        let gen = null;
+
+        function renderGeneric() {
+          const g = gen;
+          const matrix = g.matrices[g.sheet] || [];
+          const roles = genericRoles(type);
+          const labels = {
+            studentNo: `${I18n.t('学号/考号')} ${I18n.t('clsOptional')}`,
+            name: I18n.t('姓名'),
+            className: `${I18n.t('班级')} ${I18n.t('clsOptional')}`,
+            score: I18n.t('总分/得分'),
+            questionType: I18n.t('题型'),
+            maxScore: I18n.t('满分'),
+          };
+          const width = Math.max(1, genericWidth(matrix, g.headerRow));
+          const colLabel = (i) => {
+            const h = genericCellText((matrix[g.headerRow] || [])[i]);
+            return `${I18n.format('列 {c}', { c: genericColLetter(i) })}${h ? ` · ${h}` : ''}`;
+          };
+          const colOpts = (sel) =>
+            `<option value="-1">${esc(I18n.t('不使用'))}</option>` +
+            Array.from({ length: width }, (_, i) => `<option value="${i}" ${i === sel ? 'selected' : ''}>${esc(colLabel(i))}</option>`).join('');
+          const mapped = new Set(roles.map((r) => g.map[r]).filter((i) => i >= 0));
+          mapEl.innerHTML = `
+            <div class="ex-detect-ok">${esc(I18n.t('已智能匹配列，请确认下方对应关系是否正确，也可手动选择列。'))}</div>
+            <div class="ex-hint">${esc(I18n.t('学号和班级可不选；未匹配学号时仅按空间内唯一姓名匹配，班级不会用于区分同名学生。'))}</div>
+            <div class="ex-analysis-bar" style="margin-top:8px;flex-wrap:wrap">
+              ${
+                g.matrices.length > 1
+                  ? `<label style="margin:0">${esc(I18n.t('工作表'))}</label><select class="form-input" id="exg-sheet" style="max-width:140px">${g.matrices
+                      .map((_, i) => `<option value="${i}" ${i === g.sheet ? 'selected' : ''}>${i + 1}</option>`)
+                      .join('')}</select>`
+                  : ''
+              }
+              <label style="margin:0">${esc(I18n.t('表头行'))}</label>
+              <select class="form-input" id="exg-header" style="max-width:180px"><option value="-1" ${g.headerRow === -1 ? 'selected' : ''}>${esc(I18n.t('无表头（从首行开始）'))}</option>${Array.from(
+                { length: Math.min(10, matrix.length) },
+                (_, i) => `<option value="${i}" ${i === g.headerRow ? 'selected' : ''}>${esc(I18n.format('第{n}行', { n: i + 1 }))}</option>`
+              ).join('')}</select>
+              ${roles
+                .map(
+                  (r) =>
+                    `<label style="margin:0">${esc(labels[r])}</label><select class="form-input exg-col" data-role="${r}" style="max-width:200px">${colOpts(g.map[r])}</select>`
+                )
+                .join('')}
+            </div>
+            <div class="ex-hint" style="margin-top:8px">${esc(I18n.t('原始数据预览（前10行）'))}</div>
+            <div class="ex-preview-table"><table class="table">
+              <thead><tr><th></th>${Array.from({ length: width }, (_, i) => `<th${mapped.has(i) ? ' style="background:#e6f4ea"' : ''}>${genericColLetter(i)}</th>`).join('')}</tr></thead>
+              <tbody>${matrix
+                .slice(0, 10)
+                .map(
+                  (r, ri) =>
+                    `<tr${ri === g.headerRow ? ' style="font-weight:600;background:#f5f5f5"' : ''}><td>${ri + 1}</td>${Array.from(
+                      { length: width },
+                      (_, i) => `<td${mapped.has(i) ? ' style="background:#f3faf5"' : ''}>${esc(genericCellText((r || [])[i]))}</td>`
+                    ).join('')}</tr>`
+                )
+                .join('')}</tbody>
+            </table></div>`;
+          const sheetSel = mapEl.querySelector('#exg-sheet');
+          if (sheetSel) {
+            sheetSel.onchange = () => {
+              g.sheet = Number(sheetSel.value);
+              g.headerRow = genericGuessHeaderRow(g.matrices[g.sheet], type).row;
+              g.map = genericGuessMap(g.matrices[g.sheet], g.headerRow, type);
+              renderGeneric();
+              applyGeneric();
+            };
+          }
+          mapEl.querySelector('#exg-header').onchange = (e) => {
+            g.headerRow = Number(e.target.value);
+            g.map = genericGuessMap(matrix, g.headerRow, type);
+            renderGeneric();
+            applyGeneric();
+          };
+          mapEl.querySelectorAll('.exg-col').forEach((s) => {
+            s.onchange = () => {
+              g.map[s.dataset.role] = Number(s.value);
+              renderGeneric();
+              applyGeneric();
+            };
+          });
+        }
+
+        async function applyGeneric() {
+          const g = gen;
+          importBtn.classList.add('hidden');
+          pendingRows = null;
+          pendingMatchInfo = null;
+          const valid = (g.map.studentNo >= 0 || g.map.name >= 0) && g.map.score >= 0 && (type !== 'subscores' || (g.map.questionType >= 0 && g.map.maxScore >= 0));
+          pendingDetected = { kind: 'generic' };
+          pendingFilter = '全部';
+          if (!valid) {
+            const message = type === 'subscores'
+              ? '请至少选择姓名或学号、得分、题型和满分列'
+              : '请至少选择姓名或学号列，并选择成绩列';
+            previewEl.innerHTML = `<div class="ex-detect-ok" style="color:#a15c00;background:#fff7e6">${esc(I18n.t(message))}</div>`;
+            return;
+          }
+          const selected = genericRoles(type).map((role) => g.map[role]).filter((i) => i >= 0);
+          if (new Set(selected).size !== selected.length) {
+            previewEl.innerHTML = `<div class="ex-detect-ok" style="color:#a15c00;background:#fff7e6">${esc(I18n.t('每个字段须选择不同的列'))}</div>`;
+            return;
+          }
+          const rows = genericBuildRows(g.matrices[g.sheet] || [], g.headerRow, g.map, type);
+          pendingRows = rows;
+          if (!rows.length) {
+            pendingMatchInfo = null;
+            previewEl.innerHTML = '<div class="muted">未解析到有效数据行</div>';
+            importBtn.classList.add('hidden');
+            return;
+          }
+          const info = await buildMatchInfo(rows);
+          if (gen !== g || pendingRows !== rows) return;
+          pendingMatchInfo = info;
+          renderPreview(info);
+          const candidates = (g.matrices[g.sheet] || []).slice(g.headerRow + 1).filter((row) =>
+            selected.some((i) => genericCellText((row || [])[i]))
+          ).length;
+          if (candidates > rows.length) {
+            previewEl.insertAdjacentHTML('afterbegin', `<div class="ex-hint">${esc(I18n.format('有 {count} 行未导入预览（信息不完整、成绩无效或汇总行），请核对原表。', { count: candidates - rows.length }))}</div>`);
+          }
+          importBtn.classList.remove('hidden');
         }
         sourceSel.addEventListener('change', syncSource);
         formatSel.addEventListener('change', syncSource);
+        fileInput.addEventListener('change', syncSource);
         syncSource();
 
         modalEl.querySelector('#exi-close').onclick = () => App.closeModal();
@@ -1107,7 +1375,9 @@
                 ? `<div class="ex-detect-ok">✓ 已识别为学科网小题分文档，将按大题（${esc(d.parts.join(' / '))}）汇总导入小分${
                     type === 'scores' ? '（本窗口仅导入每人总分）' : ''
                   }</div>`
-                : '';
+                : d && d.kind === 'generic'
+                  ? `<div class="ex-detect-ok">✓ ${esc(I18n.t('非智学网/学科网'))}</div>`
+                  : '';
           const unmatchedCount = matchInfo ? view.filter((p) => !p.m).length : 0;
           const info =
             d && d.kind === 'xkw'
@@ -1148,9 +1418,40 @@
         }
 
         modalEl.querySelector('#exi-parse').onclick = async () => {
+          const version = ++parseVersion;
+          gen = null;
+          pendingRows = null;
+          pendingDetected = null;
+          pendingMatchInfo = null;
+          importBtn.classList.add('hidden');
           previewEl.innerHTML = '<div class="muted">解析中…</div>';
+          mapEl.innerHTML = '';
           resultEl.innerHTML = '';
           try {
+            if (sourceSel.value === 'xlsx' && formatSel.querySelector('input:checked')?.value === 'other') {
+              const file = fileInput.files[0];
+              if (!file) throw new Error('请选择文件');
+              const matrices = await readXlsxMatrices(file);
+              if (version !== parseVersion) return;
+              if (!matrices.some((m) => m && m.length)) throw new Error('未解析到有效数据行');
+              let sheet = 0;
+              let best = null;
+              matrices.forEach((m, i) => {
+                const h = genericGuessHeaderRow(m, type);
+                const map = genericGuessMap(m, h.row, type);
+                const count = genericBuildRows(m, h.row, map, type).length;
+                if (!best || (count > 0 && best.count === 0) || ((count > 0) === (best.count > 0) && (h.hits > best.hits || (h.hits === best.hits && count > best.count)))) {
+                  best = { hits: h.hits, count };
+                  sheet = i;
+                }
+              });
+              const headerRow = genericGuessHeaderRow(matrices[sheet], type).row;
+              gen = { matrices, sheet, headerRow, map: genericGuessMap(matrices[sheet], headerRow, type) };
+              previewEl.innerHTML = '';
+              renderGeneric();
+              await applyGeneric();
+              return;
+            }
             const { rows, detected } = await parseRows(
               sourceSel.value,
               type,
@@ -1158,14 +1459,17 @@
               pasteEl.value,
               formatSel.querySelector('input:checked')?.value || 'xueke'
             );
+            if (version !== parseVersion) return;
             if (!rows.length) throw new Error('未解析到有效数据行');
             pendingRows = rows;
             pendingDetected = detected;
             pendingMatchInfo = await buildMatchInfo(rows);
+            if (version !== parseVersion) return;
             pendingFilter = detected && detected.kind === 'class-sheet' && detected.clsSugg ? detected.clsSugg : '全部';
             renderPreview(pendingMatchInfo);
             importBtn.classList.remove('hidden');
           } catch (err) {
+            if (version !== parseVersion) return;
             pendingRows = null;
             pendingDetected = null;
             pendingMatchInfo = null;

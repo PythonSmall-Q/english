@@ -53,6 +53,8 @@
       .dct-status-control label { flex: 1; text-align: center; }
     }
     .dct-quick { display: flex; gap: 8px; margin: 10px 0; }
+    .dct-export-actions { flex-wrap: wrap; align-items: center; }
+    .dct-export-actions label { margin: 0; }
     .dct-scope-row { display: flex; gap: 16px; align-items: center; }
     .dct-scope-row label { display: flex; gap: 6px; align-items: center; font-size: 14px; }
   `;
@@ -103,11 +105,45 @@
     return loadXLSX._p;
   }
 
-  /**
-   * 生成「未重默名单」PNG 并下载（canvas 2x 高清渲染，无需后端）
-   * opts: { meta: 头部说明行, sections: [{ heading?: 默写项目名, items: [{no, name}] }], filename }
-   */
-  function exportRetestImage(opts) {
+  const RETEST_PAGE_HEIGHT = 1188;
+  const RETEST_CONTENT_HEIGHT = RETEST_PAGE_HEIGHT - (44 + 132 + 26 + 64 + 44);
+
+  function retestSectionHeight(section) {
+    return (section.heading ? 40 : 6) + Math.max(1, Math.ceil(section.items.length / 2)) * 56 - 12;
+  }
+
+  function splitRetestPages(sections) {
+    const pages = [];
+    let page = [];
+    let height = 0;
+    for (const section of sections) {
+      for (let offset = 0; offset < section.items.length;) {
+        let count = 0;
+        const remaining = RETEST_CONTENT_HEIGHT - height - (page.length ? 26 : 0);
+        while (offset + count < section.items.length) {
+          const next = Math.min(count + 2, section.items.length - offset);
+          if (retestSectionHeight({ heading: section.heading, items: section.items.slice(offset, offset + next) }) > remaining) break;
+          count = next;
+        }
+        if (!count) {
+          if (!page.length) throw new Error('A4 page layout failed');
+          pages.push(page);
+          page = [];
+          height = 0;
+          continue;
+        }
+        const part = { heading: section.heading, items: section.items.slice(offset, offset + count), offset };
+        height += (page.length ? 26 : 0) + retestSectionHeight(part);
+        page.push(part);
+        offset += count;
+      }
+    }
+    if (page.length) pages.push(page);
+    return pages;
+  }
+
+  /** 生成名单画布，分页时保留完整行与分组。 */
+  function renderRetestImage(opts) {
     const SCALE = 2;
     const W = 840;
     const PAD = 44;
@@ -120,6 +156,7 @@
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas unavailable');
     ctx.font = `16px ${FONT}`;
 
     /** 超长文本省略 */
@@ -145,12 +182,15 @@
       const rows = Math.max(1, Math.ceil(items.length / COLS));
       return {
         heading: sec.heading || '',
+        offset: sec.offset || 0,
         items,
         h: (sec.heading ? 40 : 6) + rows * (CHIP_H + CHIP_GAP) - CHIP_GAP,
       };
     });
-    const totalH =
+    const contentH =
       PAD + HEADER_H + 26 + sections.reduce((s, x) => s + x.h, 0) + SECTION_GAP * Math.max(0, sections.length - 1) + FOOTER_H + PAD;
+    const totalH = opts.pageHeight || contentH;
+    if (totalH < contentH) throw new Error('A4 page layout overflow');
 
     canvas.width = W * SCALE;
     canvas.height = totalH * SCALE;
@@ -234,7 +274,7 @@
         ctx.fillStyle = '#4f6bed';
         ctx.font = `600 12px ${FONT}`;
         ctx.textAlign = 'center';
-        ctx.fillText(String(i + 1), x + 22, cy + CHIP_H / 2 + 4);
+        ctx.fillText(String(sec.offset + i + 1), x + 22, cy + CHIP_H / 2 + 4);
         ctx.textAlign = 'left';
         // 学号 + 姓名
         let tx = x + 44;
@@ -259,18 +299,122 @@
     ctx.fillText(`${I18n.formatNumber(total)} ${I18n.t('clsCanvasUnit')} ${I18n.t('clsCanvasPending')} · ${I18n.t('clsCanvasGeneratedAt')} ${formatBeijingTime(new Date())}`, W / 2, totalH - PAD + 4);
     ctx.textAlign = 'left';
 
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        App.toast(I18n.t('clsCanvasImageFailed'));
-        return;
+    return canvas;
+  }
+
+  const retestScripts = new Map();
+  function loadRetestScript(file, globalName) {
+    if (window[globalName]) return Promise.resolve();
+    if (!retestScripts.has(file)) {
+      const promise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = `vendor/retest/${file}`;
+        script.onload = () => window[globalName] ? resolve() : reject(new Error(`Missing ${globalName}`));
+        script.onerror = () => reject(new Error(`Failed to load ${file}`));
+        document.head.appendChild(script);
+      });
+      retestScripts.set(file, promise);
+      promise.catch(() => retestScripts.delete(file));
+    }
+    return retestScripts.get(file);
+  }
+
+  function retestCanvasBlob(canvas) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('Canvas export failed')), 'image/png');
+    });
+  }
+
+  function retestTable(section) {
+    return [
+      [I18n.t('序号'), I18n.t('学号'), I18n.t('姓名'), I18n.t('班级')],
+      ...section.items.map((item, index) => [String(index + 1), String(item.no || ''), String(item.name || ''), String(item.className || '')]),
+    ];
+  }
+
+  async function exportRetest(opts, mode) {
+    let blob;
+    let extension;
+    if (mode === 'image') {
+      blob = await retestCanvasBlob(renderRetestImage(opts));
+      extension = 'png';
+    } else if (mode === 'pages') {
+      await loadRetestScript('jszip.min.js', 'JSZip');
+      const zip = new window.JSZip();
+      const pages = splitRetestPages(opts.sections);
+      if (!pages.length) throw new Error('Empty retest list');
+      for (let i = 0; i < pages.length; i++) {
+        const canvas = renderRetestImage({ ...opts, sections: pages[i], pageHeight: RETEST_PAGE_HEIGHT });
+        zip.file(`${opts.filename}-${String(i + 1).padStart(3, '0')}.png`, await retestCanvasBlob(canvas));
       }
-      App.downloadBlob(opts.filename || '未重默名单.png', blob).then(() => {
-        const message = window.Capacitor?.getPlatform?.() === 'android'
-          ? I18n.t('已保存到图片')
-          : '名单图片已生成，开始下载';
-        App.toast(message);
-      }).catch(() => App.toast(I18n.t('图片生成失败')));
-    }, 'image/png');
+      blob = await zip.generateAsync({ type: 'blob' });
+      extension = 'zip';
+    } else if (mode === 'pdf') {
+      await Promise.all([
+        loadRetestScript('pdfmake.min.js', 'pdfMake'),
+        loadRetestScript('NotoSansSC.vfs.js', 'RETEST_FONT_VFS'),
+      ]);
+      const content = [
+        { text: I18n.t('clsCanvasTitle'), fontSize: 18, margin: [0, 0, 0, 8] },
+        { text: opts.meta || '', margin: [0, 0, 0, 12] },
+      ];
+      for (const section of opts.sections) {
+        if (section.heading) content.push({ text: section.heading, margin: [0, 8, 0, 6] });
+        content.push({
+          table: { headerRows: 1, keepWithHeaderRows: 1, dontBreakRows: true, widths: [35, '*', '*', '*'], body: retestTable(section) },
+          margin: [0, 0, 0, 10],
+        });
+      }
+      const fonts = { Retest: { normal: 'NotoSansSC.ttf', bold: 'NotoSansSC.ttf', italics: 'NotoSansSC.ttf', bolditalics: 'NotoSansSC.ttf' } };
+      const pdf = window.pdfMake.createPdf({ pageSize: 'A4', content, defaultStyle: { font: 'Retest', fontSize: 10 } }, null, fonts, window.RETEST_FONT_VFS);
+      blob = await new Promise((resolve) => pdf.getBlob(resolve));
+      extension = 'pdf';
+    } else if (mode === 'word') {
+      await loadRetestScript('docx.iife.js', 'docx');
+      const { Document, Packer, Paragraph, Table, TableCell, TableRow, WidthType } = window.docx;
+      const children = [
+        new Paragraph({ text: I18n.t('clsCanvasTitle'), heading: 'Title' }),
+        new Paragraph({ text: opts.meta || '', spacing: { after: 200 } }),
+      ];
+      for (const section of opts.sections) {
+        if (section.heading) children.push(new Paragraph({ text: section.heading, heading: 'Heading2' }));
+        const rows = retestTable(section).map((cells, index) => new TableRow({
+          tableHeader: index === 0,
+          cantSplit: true,
+          children: cells.map((text) => new TableCell({ children: [new Paragraph({ text })] })),
+        }));
+        children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows }));
+      }
+      const doc = new Document({ sections: [{ properties: { page: { size: { width: 11906, height: 16838 } } }, children }] });
+      blob = await Packer.toBlob(doc);
+      extension = 'docx';
+    } else {
+      throw new Error('Unknown export mode');
+    }
+    const saved = await App.downloadBlob(`${opts.filename}.${extension}`, blob);
+    if (saved) App.toast(I18n.t('导出文件已生成'));
+  }
+
+  function retestExportOptions(id) {
+    return `<label for="${id}">${App.esc(I18n.t('导出格式'))}</label>
+      <select class="form-input" id="${id}">
+        <option value="image">${App.esc(I18n.t('长图 PNG'))}</option>
+        <option value="pages">${App.esc(I18n.t('A4 分页图片（ZIP）'))}</option>
+        <option value="pdf">${App.esc(I18n.t('PDF（文字表格）'))}</option>
+        <option value="word">${App.esc(I18n.t('Word（文字表格）'))}</option>
+      </select>`;
+  }
+
+  async function handleRetestExport(button, mode, opts) {
+    button.disabled = true;
+    try {
+      await exportRetest(opts, mode);
+    } catch (error) {
+      console.error('[retest-export]', error);
+      App.toast(I18n.t('名单导出失败，请重试'));
+    } finally {
+      button.disabled = false;
+    }
   }
 
   /** 文件名安全化 */
@@ -723,8 +867,9 @@
           <button class="btn btn-sm" id="dct-t-none" type="button">全部未重默</button>
         </div>
         <div class="dct-check-list" id="dct-t-list">${checkRows}</div>
-        <div class="modal-actions">
-          <button class="btn" id="dct-t-export" type="button">导出名单</button>
+        <div class="modal-actions dct-export-actions">
+          ${retestExportOptions('dct-t-export-mode')}
+          <button class="btn" id="dct-t-export" type="button">${App.esc(I18n.t('导出名单'))}</button>
           <button class="btn" id="dct-t-cancel" type="button">取消</button>
           <button class="btn btn-primary" id="dct-t-save" type="button">标记已重默</button>
         </div>`,
@@ -738,27 +883,15 @@
           modal.querySelectorAll('#dct-t-list input[type=checkbox]').forEach((cb) => { cb.checked = false; });
         };
         modal.querySelector('#dct-t-export').onclick = () => {
-          // 按默写项目分组（保持出现顺序），组内按学号排序
-          const order = [];
-          const groups = new Map();
-          rows.forEach((r) => {
-            const t = r.dictationTitle || '默写';
-            if (!groups.has(t)) {
-              groups.set(t, []);
-              order.push(t);
-            }
-            groups.get(t).push(r);
-          });
-          order.forEach((t) =>
-            groups.get(t).sort((a, b) => String(a.studentNo || '￿').localeCompare(String(b.studentNo || '￿'), 'zh-CN'))
-          );
-          exportRetestImage({
-            meta: `班级：${clsName}`,
-            sections: order.map((t) => ({
-              heading: `默写项目：${t}`,
-              items: groups.get(t).map((r) => ({ no: r.studentNo, name: r.name })),
+          handleRetestExport(modal.querySelector('#dct-t-export'), modal.querySelector('#dct-t-export-mode').value, {
+            meta: I18n.format('班级：{name}', { name: clsName }),
+            sections: retestGroups.map((group) => ({
+              heading: I18n.format('默写项目：{name}', { name: group.title }),
+              items: group.rows.slice()
+                .sort((a, b) => String(a.studentNo || '￿').localeCompare(String(b.studentNo || '￿'), 'zh-CN'))
+                .map((r) => ({ no: r.studentNo, name: r.name, className: clsName })),
             })),
-            filename: `${safeFilename('未重默名单-' + clsName)}.png`,
+            filename: safeFilename(I18n.t('clsCanvasTitle') + '-' + clsName),
           });
         };
         modal.querySelector('#dct-t-save').onclick = async () => {
@@ -851,8 +984,9 @@
           <button class="btn btn-sm" id="dct-o-none" type="button">清空</button>
         </div>
         <div class="dct-check-list" id="dct-o-list">${rows}</div>
-        <div class="modal-actions">
-          <button class="btn" id="dct-o-export" type="button">导出名单</button>
+        <div class="modal-actions dct-export-actions">
+          ${retestExportOptions('dct-o-export-mode')}
+          <button class="btn" id="dct-o-export" type="button">${App.esc(I18n.t('导出名单'))}</button>
           <button class="btn" id="dct-o-cancel" type="button">取消</button>
           <button class="btn btn-primary" id="dct-o-save" type="button">提交重默</button>
         </div>`,
@@ -863,12 +997,12 @@
         modal.querySelector('#dct-o-none').onclick = () => setAll(false);
         modal.querySelector('#dct-o-cancel').onclick = App.closeModal;
         modal.querySelector('#dct-o-export').onclick = () => {
-          const items = pending.map((r) => ({ no: r.studentNo, name: r.name }));
-          const clsPart = ctxClassId ? ` · 班级：${(classes.find((c) => c.id === ctxClassId) || {}).name || ''}` : '';
-          exportRetestImage({
-            meta: `默写项目：${det.title || (d && d.title) || ''}${clsPart}`,
+          const items = pending.map((r) => ({ no: r.studentNo, name: r.name, className: r.className }));
+          const clsPart = ctxClassId ? ` · ${I18n.format('班级：{name}', { name: (classes.find((c) => c.id === ctxClassId) || {}).name || '' })}` : '';
+          handleRetestExport(modal.querySelector('#dct-o-export'), modal.querySelector('#dct-o-export-mode').value, {
+            meta: `${I18n.format('默写项目：{name}', { name: det.title || (d && d.title) || '' })}${clsPart}`,
             sections: [{ items }],
-            filename: `${safeFilename('未重默名单-' + (det.title || (d && d.title) || '默写'))}.png`,
+            filename: safeFilename(I18n.t('clsCanvasTitle') + '-' + (det.title || (d && d.title) || '默写')),
           });
         };
         modal.querySelector('#dct-o-save').onclick = async () => {

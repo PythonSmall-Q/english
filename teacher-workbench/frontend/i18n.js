@@ -300,6 +300,37 @@
     '平板模式': ['Tablet mode', '平板模式'],
     '简体中文': ['Simplified Chinese', '簡體中文'],
     '繁體中文': ['Traditional Chinese', '繁體中文'],
+    '非智学网/学科网': ['Other platform', '非智學網/學科網'],
+    '表头行': ['Header row', '表頭行'],
+    '无表头（从首行开始）': ['No header (start at first row)', '無表頭（從首行開始）'],
+    '导出格式': ['Export format', '匯出格式'],
+    '长图 PNG': ['Long image (PNG)', '長圖 PNG'],
+    'A4 分页图片（ZIP）': ['A4 page images (ZIP)', 'A4 分頁圖片（ZIP）'],
+    'PDF（文字表格）': ['PDF (text table)', 'PDF（文字表格）'],
+    'Word（文字表格）': ['Word (text table)', 'Word（文字表格）'],
+    '序号': ['No.', '序號'],
+    '学号': ['Student number', '學號'],
+    '班级：{name}': ['Class: {name}', '班級：{name}'],
+    '默写项目：{name}': ['Dictation: {name}', '默寫項目：{name}'],
+    '导出文件已生成': ['Export generated', '匯出檔案已產生'],
+    '名单导出失败，请重试': ['Could not export the roster. Please try again.', '名單匯出失敗，請重試'],
+    '工作表': ['Sheet', '工作表'],
+    '第{n}行': ['Row {n}', '第{n}行'],
+    '列 {c}': ['Column {c}', '列 {c}'],
+    '不使用': ['Not used', '不使用'],
+    '学号/考号': ['Student no.', '學號/考號'],
+    '班级': ['Class', '班級'],
+    '总分/得分': ['Score', '總分/得分'],
+    '题型': ['Question type', '題型'],
+    '满分': ['Max score', '滿分'],
+    '已智能匹配列，请确认下方对应关系是否正确，也可手动选择列。': ['Columns were matched automatically. Please confirm the mapping below or choose columns manually.', '已智能匹配列，請確認下方對應關係是否正確，也可手動選擇列。'],
+    '原始数据预览（前10行）': ['Raw data preview (first 10 rows)', '原始資料預覽（前10行）'],
+    '请至少选择姓名或学号列，并选择成绩列': ['Select at least a name or student-no. column and a score column', '請至少選擇姓名或學號列，並選擇成績列'],
+    '请至少选择姓名或学号、得分、题型和满分列': ['Select a name or student number, score, question type and maximum score columns', '請至少選擇姓名或學號、得分、題型和滿分欄'],
+    '每个字段须选择不同的列': ['Choose a different column for each field', '每個欄位須選擇不同的列'],
+    '学号和班级可不选；未匹配学号时仅按空间内唯一姓名匹配，班级不会用于区分同名学生。': ['Student number and class are optional. If the student number does not match, only a name unique within the workspace is matched; class does not distinguish students with the same name.', '學號和班級可不選；未匹配學號時僅按空間內唯一姓名匹配，班級不會用於區分同名學生。'],
+    '有 {count} 行未导入预览（信息不完整、成绩无效或汇总行），请核对原表。': ['{count} rows were excluded from the import preview (incomplete information, invalid score or summary rows). Check the original sheet.', '有 {count} 行未匯入預覽（資訊不完整、成績無效或彙總行），請核對原表。'],
+    '其他平台：选择表头行和各字段所在列，系统会智能匹配，请确认后导入': ['Other platform: choose the header row and columns; they are matched automatically, please confirm before importing', '其他平台：選擇表頭行和各欄位所在列，系統會智能匹配，請確認後匯入'],
     '切换语言后重新加载界面': ['Reload the interface after changing language', '切換語言後重新載入介面'],
   };
   const messages = {
@@ -386,7 +417,9 @@
   const I18n = {
     locale: detectLocale(),
     t(key, fallback) {
-      return messages[this.locale]?.[key] ?? messages['zh-CN'][key] ?? fallback ?? key;
+      const ui = UI_TEXT[key];
+      const uiText = ui && this.locale !== 'zh-CN' ? ui[this.locale === 'en' ? 0 : 1] : undefined;
+      return messages[this.locale]?.[key] ?? uiText ?? messages['zh-CN'][key] ?? fallback ?? key;
     },
     format(key, values = {}, fallback) {
       return Object.entries(values).reduce(
