@@ -70,6 +70,130 @@ function listScoresStmt(db, tenantId, examId) {
     .bind(tenantId, examId);
 }
 
+/** 查询合并考试的有序分项（join 分项考试名/日期/满分） */
+async function listComponents(db, tenantId, examId) {
+  const res = await db
+    .prepare(
+      `SELECT ec.id, ec.component_exam_id, ec.position, e.name, e.exam_date, e.total_score
+         FROM exam_components ec
+         JOIN exams e ON e.id = ec.component_exam_id AND e.tenant_id = ec.tenant_id
+        WHERE ec.tenant_id = ? AND ec.exam_id = ?
+        ORDER BY ec.position, ec.created_at`
+    )
+    .bind(tenantId, examId)
+    .all();
+  return res.results;
+}
+
+/**
+ * 统一分数解析器（各端点复用）：
+ * - 非合并考试：走原 listScoresStmt
+ * - 合并考试：按 student_id 合并各分项分数，总分=有效分项之和；
+ *   某分项缺分数（无行/NULL/缺考）不计入，全部分项都无分数 → score=null、absent=1（不计入统计）；
+ *   每行附 components:[{examId, name, score: null|number}]
+ */
+async function resolveExamScores(db, tenantId, exam) {
+  if (!exam.composite) {
+    const res = await listScoresStmt(db, tenantId, exam.id).all();
+    return res.results;
+  }
+  const components = await listComponents(db, tenantId, exam.id);
+  const byStudent = new Map();
+  for (const comp of components) {
+    const rows = (await listScoresStmt(db, tenantId, comp.component_exam_id).all()).results;
+    for (const r of rows) {
+      let entry = byStudent.get(r.student_id);
+      if (!entry) {
+        entry = {
+          student_id: r.student_id,
+          student_name: r.student_name,
+          student_no: r.student_no,
+          class_id: r.class_id,
+          class_name: r.class_name,
+          created_at: r.created_at,
+          score: 0,
+          hasScore: false,
+          components: [],
+        };
+        byStudent.set(r.student_id, entry);
+      }
+      const valid = r.score !== null && r.score !== undefined && r.absent !== 1;
+      entry.components.push({ examId: comp.component_exam_id, name: comp.name, score: valid ? r.score : null });
+      if (valid) {
+        entry.score += r.score;
+        entry.hasScore = true;
+      }
+    }
+  }
+  return [...byStudent.values()]
+    .map((e) => ({
+      id: `composite:${exam.id}:${e.student_id}`,
+      score: e.hasScore ? e.score : null,
+      absent: e.hasScore ? 0 : 1,
+      student_id: e.student_id,
+      created_at: e.created_at,
+      student_name: e.student_name,
+      student_no: e.student_no,
+      class_id: e.class_id,
+      class_name: e.class_name,
+      components: e.components,
+    }))
+    .sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity));
+}
+
+/**
+ * 校验合并考试分项列表：≥2 个、同租户、当前学年、非合并考试（不嵌套）、
+ * 口径一致（全部 class 且同班，或全部 grade），并对每个分项通过 canManageExam。
+ * 返回统一口径：scope/class_id/total_score（任一分项满分 NULL → 总分 NULL）
+ */
+async function validateComponents(db, tenantId, user, componentIds) {
+  if (!Array.isArray(componentIds) || componentIds.length < 2) {
+    throw new ApiError('VALIDATION_ERROR', '合并考试至少需要 2 个分项考试');
+  }
+  const ids = componentIds.map((id) => String(id).trim());
+  if (new Set(ids).size !== ids.length) {
+    throw new ApiError('VALIDATION_ERROR', '分项考试不能重复');
+  }
+  const components = [];
+  for (const cid of ids) {
+    const comp = await getExam(db, tenantId, cid);
+    if (comp.composite) throw new ApiError('VALIDATION_ERROR', '分项考试不能是合并考试');
+    if (comp.academic_year !== currentAcademicYear()) {
+      throw new ApiError('VALIDATION_ERROR', '分项考试必须是当前学年的考试');
+    }
+    if (!(await canManageExam(db, tenantId, user, comp))) {
+      throw new ApiError('FORBIDDEN', `你没有权限管理分项考试「${comp.name}」`);
+    }
+    components.push(comp);
+  }
+  const allClass = components.every((c) => (c.scope || 'grade') === 'class');
+  const allGrade = components.every((c) => (c.scope || 'grade') === 'grade');
+  if (!(allClass || allGrade)) {
+    throw new ApiError('VALIDATION_ERROR', '分项考试必须全部是班级考试或全部是全年段考试，不能混合');
+  }
+  const first = components[0];
+  if (allClass && !components.every((c) => c.class_id === first.class_id)) {
+    throw new ApiError('VALIDATION_ERROR', '班级考试分项必须属于同一班级');
+  }
+  const totalScore = components.every((c) => c.total_score !== null && c.total_score !== undefined)
+    ? components.reduce((a, c) => a + Number(c.total_score), 0)
+    : null;
+  return { components, scope: allClass ? 'class' : 'grade', classId: allClass ? first.class_id : null, totalScore };
+}
+
+/** 针对性建议文案（非合并按题型 / 合并按分项，口径一致：得分率 < 60%） */
+function buildSuggestions(weakTypes) {
+  if (weakTypes.length === 0) {
+    return ['本次考试各部分得分率均在 60% 以上，知识体系较为扎实，建议保持现有学习节奏并适当拔高。'];
+  }
+  const list = weakTypes.map(
+    (w) =>
+      `「${w.questionType}」得分率 ${w.rate}%（得分 ${w.score}/${w.maxScore}，班均 ${w.classAvg ?? '—'}），低于 60%，建议针对该部分进行专项练习并整理错题。`
+  );
+  list.push('建议将薄弱部分的错题按考点归类，每周安排一次限时专项训练，并及时复习巩固。');
+  return list;
+}
+
 /**
  * GET /api/v1/exams — 考试列表（附每场考试的人数与均分）
  * 支持 ?academic_year= 学年过滤（缺省/非法回退当前学年）
@@ -94,13 +218,26 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
     .bind(tenantId, academicYear)
     .all();
   // 已归档行（archived_stats 非空）：人数/均分用留存汇总，标 archived:true；
-  // archived_stats 原列从行上剥离，非归档行保持原响应形状不变
-  const list = rows.results.map((r) => {
+  // archived_stats 原列从行上剥离，非归档行保持原响应形状不变；
+  // 合并考试：SQL 子查询只适用非合并行，人数/均分按有效总分在 JS 侧重算，行上附 components:[{id,name}]
+  const list = [];
+  for (const r of rows.results) {
     const { archived_stats, ...rest } = r;
-    if (!archived_stats) return rest;
+    if (rest.composite) {
+      const scores = await resolveExamScores(db, tenantId, { id: rest.id, composite: 1 });
+      const valid = scores.filter((s) => s.score !== null && s.absent !== 1);
+      const comps = await listComponents(db, tenantId, rest.id);
+      rest.student_count = valid.length;
+      rest.avg_score = valid.length ? round2(valid.reduce((a, s) => a + s.score, 0) / valid.length) : null;
+      rest.components = comps.map((cm) => ({ id: cm.component_exam_id, name: cm.name }));
+    }
+    if (!archived_stats) {
+      list.push(rest);
+      continue;
+    }
     const s = JSON.parse(archived_stats);
-    return { ...rest, student_count: s.studentCount || 0, avg_score: s.avgScore ?? null, archived: true };
-  });
+    list.push({ ...rest, student_count: s.studentCount || 0, avg_score: s.avgScore ?? null, archived: true });
+  }
   return c.json({ success: true, data: list });
 });
 
@@ -159,6 +296,53 @@ app.post('/', requireAuth, requireTenant, requireRole(['teacher']), requireTeach
 });
 
 /**
+ * POST /api/v1/exams/com — 新建合并考试（§36 衍生视图，不占 exams 配额）
+ * body: { name(必填), component_ids(≥2), exam_date? }
+ * 分项约束：同租户、当前学年、非合并考试；全部 class 且同班，或全部 grade；逐个通过 canManageExam。
+ * 合并行不存分数，total_score=各分项之和（任一分项 NULL → NULL），scope/class_id 从分项推导。
+ * 注意：须声明在 POST /:id/import 之前。
+ */
+app.post('/com', requireAuth, requireTenant, requireRole(['teacher']), requireTeacherPerm('create_exams'), async (c) => {
+  const db = c.get('tenantDb') || c.env.DB;
+  const user = c.get('user');
+  const tenantId = c.get('tenantId');
+  const body = await c.req.json().catch(() => ({}));
+
+  const name = String(body.name || '').trim();
+  if (!name) throw new ApiError('VALIDATION_ERROR', '考试名称不能为空');
+  const examDate = body.exam_date ? String(body.exam_date).trim() : null;
+
+  const { components, scope, classId, totalScore } = await validateComponents(db, tenantId, user, body.component_ids);
+
+  const id = newId();
+  const ts = now();
+  const stmts = [
+    db
+      .prepare(
+        `INSERT INTO exams (id, tenant_id, name, subject, total_score, exam_date, academic_year, scope, class_id, composite, created_at)
+         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 1, ?)`
+      )
+      .bind(id, tenantId, name, totalScore, examDate, currentAcademicYear(), scope, classId, ts),
+  ];
+  components.forEach((comp, idx) => {
+    stmts.push(
+      db
+        .prepare(
+          `INSERT INTO exam_components (id, tenant_id, exam_id, component_exam_id, position, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .bind(newId(), tenantId, id, comp.id, idx, ts)
+    );
+  });
+  await db.batch(stmts);
+  await audit(db, tenantId, user.id, 'create_composite_exam', '考试', id, {
+    name,
+    components: components.map((comp) => comp.name),
+  });
+  return c.json({ success: true, data: await getExam(db, tenantId, id) }, 201);
+});
+
+/**
  * GET /api/v1/exams/export-totals?academic_year= — 导出历次考试总分（§3.5.1「📥 导出成绩」）
  * 任何成员可读。返回：
  * - students：该学年全部学生（含班级名，按班级/学号排序）
@@ -184,7 +368,7 @@ app.get('/export-totals', requireAuth, requireTenant, requireRole(['viewer']), a
 
   const examRows = await db
     .prepare(
-      `SELECT id, name, exam_date, scope, class_id
+      `SELECT id, name, exam_date, scope, class_id, composite
          FROM exams
         WHERE tenant_id = ? AND academic_year = ?
         ORDER BY exam_date IS NULL, exam_date, created_at`
@@ -195,6 +379,17 @@ app.get('/export-totals', requireAuth, requireTenant, requireRole(['viewer']), a
 
   const scores = {};
   for (const e of exams) {
+    // 合并考试：不存分数行，用有效总分（各分项之和，全缺 → null）
+    if (e.composite) {
+      const map = {};
+      for (const s of students) map[s.id] = null;
+      const rows = await resolveExamScores(db, tenantId, { id: e.id, composite: 1 });
+      for (const r of rows) {
+        if (r.student_id in map) map[r.student_id] = r.score;
+      }
+      scores[e.id] = map;
+      continue;
+    }
     // 班级考试只取本班学生的成绩；全年段考试全取
     const scoreRows =
       (e.scope || 'grade') === 'class' && e.class_id
@@ -242,8 +437,15 @@ app.get('/:id', requireAuth, requireTenant, requireRole(['viewer']), async (c) =
   const db = c.get('tenantDb') || c.env.DB;
   const tenantId = c.get('tenantId');
   const exam = await getExam(db, tenantId, c.req.param('id'));
-  const scores = await listScoresStmt(db, tenantId, exam.id).all();
-  return c.json({ success: true, data: { ...exam, scores: scores.results } });
+  const scores = await resolveExamScores(db, tenantId, exam);
+  if (exam.composite) {
+    const comps = await listComponents(db, tenantId, exam.id);
+    return c.json({
+      success: true,
+      data: { ...exam, components: comps.map((cm) => ({ id: cm.component_exam_id, name: cm.name, exam_date: cm.exam_date })), scores },
+    });
+  }
+  return c.json({ success: true, data: { ...exam, scores } });
 });
 
 /**
@@ -267,8 +469,13 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
   const name = body.name !== undefined ? String(body.name).trim() : exam.name;
   if (!name) throw new ApiError('VALIDATION_ERROR', '考试名称不能为空');
   const subject = body.subject !== undefined ? String(body.subject).trim() : exam.subject;
-  const totalScore = body.total_score === null || body.total_score === '' || body.total_score === undefined ? exam.total_score : Number(body.total_score);
-  if (totalScore !== null && (!Number.isFinite(totalScore) || totalScore <= 0)) {
+  // 合并考试：total_score 由分项自动推导，忽略请求中的 total_score，仅允许 name/subject/exam_date/paper_url
+  const totalScore = exam.composite
+    ? exam.total_score
+    : body.total_score === null || body.total_score === '' || body.total_score === undefined
+      ? exam.total_score
+      : Number(body.total_score);
+  if (!exam.composite && totalScore !== null && (!Number.isFinite(totalScore) || totalScore <= 0)) {
     throw new ApiError('VALIDATION_ERROR', '考试总分必须是大于 0 的数字');
   }
   const examDate = body.exam_date !== undefined ? String(body.exam_date).trim() : exam.exam_date;
@@ -280,6 +487,58 @@ app.put('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (c) 
     .run();
   await audit(db, tenantId, user.id, 'update_exam', '考试', exam.id, { name });
   return c.json({ success: true, data: await getExam(db, tenantId, exam.id) });
+});
+
+/**
+ * PUT /api/v1/exams/:id/components — 整体替换合并考试的分项列表
+ * body: { component_ids }（约束同 POST /com），重算 total_score/scope/class_id。
+ * 仅合并考试可用；分项成绩不受影响，合并视图自动反映。
+ */
+app.put('/:id/components', requireAuth, requireTenant, requireRole(['teacher']), async (c) => {
+  const db = c.get('tenantDb') || c.env.DB;
+  const user = c.get('user');
+  const tenantId = c.get('tenantId');
+  const exam = await getExam(db, tenantId, c.req.param('id'));
+  if (!exam.composite) throw new ApiError('VALIDATION_ERROR', '仅合并考试可以修改分项列表');
+
+  // 考试级权限：owner/admin、班级考试→该班管理者、全年段考试→年级组组长/备课组长
+  if (!(await canManageExam(db, tenantId, user, exam))) {
+    throw new ApiError('FORBIDDEN', '你没有权限管理该考试');
+  }
+
+  // 学年归档保护：非当前学年 → 403
+  await assertCurrentYear(db, tenantId, 'exams', exam.id);
+
+  const body = await c.req.json().catch(() => ({}));
+  const { components, scope, classId, totalScore } = await validateComponents(db, tenantId, user, body.component_ids);
+
+  const ts = now();
+  const stmts = [
+    db.prepare('DELETE FROM exam_components WHERE tenant_id = ? AND exam_id = ?').bind(tenantId, exam.id),
+    db
+      .prepare('UPDATE exams SET total_score = ?, scope = ?, class_id = ? WHERE tenant_id = ? AND id = ?')
+      .bind(totalScore, scope, classId, tenantId, exam.id),
+  ];
+  components.forEach((comp, idx) => {
+    stmts.push(
+      db
+        .prepare(
+          `INSERT INTO exam_components (id, tenant_id, exam_id, component_exam_id, position, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .bind(newId(), tenantId, exam.id, comp.id, idx, ts)
+    );
+  });
+  await db.batch(stmts);
+  await audit(db, tenantId, user.id, 'update_composite_components', '考试', exam.id, {
+    name: exam.name,
+    components: components.map((comp) => comp.name),
+  });
+  const comps = await listComponents(db, tenantId, exam.id);
+  return c.json({
+    success: true,
+    data: { ...await getExam(db, tenantId, exam.id), components: comps.map((cm) => ({ id: cm.component_exam_id, name: cm.name, exam_date: cm.exam_date })) },
+  });
 });
 
 /**
@@ -369,18 +628,22 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
   // 学年归档保护：非当前学年 → 403
   await assertCurrentYear(db, tenantId, 'exams', exam.id);
 
-  // 回收站：先捕获全量行（考试 + 总分 + 小分），再物理删除
+  // 回收站：先捕获全量行（考试 + 总分 + 小分 + 合并分项关系），再物理删除
   const scores = (
     await db.prepare('SELECT * FROM exam_scores WHERE exam_id = ?').bind(exam.id).all()
   ).results;
   const subscores = (
     await db.prepare('SELECT * FROM exam_subscores WHERE exam_id = ?').bind(exam.id).all()
   ).results;
+  const compRows = (
+    await db.prepare('SELECT * FROM exam_components WHERE exam_id = ?').bind(exam.id).all()
+  ).results;
   await captureRecycle(db, tenantId, user.id, 'exam', exam.id, exam.name, {
     // getExam 附带 JOIN 的 class_name 展示列，非 exams 表字段，剔除后再入库
     exams: [(({ class_name, ...row }) => row)(exam)],
     exam_scores: scores,
     exam_subscores: subscores,
+    exam_components: compRows,
   });
 
   await db.batch([
@@ -389,6 +652,10 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
       .bind(tenantId, exam.id),
     db
       .prepare('DELETE FROM exam_scores WHERE tenant_id = ? AND exam_id = ?')
+      .bind(tenantId, exam.id),
+    // 合并考试：只删自身与分项关系行，分项考试及其成绩不动
+    db
+      .prepare('DELETE FROM exam_components WHERE tenant_id = ? AND exam_id = ?')
       .bind(tenantId, exam.id),
     db
       .prepare('DELETE FROM exams WHERE tenant_id = ? AND id = ?')
@@ -429,6 +696,11 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
 
   // 学年归档保护：非当前学年 → 403（历史学年数据仅可查看）
   await assertCurrentYear(db, tenantId, 'exams', exam.id);
+
+  // 合并考试不存分数行：成绩请改到各分项考试下导入
+  if (exam.composite) {
+    throw new ApiError('VALIDATION_ERROR', '合并考试没有自己的分数，请到各分项考试下导入成绩');
+  }
 
   const body = await c.req.json().catch(() => ({}));
   const type = body.type;
@@ -612,8 +884,7 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
     if (!cls) throw new ApiError('BAD_REQUEST', '班级不存在或不属于当前空间');
   }
 
-  const scoresRes = await listScoresStmt(db, tenantId, exam.id).all();
-  const scores = scoresRes.results;
+  const scores = await resolveExamScores(db, tenantId, exam);
   const allValid = scores.filter((s) => s.score !== null && s.score !== undefined && s.absent !== 1);
   const valid = filterClassId ? allValid.filter((s) => s.class_id === filterClassId) : allValid;
 
@@ -646,29 +917,33 @@ app.get('/:id/analysis', requireAuth, requireTenant, requireRole(['viewer']), as
     }))
     .sort((a, b) => a.className.localeCompare(b.className, 'zh-Hans-CN'));
 
-  // 各题型均分与得分率（得分率 = Σscore / Σmax_score）；传 class_id 时仅统计该班
-  let subSql = `SELECT question_type, COUNT(*) AS count,
-              AVG(score) AS avg_score,
-              SUM(score) AS sum_score, SUM(max_score) AS sum_max
-       FROM exam_subscores
-       WHERE tenant_id = ? AND exam_id = ?`;
-  const subParams = [tenantId, exam.id];
-  if (filterClassId) {
-    subSql = `SELECT ss.question_type, COUNT(*) AS count,
-              AVG(ss.score) AS avg_score,
-              SUM(ss.score) AS sum_score, SUM(ss.max_score) AS sum_max
-       FROM exam_subscores ss JOIN students st ON st.id = ss.student_id
-       WHERE ss.tenant_id = ? AND ss.exam_id = ? AND st.class_id = ?`;
-    subParams.push(filterClassId);
+  // 各题型均分与得分率（得分率 = Σscore / Σmax_score）；传 class_id 时仅统计该班。
+  // 合并考试不存小分，题型维度对合并视图无意义 → 返回 []
+  let questionTypes = [];
+  if (!exam.composite) {
+    let subSql = `SELECT question_type, COUNT(*) AS count,
+                AVG(score) AS avg_score,
+                SUM(score) AS sum_score, SUM(max_score) AS sum_max
+         FROM exam_subscores
+         WHERE tenant_id = ? AND exam_id = ?`;
+    const subParams = [tenantId, exam.id];
+    if (filterClassId) {
+      subSql = `SELECT ss.question_type, COUNT(*) AS count,
+                AVG(ss.score) AS avg_score,
+                SUM(ss.score) AS sum_score, SUM(ss.max_score) AS sum_max
+         FROM exam_subscores ss JOIN students st ON st.id = ss.student_id
+         WHERE ss.tenant_id = ? AND ss.exam_id = ? AND st.class_id = ?`;
+      subParams.push(filterClassId);
+    }
+    subSql += ' GROUP BY question_type ORDER BY question_type';
+    const subRes = await db.prepare(subSql).bind(...subParams).all();
+    questionTypes = subRes.results.map((r) => ({
+      questionType: r.question_type,
+      count: r.count,
+      avg: round2(r.avg_score),
+      rate: r.sum_max ? round2(r.sum_score / r.sum_max) : null,
+    }));
   }
-  subSql += ' GROUP BY question_type ORDER BY question_type';
-  const subRes = await db.prepare(subSql).bind(...subParams).all();
-  const questionTypes = subRes.results.map((r) => ({
-    questionType: r.question_type,
-    count: r.count,
-    avg: round2(r.avg_score),
-    rate: r.sum_max ? round2(r.sum_score / r.sum_max) : null,
-  }));
 
   // 班内排名（按班级分组，分数降序）；传 class_id 时只有该班一组，名次班内从 1 起
   const byClass = new Map();
@@ -713,6 +988,11 @@ app.put('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['te
 
   // 学年归档保护：非当前学年 → 403
   await assertCurrentYear(db, tenantId, 'exams', exam.id);
+
+  // 合并考试不存分数行：成绩请改到各分项考试下登记
+  if (exam.composite) {
+    throw new ApiError('VALIDATION_ERROR', '合并考试没有自己的分数，请到各分项考试下登记成绩');
+  }
 
   const body = await c.req.json().catch(() => ({}));
   const absent = body.absent === true;
@@ -790,8 +1070,7 @@ app.get('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['vi
     .first();
   if (!student) throw new ApiError('NOT_FOUND', '学生不存在');
 
-  const scoresRes = await listScoresStmt(db, tenantId, exam.id).all();
-  const scores = scoresRes.results;
+  const scores = await resolveExamScores(db, tenantId, exam);
   const mine = scores.find((s) => s.student_id === studentId);
 
   // 班级排名 + 超过全班百分比（严格低于本人成绩的人数占比）
@@ -807,57 +1086,80 @@ app.get('/:id/students/:studentId', requireAuth, requireTenant, requireRole(['vi
     exceedPercent = classmates.length ? round2((lower / classmates.length) * 100) : null;
   }
 
-  // 各题型：本人得分 vs 班均（柱状图数据）；一次取全考小分后在内存中按班级聚合
-  const subRes = await db
-    .prepare(
-      `SELECT ss.question_type, ss.student_id, ss.score, ss.max_score, st.class_id
-       FROM exam_subscores ss JOIN students st ON st.id = ss.student_id
-       WHERE ss.tenant_id = ? AND ss.exam_id = ?`
-    )
-    .bind(tenantId, exam.id)
-    .all();
-  const mineRows = subRes.results.filter((r) => r.student_id === studentId);
-  const typeSet = new Set(mineRows.map((r) => r.question_type));
-  const chartData = [];
-  const weakTypes = [];
-  for (const qt of [...typeSet].sort()) {
-    const mineRow = mineRows.find((r) => r.question_type === qt);
-    const classRowsOfType = subRes.results.filter(
-      (r) => r.question_type === qt && (r.class_id || null) === (student.class_id || null)
-    );
-    const classAvg = classRowsOfType.length
-      ? round2(classRowsOfType.reduce((a, r) => a + r.score, 0) / classRowsOfType.length)
-      : null;
-    const rate =
-      mineRow.max_score ? round2(mineRow.score / mineRow.max_score) : null;
-    chartData.push({
-      questionType: qt,
-      studentScore: mineRow.score,
-      maxScore: mineRow.max_score,
-      classAvg,
-    });
-    if (rate !== null && rate < 0.6) {
-      weakTypes.push({
+  // 各题型/各分项：本人得分 vs 班均（柱状图数据）
+  let chartData = [];
+  let weakTypes = [];
+  let suggestions = [];
+  if (exam.composite) {
+    // 合并考试：按分项对比（questionType=分项名，maxScore=分项满分，classAvg=该分项班内均分）
+    const comps = await listComponents(db, tenantId, exam.id);
+    for (const comp of comps) {
+      const rows = (await listScoresStmt(db, tenantId, comp.component_exam_id).all()).results;
+      const mineRow = rows.find((r) => r.student_id === studentId);
+      const studentScore =
+        mineRow && mineRow.score !== null && mineRow.score !== undefined && mineRow.absent !== 1 ? mineRow.score : null;
+      const maxScore = comp.total_score !== null && comp.total_score !== undefined ? Number(comp.total_score) : null;
+      const classRows = rows.filter(
+        (r) => (r.class_id || null) === (student.class_id || null) && r.score !== null && r.score !== undefined && r.absent !== 1
+      );
+      const classAvg = classRows.length ? round2(classRows.reduce((a, r) => a + r.score, 0) / classRows.length) : null;
+      chartData.push({ questionType: comp.name, studentScore, maxScore, classAvg });
+      const rate = studentScore !== null && maxScore ? studentScore / maxScore : null;
+      if (rate !== null && rate < 0.6) {
+        weakTypes.push({ questionType: comp.name, score: studentScore, maxScore, rate: round2(rate * 100), classAvg });
+      }
+    }
+    suggestions = buildSuggestions(weakTypes);
+  } else {
+    // 非合并：各题型本人得分 vs 班均；一次取全考小分后在内存中按班级聚合
+    const subRes = await db
+      .prepare(
+        `SELECT ss.question_type, ss.student_id, ss.score, ss.max_score, st.class_id
+         FROM exam_subscores ss JOIN students st ON st.id = ss.student_id
+         WHERE ss.tenant_id = ? AND ss.exam_id = ?`
+      )
+      .bind(tenantId, exam.id)
+      .all();
+    const mineRows = subRes.results.filter((r) => r.student_id === studentId);
+    const typeSet = new Set(mineRows.map((r) => r.question_type));
+    for (const qt of [...typeSet].sort()) {
+      const mineRow = mineRows.find((r) => r.question_type === qt);
+      const classRowsOfType = subRes.results.filter(
+        (r) => r.question_type === qt && (r.class_id || null) === (student.class_id || null)
+      );
+      const classAvg = classRowsOfType.length
+        ? round2(classRowsOfType.reduce((a, r) => a + r.score, 0) / classRowsOfType.length)
+        : null;
+      const rate =
+        mineRow.max_score ? round2(mineRow.score / mineRow.max_score) : null;
+      chartData.push({
         questionType: qt,
-        score: mineRow.score,
+        studentScore: mineRow.score,
         maxScore: mineRow.max_score,
-        rate: round2(rate * 100),
         classAvg,
       });
+      if (rate !== null && rate < 0.6) {
+        weakTypes.push({
+          questionType: qt,
+          score: mineRow.score,
+          maxScore: mineRow.max_score,
+          rate: round2(rate * 100),
+          classAvg,
+        });
+      }
     }
-  }
 
-  // 针对性建议
-  const suggestions = [];
-  if (weakTypes.length === 0) {
-    suggestions.push('本次考试各题型得分率均在 60% 以上，知识体系较为扎实，建议保持现有学习节奏并适当拔高。');
-  } else {
-    for (const w of weakTypes) {
-      suggestions.push(
-        `「${w.questionType}」题型得分率 ${w.rate}%（得分 ${w.score}/${w.maxScore}，班均 ${w.classAvg ?? '—'}），低于 60%，建议针对该题型进行专项练习并整理错题。`
-      );
+    // 针对性建议
+    if (weakTypes.length === 0) {
+      suggestions.push('本次考试各题型得分率均在 60% 以上，知识体系较为扎实，建议保持现有学习节奏并适当拔高。');
+    } else {
+      for (const w of weakTypes) {
+        suggestions.push(
+          `「${w.questionType}」题型得分率 ${w.rate}%（得分 ${w.score}/${w.maxScore}，班均 ${w.classAvg ?? '—'}），低于 60%，建议针对该题型进行专项练习并整理错题。`
+        );
+      }
+      suggestions.push('建议将薄弱题型的错题按考点归类，每周安排一次限时专项训练，并及时复习巩固。');
     }
-    suggestions.push('建议将薄弱题型的错题按考点归类，每周安排一次限时专项训练，并及时复习巩固。');
   }
 
   return c.json({

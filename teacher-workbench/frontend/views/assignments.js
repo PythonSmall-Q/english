@@ -115,13 +115,14 @@
     const statusBadge =
       a.status === 'active'
         ? '<span class="badge badge-success">进行中</span>'
-        : `<span class="badge badge-leave">${App.esc(a.status || '未知')}</span>`;
+        : `<span class="badge badge-leave">${App.esc(a.status === 'closed' ? I18n.t('已结束') : a.status || '未知')}</span>`;
     // 已归档（§63）：明细已删，隐藏写操作与详情入口（详情 404），仅展示提交统计与「已归档」徽标
     const archived = !!a.archived;
-    // 登记上交/删除/置顶仅该班可管理时显示；详情始终可见（已归档除外）
+    // 登记上交/编辑/删除/置顶仅该班可管理时显示；详情始终可见（已归档除外）
     const canManage = !archived && canManageMap.get(a.classId);
     const writeBtns = canManage
       ? `<button class="btn btn-sm" data-act="pin" type="button">${a.pinned ? '📌 取消置顶' : '📌 置顶'}</button>
+         <button class="btn btn-sm" data-act="edit" type="button">${App.esc(I18n.t('编辑'))}</button>
          <button class="btn btn-sm btn-primary" data-act="register" type="button">登记上交</button>
          <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>`
       : '';
@@ -282,6 +283,104 @@
               stats: { total: null, submitted: 0, missing: 0, submitRate: 0 },
               targetIds,
             });
+            renderContent();
+          } catch (err) {
+            App.toast(errMsg(err));
+          }
+        };
+      }
+    );
+  }
+
+  // ===== 弹窗：编辑作业（字段与新建一致：标题/内容/截止/状态/置顶/提交范围；班级不回改） =====
+
+  async function openEdit(id) {
+    const a = assignments.find((x) => x.id === id);
+    if (!a) return;
+    const cls = classes.find((c) => c.id === a.classId);
+    let students = [];
+    try {
+      const data = await api.students.list({ class_id: a.classId });
+      // 豁免登记学生不参与指定名单（与新建口径一致）
+      students = (data.students || []).filter((s) => !s.exempt);
+    } catch (err) {
+      App.toast(errMsg(err, '学生名单加载失败'));
+      return;
+    }
+    students.sort((x, y) => String(x.student_no || '').localeCompare(String(y.student_no || '')));
+    const hasTargets = Array.isArray(a.targetIds) && a.targetIds.length > 0;
+    App.modal(
+      I18n.t('编辑作业'),
+      `
+        <label class="form-label">班级</label>
+        <div class="form-input" style="background:var(--bg)">${App.esc(cls ? cls.name : a.classId)}</div>
+        <label class="form-label">${App.esc(I18n.t('标题'))} *</label>
+        <input id="asg-e-title" class="form-input" value="${App.esc(a.title)}">
+        <label class="form-label">${App.esc(I18n.t('内容'))}</label>
+        <textarea id="asg-e-content" class="form-input">${App.esc(a.content || '')}</textarea>
+        <label class="form-label">${App.esc(I18n.t('截止时间'))}</label>
+        <input id="asg-e-deadline" class="form-input" type="datetime-local" value="${App.esc(a.deadline || '')}">
+        <label class="form-label">${App.esc(I18n.t('状态'))}</label>
+        <select id="asg-e-status" class="form-input">
+          <option value="active"${a.status !== 'closed' ? ' selected' : ''}>${App.esc(I18n.t('进行中'))}</option>
+          <option value="closed"${a.status === 'closed' ? ' selected' : ''}>${App.esc(I18n.t('已结束'))}</option>
+        </select>
+        <label style="display:block;margin-top:8px"><input id="asg-e-pinned" type="checkbox"${a.pinned ? ' checked' : ''}> ${App.esc(I18n.t('置顶'))}</label>
+        <label class="form-label">${App.esc(I18n.t('提交范围'))}</label>
+        <label><input type="radio" name="asg-e-target-mode" value="all"${hasTargets ? '' : ' checked'}> ${App.esc(I18n.t('全班学生'))}</label>
+        <label style="display:block;margin-top:6px"><input type="radio" name="asg-e-target-mode" value="selected"${hasTargets ? ' checked' : ''}> ${App.esc(I18n.t('指定部分学生'))}</label>
+        <div id="asg-e-target-list" class="asg-check-list" style="display:${hasTargets ? '' : 'none'};margin-top:8px;max-height:220px">${
+          students.length
+            ? checkListHtml(
+                students.map((s) => ({ studentId: s.id, studentNo: s.student_no, name: s.name })),
+                (s) => hasTargets && a.targetIds.includes(s.studentId)
+              )
+            : `<div class="muted">${App.esc(I18n.t('暂无学生'))}</div>`
+        }</div>
+        <div class="modal-actions">
+          <button class="btn" id="asg-e-cancel" type="button">${App.esc(I18n.t('取消'))}</button>
+          <button class="btn btn-primary" id="asg-e-save" type="button">${App.esc(I18n.t('保存'))}</button>
+        </div>`,
+      () => {
+        const targetList = document.getElementById('asg-e-target-list');
+        document.querySelectorAll('input[name=asg-e-target-mode]').forEach((radio) => {
+          radio.onchange = () => {
+            targetList.style.display = radio.checked && radio.value === 'selected' ? '' : 'none';
+          };
+        });
+        document.getElementById('asg-e-cancel').onclick = App.closeModal;
+        document.getElementById('asg-e-save').onclick = async () => {
+          const selectedMode = document.querySelector('input[name=asg-e-target-mode]:checked').value;
+          const targetIds = selectedMode === 'selected'
+            ? [...targetList.querySelectorAll('input[data-sid]:checked')].map((cb) => cb.dataset.sid)
+            : null;
+          if (selectedMode === 'selected' && !targetIds.length) {
+            App.toast(I18n.t('请至少选择一名学生'));
+            return;
+          }
+          const body = {
+            title: document.getElementById('asg-e-title').value.trim(),
+            content: document.getElementById('asg-e-content').value.trim(),
+            deadline: document.getElementById('asg-e-deadline').value || null,
+            status: document.getElementById('asg-e-status').value,
+            pinned: document.getElementById('asg-e-pinned').checked ? 1 : 0,
+            targetIds,
+          };
+          if (!body.title) {
+            App.toast(I18n.t('请输入标题'));
+            return;
+          }
+          try {
+            await api.assignments.update(id, body);
+            App.closeModal();
+            App.toast(I18n.t('保存成功'));
+            // 就地更新：直接以表单值 patch 本条，避免整表重拉
+            a.title = body.title;
+            a.content = body.content;
+            a.deadline = body.deadline;
+            a.status = body.status;
+            a.pinned = body.pinned;
+            a.targetIds = targetIds;
             renderContent();
           } catch (err) {
             App.toast(errMsg(err));
@@ -564,6 +663,7 @@
         if (act === 'register') openRegister(id);
         else if (act === 'detail') openDetail(id);
         else if (act === 'pin') togglePin(id);
+        else if (act === 'edit') openEdit(id);
         else if (act === 'del') removeAssignment(id);
       });
 

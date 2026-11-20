@@ -249,11 +249,17 @@ async function main() {
   const dash = await api1('GET', '/dashboard');
   const dd = dash.payload?.data;
   check(
-    'dashboard 四类数据齐全（todaySchedules/lessonTodo/recentAssignments/stats）',
+    'dashboard 三类数据齐全（todaySchedules/lessonTodo/recentAssignments）',
     dash.status === 200 && !!dd &&
-      Array.isArray(dd.todaySchedules) && Array.isArray(dd.lessonTodo) && Array.isArray(dd.recentAssignments) &&
-      dd.stats.classes === 2 && dd.stats.students === 6 && dd.stats.pendingAssignments === 1,
-    JSON.stringify(dd?.stats)
+      Array.isArray(dd.todaySchedules) && Array.isArray(dd.lessonTodo) && Array.isArray(dd.recentAssignments),
+    JSON.stringify(dd && Object.keys(dd))
+  );
+  check(
+    'dashboard 最近作业统计正确（作业1 total=3 / submitted=2）',
+    !!dd && !!dd.recentAssignments[0] &&
+      dd.recentAssignments[0].title === '作业1：词汇练习' &&
+      dd.recentAssignments[0].total_count === 3 && dd.recentAssignments[0].submitted_count === 2,
+    JSON.stringify(dd?.recentAssignments?.[0] && { t: dd.recentAssignments[0].total_count, s: dd.recentAssignments[0].submitted_count })
   );
 
   // ---------- 12. 学生名单导入（1 班匹配 1 班未匹配） ----------
@@ -311,26 +317,16 @@ async function main() {
     `HTTP ${crossRestore.status} ${JSON.stringify(crossRestore.payload)}`
   );
 
-  // ---------- 15. AI：首次成功，第 21 次 403 QUOTA_EXCEEDED（20/月） ----------
+  // ---------- 15. AI：功能已整体下线（9775b06），接口统一返回 503 AI_DISABLED ----------
+  // 后端保留 AI 调用代码，产品当前禁用；此处断言下线口径而非旧的配额口径
   const ai1 = await api1('POST', '/ai/generate', { type: 'practice', prompt: '一般过去时' });
-  check('AI generate 返回 result（mock 或真实）', ai1.status === 201 && typeof ai1.payload?.data?.result === 'string' && ai1.payload.data.result.length > 0);
-  let aiBlocked = null;
-  for (let i = 2; i <= 25; i++) {
-    const r = await api1('POST', '/ai/generate', { type: 'translate', prompt: 'hello' });
-    if (r.status === 403) {
-      aiBlocked = { i, code: r.payload?.error?.code };
-      break;
-    }
-    if (r.status !== 201) {
-      aiBlocked = { i, unexpected: r.status, payload: r.payload };
-      break;
-    }
-  }
-  check(
-    'AI 配额：第 21 次 403 QUOTA_EXCEEDED（默认 20/月）',
-    !!aiBlocked && aiBlocked.i === 21 && aiBlocked.code === 'QUOTA_EXCEEDED',
-    JSON.stringify(aiBlocked)
-  );
+  check('AI 已下线：generate → 503 AI_DISABLED',
+    ai1.status === 503 && ai1.payload?.error?.code === 'AI_DISABLED',
+    `HTTP ${ai1.status} ${JSON.stringify(ai1.payload)}`);
+  const aiHist = await api1('GET', '/ai/sessions');
+  check('AI 已下线：sessions → 503 AI_DISABLED',
+    aiHist.status === 503 && aiHist.payload?.error?.code === 'AI_DISABLED',
+    `HTTP ${aiHist.status}`);
 
   // ---------- 16. Files：R2 真实上传/查询/删除 ----------
   const uploadRes = await fetch(BASE + '/files', {
@@ -374,6 +370,141 @@ async function main() {
     adminGet.status === 403 && adminGet.payload?.error?.code === 'FORBIDDEN',
     `HTTP ${adminGet.status}`
   );
+
+  // ---------- 18. 合并考试：分项之和口径 ----------
+  // 两场全年段分项考试（满分各 150）；王五在分项1缺考、分项2无行 → 合并后不计入统计
+  const cx1 = await api1('POST', '/exams', { name: '分项·期中', total_score: 150, exam_date: '2026-11-01' });
+  const cx2 = await api1('POST', '/exams', { name: '分项·月考', total_score: 150, exam_date: '2026-12-01' });
+  const cx1Id = cx1.payload?.data?.id;
+  const cx2Id = cx2.payload?.data?.id;
+  check('合并考试前置：创建 2 场分项考试（201）', cx1.status === 201 && cx2.status === 201 && !!cx1Id && !!cx2Id);
+
+  await api1('POST', `/exams/${cx1Id}/import`, {
+    type: 'scores',
+    rows: [
+      { studentNo: '202401', score: 120 }, // 张三
+      { studentNo: '202402', score: 90 }, // 李四
+      { studentNo: '202403', score: null }, // 王五缺考
+    ],
+  });
+  const impCx2 = await api1('POST', `/exams/${cx2Id}/import`, {
+    type: 'scores',
+    rows: [
+      { studentNo: '202401', score: 100 },
+      { studentNo: '202402', score: 30 },
+    ],
+  });
+  check('合并考试前置：分项成绩导入成功', impCx2.status === 200 && impCx2.payload.data.created === 2);
+
+  // 分项不足 2 个 → 400
+  const comBad = await api1('POST', '/exams/com', { name: '坏合并', component_ids: [cx1Id] });
+  check('合并考试校验：分项不足 2 个 → 400 VALIDATION_ERROR',
+    comBad.status === 400 && comBad.payload?.error?.code === 'VALIDATION_ERROR',
+    `HTTP ${comBad.status} ${JSON.stringify(comBad.payload)}`);
+
+  const com = await api1('POST', '/exams/com', { name: '合并·期中+月考', component_ids: [cx1Id, cx2Id] });
+  const comId = com.payload?.data?.id;
+  check('创建合并考试（201，total_score=300，scope=grade，composite=1）',
+    com.status === 201 && !!comId && com.payload.data.total_score === 300 &&
+      com.payload.data.composite === 1 && com.payload.data.scope === 'grade',
+    JSON.stringify(com.payload));
+
+  // 列表：合并行人数/均分按有效总分重算，行上附 components
+  const comList = await api1('GET', '/exams');
+  const comRow = (comList.payload?.data || []).find((e) => e.id === comId);
+  check('合并考试列表：student_count=2 / avg_score=170 / components=2',
+    !!comRow && comRow.student_count === 2 && comRow.avg_score === 170 &&
+      Array.isArray(comRow.components) && comRow.components.length === 2 &&
+      comRow.components[0].id === cx1Id && comRow.components[0].name === '分项·期中',
+    JSON.stringify(comRow && { c: comRow.student_count, a: comRow.avg_score, comps: comRow.components }));
+
+  // 详情：exam 上有序 components；分数行带 components 明细；总分=分项之和
+  const comDetail = await api1('GET', `/exams/${comId}`);
+  const cd = comDetail.payload?.data;
+  const cdZs = (cd?.scores || []).find((s) => s.student_id === s1); // 张三
+  const cdWw = (cd?.scores || []).find((s) => s.student_id === s3); // 王五
+  check('合并考试详情：有序 components + 分数行明细 + 总分=分项之和',
+    comDetail.status === 200 && !!cd &&
+      Array.isArray(cd.components) && cd.components.length === 2 &&
+      cd.components[0].id === cx1Id && cd.components[1].id === cx2Id &&
+      !!cdZs && cdZs.score === 220 &&
+      Array.isArray(cdZs.components) && cdZs.components.length === 2 &&
+      cdZs.components[0].examId === cx1Id && cdZs.components[0].score === 120 &&
+      cdZs.components[1].examId === cx2Id && cdZs.components[1].score === 100 &&
+      !!cdWw && cdWw.score === null && cdWw.absent === 1,
+    JSON.stringify(cdZs && { score: cdZs.score, comps: cdZs.components }));
+
+  // 分析：overview/rankings 用有效总分；questionTypes 返回 []
+  const comAnalysis = await api1('GET', `/exams/${comId}/analysis`);
+  const ca = comAnalysis.payload?.data;
+  check('合并考试分析：participants=2 / avg=170 / max=220 / questionTypes=[]',
+    comAnalysis.status === 200 && !!ca &&
+      ca.overview.participants === 2 && ca.overview.avg === 170 && ca.overview.max === 220 &&
+      Array.isArray(ca.questionTypes) && ca.questionTypes.length === 0 &&
+      ca.rankings.length === 1 && ca.rankings[0].list.length === 2 &&
+      ca.rankings[0].list[0].studentName === '张三' && ca.rankings[0].list[0].score === 220,
+    JSON.stringify(ca?.overview));
+
+  // 写操作拦截：PUT 学生成绩 / import 均 400
+  const comPut = await api1('PUT', `/exams/${comId}/students/${s1}`, { score: 200 });
+  const comImp = await api1('POST', `/exams/${comId}/import`, { type: 'scores', rows: [{ studentNo: '202401', score: 100 }] });
+  check('合并考试写拦截：PUT 学生成绩 → 400 VALIDATION_ERROR',
+    comPut.status === 400 && comPut.payload?.error?.code === 'VALIDATION_ERROR',
+    `HTTP ${comPut.status}`);
+  check('合并考试写拦截：import → 400 VALIDATION_ERROR',
+    comImp.status === 400 && comImp.payload?.error?.code === 'VALIDATION_ERROR',
+    `HTTP ${comImp.status}`);
+
+  // 学生报告：totalScore=有效总分；chartData 按分项对比；weakTypes 按分项得分率<60%
+  const comReport = await api1('GET', `/exams/${comId}/students/${students['202402']}`); // 李四
+  const cr = comReport.payload?.data;
+  check('合并考试学生报告：totalScore=120 / chartData=分项对比 / weakTypes=月考',
+    comReport.status === 200 && !!cr &&
+      cr.totalScore === 120 && Array.isArray(cr.chartData) && cr.chartData.length === 2 &&
+      cr.chartData[0].questionType === '分项·期中' && cr.chartData[0].studentScore === 90 && cr.chartData[0].maxScore === 150 &&
+      cr.chartData[1].questionType === '分项·月考' && cr.chartData[1].studentScore === 30 && cr.chartData[1].maxScore === 150 &&
+      cr.weakTypes.length === 1 && cr.weakTypes[0].questionType === '分项·月考' && cr.weakTypes[0].rate === 20 &&
+      cr.suggestions.length >= 1,
+    JSON.stringify(cr && { total: cr.totalScore, chart: cr.chartData, weak: cr.weakTypes }));
+
+  // 分项成绩修改后合并视图自动反映（§37 联动）
+  await api1('PUT', `/exams/${cx1Id}/students/${s1}`, { score: 130 });
+  const comDetail2 = await api1('GET', `/exams/${comId}`);
+  const cdZs2 = (comDetail2.payload?.data?.scores || []).find((s) => s.student_id === s1);
+  check('分项成绩修改后合并总分自动反映（220 → 230）', !!cdZs2 && cdZs2.score === 230,
+    JSON.stringify(cdZs2 && { score: cdZs2.score }));
+  await api1('PUT', `/exams/${cx1Id}/students/${s1}`, { score: 120 }); // 还原
+
+  // 导出总分：合并考试用有效总分
+  const comExp = await api1('GET', '/exams/export-totals');
+  const ceScores = comExp.payload?.data?.scores?.[comId];
+  check('export-totals：合并考试分数=有效总分（张三=220，王五=null）',
+    !!ceScores && ceScores[s1] === 220 && ceScores[s3] === null,
+    JSON.stringify(ceScores));
+
+  // 删除合并考试：分项考试及其成绩完好
+  const comDel = await api1('DELETE', `/exams/${comId}`);
+  const cx1After = await api1('GET', `/exams/${cx1Id}`);
+  const cx1Rows = cx1After.payload?.data?.scores || [];
+  const comAfter = await api1('GET', `/exams/${comId}`);
+  check('删除合并考试：分项考试及其成绩完好，合并行已删',
+    comDel.status === 200 && cx1After.status === 200 && cx1Rows.length === 3 &&
+      comAfter.status === 404,
+    `cx1Rows=${cx1Rows.length} comHTTP=${comAfter.status}`);
+
+  // 回收站：捕获含 exam_components 行，恢复后合并考试与分项关系完整
+  const bin = await api1('GET', '/recycle');
+  const binEntry = (bin.payload?.data?.list || []).find(
+    (it) => it.item_type === 'exam' && it.item_id === comId
+  );
+  const binRestore = binEntry ? await api1('POST', `/recycle/${binEntry.id}/restore`) : null;
+  const comRestored = binRestore && binRestore.status === 200 ? await api1('GET', `/exams/${comId}`) : null;
+  check('回收站恢复合并考试：考试与 components 一并恢复',
+    !!binRestore && binRestore.status === 200 && !!comRestored && comRestored.status === 200 &&
+      Array.isArray(comRestored.payload?.data?.components) && comRestored.payload.data.components.length === 2,
+    JSON.stringify(binRestore && binRestore.payload));
+  // 恢复后再删一次，保持后续断言环境干净
+  if (comRestored && comRestored.status === 200) await api1('DELETE', `/exams/${comId}`);
 
   // ---------- 汇总 ----------
   console.log(`\n== 结果：${passed} PASS / ${failed} FAIL ==`);

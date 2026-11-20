@@ -46,6 +46,11 @@
 .ex-report-head label { margin: 0; }
 .ex-badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #4f5bd5; margin-left: 6px; vertical-align: 1px; }
 .ex-badge.ex-badge-grade { background: #e8f7f3; color: #2a9d8f; }
+.ex-badge.ex-badge-composite { background: #fff4e5; color: #d97a1f; }
+.exc-picker { max-height: 240px; overflow-y: auto; border: 1px solid #e6e9f0; border-radius: 8px; padding: 4px 10px; margin: 4px 0; }
+.exc-pick { display: flex; align-items: baseline; gap: 8px; margin: 6px 0; font-size: 13px; cursor: pointer; }
+.exc-pick input { flex-shrink: 0; }
+.exc-pick .exc-pick-meta { color: #8a94a6; font-size: 12px; }
 .ex-scope-row { display: flex; gap: 18px; align-items: center; margin: 4px 0; }
 .ex-scope-row label { display: inline-flex; align-items: center; gap: 5px; margin: 0; font-size: 13px; color: #333; cursor: pointer; }
 .ex-analysis-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; font-size: 13px; color: #555; }
@@ -704,6 +709,31 @@
       : `<span class="ex-badge ex-badge-grade">全年段</span>`;
   }
 
+  /** 合并考试行徽标（紧跟范围徽标） */
+  function compositeBadge(e) {
+    return Number(e.composite) === 1 ? `<span class="ex-badge ex-badge-composite">${esc(I18n.t('合并'))}</span>` : '';
+  }
+
+  /** 分项多选列表 HTML（排除合并考试自身与其他合并行；checkedIds 默认勾选） */
+  function compPickerHtml(candidates, checkedIds) {
+    if (!candidates.length) return `<div class="muted" style="padding:8px 2px">${esc(I18n.t('当前学年暂无可合并的考试'))}</div>`;
+    return candidates
+      .map(
+        (e) => `<label class="exc-pick">
+          <input type="checkbox" value="${esc(e.id)}"${checkedIds.indexOf(e.id) >= 0 ? ' checked' : ''}>
+          <span>${esc(e.name)}</span>
+          <span class="exc-pick-meta">${esc(e.exam_date || '—')} · ${Number(e.student_count || 0)}${esc(I18n.t('人'))}</span>
+        </label>`
+      )
+      .join('');
+  }
+
+  /** 读取分项选择器当前勾选 id 列表 */
+  function compPickerIds(pickerEl) {
+    if (!pickerEl) return [];
+    return Array.from(pickerEl.querySelectorAll('input[type="checkbox"]:checked')).map((i) => i.value);
+  }
+
   function renderList(exams) {
     // 已归档学年（明细已删）：隐藏「新建考试」入口
     const archivedView = exams.some((e) => e.archived);
@@ -724,6 +754,7 @@
           <button class="btn" id="ex-download-archive" type="button" style="display:${showDownload ? '' : 'none'}">下载归档</button>
           <button class="btn" id="ex-export-totals" type="button">导出成绩</button>
           <button class="btn" id="ex-stu-scores" type="button">学生成绩</button>
+          ${canCreateExams && !archivedView ? '<button class="btn" id="ex-new-com" type="button">合并考试</button>' : ''}
           ${canCreateExams && !archivedView ? '<button class="btn btn-primary" id="ex-new" type="button">＋ 新建考试</button>' : ''}
         </span>
       </div>
@@ -740,10 +771,11 @@
           // 已归档（§63）：明细已删，隐藏导入/分析/成绩/报告/试卷/编辑/删除等全部操作（点击均会 404），
           // 仅展示汇总列并在行首显示「已归档」徽标
           const archived = !!e.archived;
+          const isComposite = Number(e.composite) === 1;
           const ops = archived
             ? '<span class="muted" style="font-size:12px">明细已归档</span>'
-            : `${canCreateExams ? `<button class="btn btn-sm" data-act="import-scores" data-id="${esc(e.id)}" type="button">导入成绩</button>
-            <button class="btn btn-sm" data-act="import-subscores" data-id="${esc(e.id)}" type="button">导入小分</button>` : ''}
+            : `${canCreateExams ? `<button class="btn btn-sm" data-act="import-scores" data-id="${esc(e.id)}"${isComposite ? ' data-composite="1"' : ''} type="button">导入成绩</button>
+            <button class="btn btn-sm" data-act="import-subscores" data-id="${esc(e.id)}"${isComposite ? ' data-composite="1"' : ''} type="button">导入小分</button>` : ''}
             <button class="btn btn-sm" data-act="analysis" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">查看分析</button>
             <button class="btn btn-sm" data-act="scores" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">学生成绩</button>
             <button class="btn btn-sm" data-act="report" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">个性化报告</button>
@@ -752,7 +784,7 @@
             <button class="btn btn-sm btn-danger" data-act="del" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">删除</button>`;
           return `
         <tr>
-          <td>${esc(e.name)}${scopeBadge(e)}${archived ? '<span class="badge badge-archived">已归档</span>' : ''}</td>
+          <td>${esc(e.name)}${scopeBadge(e)}${compositeBadge(e)}${archived ? '<span class="badge badge-archived">已归档</span>' : ''}</td>
           <td>${esc(e.subject || '—')}</td>
           <td>${esc(e.exam_date || '—')}</td>
           <td>${Number(e.student_count || 0)}</td>
@@ -773,6 +805,8 @@
     }
     const exNewBtn = wrap.querySelector('#ex-new');
     if (exNewBtn) exNewBtn.addEventListener('click', () => openExamForm(null));
+    const exNewComBtn = wrap.querySelector('#ex-new-com');
+    if (exNewComBtn) exNewComBtn.addEventListener('click', () => openCompositeForm(null));
     return wrap;
   }
 
@@ -866,9 +900,11 @@
   async function onRowAction(d) {
     switch (d.act) {
       case 'import-scores':
+        if (d.composite === '1') return App.toast(I18n.t('请到分项考试中修改成绩'));
         openImportModal(d.id, 'scores');
         break;
       case 'import-subscores':
+        if (d.composite === '1') return App.toast(I18n.t('请到分项考试中修改成绩'));
         openImportModal(d.id, 'subscores');
         break;
       case 'analysis':
@@ -946,9 +982,92 @@
     input.click();
   }
 
+  /**
+   * 新建合并考试（composite）：名称 + 当前学年非合并考试多选（≥2 场），总分由分项自动汇总。
+   * 与编辑合并考试共用；编辑时默认勾选当前 components，分项有变化先 PUT components 再 PUT 基本信息。
+   */
+  function openCompositeForm(exam) {
+    const isEdit = !!exam;
+    // 分项候选：当前学年考试（examsCache），排除全部合并行与自身
+    const checkedIds = isEdit ? (exam.components || []).map((c) => c.id) : [];
+    const candidates = examsCache.filter((e) => Number(e.composite) !== 1 && (!isEdit || e.id !== exam.id));
+
+    App.modal(
+      isEdit ? `${I18n.t('编辑合并考试')} · ${esc(exam.name)}` : I18n.t('新建合并考试'),
+      `
+      <div class="ex-form">
+        <label>考试名称 <span class="ex-weak">*</span></label>
+        <input class="form-input" id="exc-name" value="${esc(exam?.name || '')}" placeholder="如：高三上期中+期末合并">
+        <label>科目</label>
+        <input class="form-input" id="exc-subject" value="${esc(exam?.subject || '')}" placeholder="英语">
+        <label>考试日期</label>
+        <input class="form-input" id="exc-date" type="date" value="${esc(exam?.exam_date || '')}">
+        <label>${esc(I18n.t('分项考试'))} <span class="ex-weak">*</span></label>
+        <div class="ex-hint muted">${esc(I18n.t('合并考试总分由各分项自动汇总，无需导入成绩'))}</div>
+        <div class="exc-picker" id="exc-picker">${compPickerHtml(candidates, checkedIds)}</div>
+        <div class="ex-hint muted" id="exc-count"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="exc-cancel" type="button">取消</button>
+        <button class="btn btn-primary" id="exc-ok" type="button">保存</button>
+      </div>`,
+      (modalEl) => {
+        const pickerEl = modalEl.querySelector('#exc-picker');
+        const countEl = modalEl.querySelector('#exc-count');
+        const okBtn = modalEl.querySelector('#exc-ok');
+        const syncCount = () => {
+          const n = compPickerIds(pickerEl).length;
+          countEl.textContent = I18n.format('已选 {count} 场', { count: n });
+          okBtn.disabled = n < 2;
+        };
+        pickerEl.addEventListener('change', syncCount);
+        syncCount();
+
+        modalEl.querySelector('#exc-cancel').addEventListener('click', () => App.closeModal());
+        modalEl.querySelector('#exc-ok').addEventListener('click', async () => {
+          const body = {
+            name: modalEl.querySelector('#exc-name').value.trim(),
+            subject: modalEl.querySelector('#exc-subject').value.trim(),
+            exam_date: modalEl.querySelector('#exc-date').value,
+          };
+          if (!body.name) return App.toast(I18n.t('考试名称不能为空'));
+          const ids = compPickerIds(pickerEl);
+          if (ids.length < 2) return App.toast(I18n.t('请选择至少 2 场分项考试'));
+          try {
+            if (isEdit) {
+              const oldIds = checkedIds.slice().sort().join(',');
+              const newIds = ids.slice().sort().join(',');
+              let updated = exam;
+              if (oldIds !== newIds) updated = await api.exams.updateComponents(exam.id, { component_ids: ids });
+              await api.exams.update(exam.id, body);
+              // 本地 patch：名称/科目/日期 + 服务端重算的总分与新分项
+              const target = examsCache.find((e) => e.id === exam.id);
+              if (target) {
+                Object.assign(target, body);
+                if (updated && updated.total_score !== undefined) target.total_score = updated.total_score;
+                if (updated && Array.isArray(updated.components)) target.components = updated.components;
+              }
+              App.toast(I18n.t('分项考试已更新'));
+            } else {
+              const created = await api.exams.createComposite({ ...body, component_ids: ids });
+              examsCache.unshift({ ...created, student_count: 0, avg_score: null });
+              App.toast(I18n.t('合并考试已创建'));
+            }
+            App.closeModal();
+            refreshLocal();
+          } catch (err) {
+            reportErr(err);
+          }
+        });
+      }
+    );
+  }
+
   /** 新建 / 编辑考试 */
   async function openExamForm(exam) {
     const isEdit = !!exam;
+    // 合并考试：编辑时隐藏总分输入（自动汇总），改为分项重选区
+    const isComposite = isEdit && Number(exam.composite) === 1;
     // 班级考试：我可管理的班；全年段考试：owner/admin、我带领的年级组或我是任意组备课组长
     let managedClasses = [];
     let canCreateGrade = false;
@@ -980,7 +1099,9 @@
         <label>考试范围</label>
         ${
           isEdit
-            ? `<div class="muted" style="margin:4px 0">${exam.scope === 'class' ? `班级考试（${esc(exam.class_name || '')}）` : '全年段考试'}</div>`
+            ? `<div class="muted" style="margin:4px 0">${exam.scope === 'class' ? `班级考试（${esc(exam.class_name || '')}）` : '全年段考试'}${
+                Number(exam.composite) === 1 ? ` · ${esc(I18n.t('合并考试'))}` : ''
+              }</div>`
             : `<div class="ex-scope-row" id="exf-scope-row">
             <label><input type="radio" name="exf-scope" value="class" checked> 班级考试</label>
             <label><input type="radio" name="exf-scope" value="grade" ${!canCreateGrade ? 'disabled' : ''}> 全年段考试${
@@ -997,10 +1118,21 @@
         }
         <label>科目</label>
         <input class="form-input" id="exf-subject" value="${esc(exam?.subject || '')}" placeholder="英语">
+        ${isComposite ? '' : `
         <label>考试总分</label>
-        <input class="form-input" id="exf-total-score" type="number" min="0.01" step="0.01" value="${exam?.total_score != null ? esc(exam.total_score) : ''}" placeholder="如：150（可选）">
+        <input class="form-input" id="exf-total-score" type="number" min="0.01" step="0.01" value="${exam?.total_score != null ? esc(exam.total_score) : ''}" placeholder="如：150（可选）">`}
         <label>考试日期</label>
         <input class="form-input" id="exf-date" type="date" value="${esc(exam?.exam_date || '')}">
+        ${
+          isComposite
+            ? `<label>${esc(I18n.t('分项考试'))} <span class="ex-weak">*</span></label>
+        <div class="ex-hint muted">${esc(I18n.t('合并考试总分由各分项自动汇总，无需导入成绩'))}</div>
+        <div class="exc-picker" id="exf-picker">${compPickerHtml(
+            examsCache.filter((e) => Number(e.composite) !== 1 && e.id !== exam.id),
+            (exam.components || []).map((c) => c.id)
+          )}</div>`
+            : ''
+        }
       </div>
       <div class="modal-actions">
         <button class="btn" id="exf-cancel" type="button">取消</button>
@@ -1022,16 +1154,18 @@
           const body = {
             name: document.getElementById('exf-name').value.trim(),
             subject: document.getElementById('exf-subject').value.trim(),
-            total_score: document.getElementById('exf-total-score').value.trim(),
             exam_date: document.getElementById('exf-date').value,
           };
           if (!body.name) return App.toast('考试名称不能为空');
-          if (body.total_score !== '') {
-            const totalScore = Number(body.total_score);
-            if (!Number.isFinite(totalScore) || totalScore <= 0) return App.toast('考试总分必须是大于 0 的数字');
-            body.total_score = totalScore;
-          } else {
-            body.total_score = null;
+          if (!isComposite) {
+            body.total_score = document.getElementById('exf-total-score').value.trim();
+            if (body.total_score !== '') {
+              const totalScore = Number(body.total_score);
+              if (!Number.isFinite(totalScore) || totalScore <= 0) return App.toast('考试总分必须是大于 0 的数字');
+              body.total_score = totalScore;
+            } else {
+              body.total_score = null;
+            }
           }
           if (!isEdit) {
             const scope = scopeInputs.find((i) => i.checked)?.value || 'class';
@@ -1043,9 +1177,30 @@
           }
           try {
             if (isEdit) {
+              // 合并考试：分项有变化先整体替换（服务端重算 total_score），再更新名称/科目/日期
+              if (isComposite) {
+                const oldIds = (exam.components || []).map((c) => c.id).sort().join(',');
+                const newIds = compPickerIds(document.getElementById('exf-picker'))
+                  .sort()
+                  .join(',');
+                if (oldIds !== newIds) {
+                  if (!newIds) return App.toast(I18n.t('请选择至少 2 场分项考试'));
+                  const updated = await api.exams.updateComponents(exam.id, {
+                    component_ids: compPickerIds(document.getElementById('exf-picker')),
+                  });
+                  exam.total_score = updated.total_score;
+                  if (Array.isArray(updated.components)) exam.components = updated.components;
+                }
+              }
               await api.exams.update(exam.id, body);
               const target = examsCache.find((e) => e.id === exam.id);
-              if (target) Object.assign(target, body);
+              if (target) {
+                Object.assign(target, body);
+                if (isComposite) {
+                  target.total_score = exam.total_score;
+                  if (Array.isArray(exam.components)) target.components = exam.components;
+                }
+              }
             } else {
               const created = await api.exams.create(body);
               // 新建考试无成绩：人数 0 / 均分 —；列表按日期倒序，新建的排在最前
@@ -1582,6 +1737,17 @@
     const absentSids = new Set(
       (det.scores || []).filter((s) => s.absent || s.score === null).map((s) => s.student_id)
     );
+    // 合并考试：det.components 为有序分项，成绩行各带 components 分项小分
+    const isComposite = Number(det.composite) === 1;
+    const compExams = det.components || [];
+    const compScoreMap = new Map();
+    if (isComposite) {
+      for (const s of det.scores || []) {
+        const m = new Map();
+        for (const c of s.components || []) m.set(c.examId, c.score);
+        compScoreMap.set(s.student_id, m);
+      }
+    }
     const groups = new Map();
     // 豁免登记学生不参与成绩登记名单
     for (const st of (stuData.students || []).filter((s) => !s.exempt)) {
@@ -1602,6 +1768,17 @@
             body.innerHTML = '<div class="muted">当前学年暂无学生。</div>';
             return;
           }
+          // 合并考试：每个分项一列（未登记显示 —），总分列即现有成绩列
+          const compThs = isComposite ? compExams.map((c) => `<th>${esc(c.name)}</th>`).join('') : '';
+          const compTds = (st) =>
+            isComposite
+              ? compExams
+                  .map((c) => {
+                    const v = compScoreMap.has(st.id) ? compScoreMap.get(st.id).get(c.id) : undefined;
+                    return `<td>${fmtScore(v === undefined ? null : v)}</td>`;
+                  })
+                  .join('')
+              : '';
           const blocks = [...groups.entries()]
             .map(([cid, list]) => {
               const clsName = list[0]?.class_name || '未分班';
@@ -1622,6 +1799,7 @@
                   return `<tr>
                     <td>${esc(st.student_no || '—')}</td>
                     <td>${esc(st.name)}</td>
+                    ${compTds(st)}
                     <td class="exs-score">${scoreCell}</td>
                     <td class="exs-ops">${
                       canEdit
@@ -1635,13 +1813,18 @@
                 <div class="card-title" style="margin:0 0 6px">${esc(clsName)}${
                   canEdit ? '' : ' <span class="muted" style="font-size:12px;font-weight:400">（只读）</span>'
                 }</div>
-                <table class="table"><thead><tr><th>学号</th><th>姓名</th><th>成绩</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+                <table class="table"><thead><tr><th>学号</th><th>姓名</th>${compThs}<th>成绩</th><th></th></tr></thead><tbody>${rows}</tbody></table>
               </div>`;
             })
             .join('');
-          body.innerHTML = `<div class="muted" style="margin-bottom:8px">可管理班级的成绩可直接修改，其他班级只读。</div>${blocks}`;
+          body.innerHTML = `<div class="muted" style="margin-bottom:8px">${
+            isComposite ? esc(I18n.t('请到分项考试中修改成绩')) : '可管理班级的成绩可直接修改，其他班级只读。'
+          }</div>${blocks}`;
           body.querySelectorAll('[data-edit-sid]').forEach((btn) => {
-            btn.addEventListener('click', () => startEdit(btn.dataset.editSid, btn.dataset.editName, btn.closest('tr')));
+            btn.addEventListener('click', () => {
+              if (isComposite) return App.toast(I18n.t('请到分项考试中修改成绩'));
+              startEdit(btn.dataset.editSid, btn.dataset.editName, btn.closest('tr'));
+            });
           });
         }
 
@@ -1718,6 +1901,7 @@
 
         function render(data) {
           const { overview, classCompare, questionTypes, rankings } = data;
+          const isComposite = Number(data.exam?.composite) === 1;
           const kpi = (num, label) => `<div class="ex-kpi"><div class="ex-kpi-num">${num}</div><div class="ex-kpi-label">${label}</div></div>`;
 
           const gradeAverage = data.gradeAverage;
@@ -1800,7 +1984,9 @@
             <div class="ex-ga-summary">${gradeAverage === null || gradeAverage === undefined ? '<span class="muted">未填写年级均分，图表不显示对比线</span>' : '图中红色虚线为手工输入的年级均分'}</div>
             <div class="ex-sec-title">各题型均分与得分率</div>
             ${
-              questionTypes && questionTypes.length
+              isComposite
+                ? `<div class="muted">${esc(I18n.t('合并考试无题型小分，请查看各分项考试'))}</div>`
+                : questionTypes && questionTypes.length
                 ? `<table class="table"><thead><tr><th>题型</th><th>人数</th><th>均分</th><th>得分率</th></tr></thead><tbody>${qtRows}</tbody></table>`
                 : '<div class="muted">尚未导入小分，导入后可查看各题型分析。</div>'
             }
@@ -1817,6 +2003,7 @@
           body.querySelectorAll('button[data-act="edit-score"]').forEach((btn) => {
             btn.addEventListener('click', (ev) => {
               ev.stopPropagation();
+              if (isComposite) return App.toast(I18n.t('请到分项考试中修改成绩'));
               openEditScore(examId, examName, btn.dataset.sid, btn.dataset.sname, btn.dataset.score, reload);
             });
           });

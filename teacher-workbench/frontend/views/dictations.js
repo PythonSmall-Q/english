@@ -502,7 +502,8 @@
         ? `<button class="btn btn-sm" data-act="retest" data-ctx="${App.esc(ctxClassId || '')}" type="button">重默 ${st.retestRequired}</button>`
         : '',
       canManageItem
-        ? `<button class="btn btn-sm" data-act="material" type="button">${d.materialUrl ? '重传材料' : '上传材料'}</button>
+        ? `<button class="btn btn-sm" data-act="edit" type="button">${App.esc(I18n.t('编辑'))}</button>
+           <button class="btn btn-sm" data-act="material" type="button">${d.materialUrl ? '重传材料' : '上传材料'}</button>
            <button class="btn btn-sm btn-danger" data-act="del" type="button">删除</button>`
         : '',
     ].join('');
@@ -639,6 +640,56 @@
               academicYear: App.state?.academicYear || null,
               stats: { passed: 0, failed: 0, retestRequired: 0, retestCompleted: 0 },
             });
+            renderContent();
+          } catch (err) {
+            App.toast(errMsg(err));
+          }
+        };
+      }
+    );
+  }
+
+  // ===== 弹窗：编辑默写（标题/日期/材料链接；范围与班级不回改） =====
+
+  function openEdit(id) {
+    const d = dictations.find((x) => x.id === id);
+    if (!d) return;
+    const cls = classes.find((c) => c.id === d.classId);
+    App.modal(
+      I18n.t('编辑默写'),
+      `
+        <label class="form-label">班级</label>
+        <div class="form-input" style="background:var(--bg)">${App.esc(d.scope === 'grade' ? I18n.t('全年段') : cls ? cls.name : d.classId)}</div>
+        <label class="form-label">${App.esc(I18n.t('标题'))} *</label>
+        <input id="dct-e-title" class="form-input" value="${App.esc(d.title)}">
+        <label class="form-label">${App.esc(I18n.t('日期'))}</label>
+        <input id="dct-e-date" class="form-input" type="date" value="${App.esc(d.dictationDate || '')}">
+        <label class="form-label">${App.esc(I18n.t('材料链接'))}</label>
+        <input id="dct-e-material" class="form-input" placeholder="https://" value="${App.esc(d.materialUrl || '')}">
+        <div class="modal-actions">
+          <button class="btn" id="dct-e-cancel" type="button">${App.esc(I18n.t('取消'))}</button>
+          <button class="btn btn-primary" id="dct-e-save" type="button">${App.esc(I18n.t('保存'))}</button>
+        </div>`,
+      (modal) => {
+        modal.querySelector('#dct-e-cancel').onclick = App.closeModal;
+        modal.querySelector('#dct-e-save').onclick = async () => {
+          const body = {
+            title: modal.querySelector('#dct-e-title').value.trim(),
+            dictation_date: modal.querySelector('#dct-e-date').value || null,
+            material_url: modal.querySelector('#dct-e-material').value.trim() || null,
+          };
+          if (!body.title) {
+            App.toast(I18n.t('请输入标题'));
+            return;
+          }
+          try {
+            await api.dictations.update(id, body);
+            App.closeModal();
+            App.toast(I18n.t('保存成功'));
+            // 就地更新：直接以表单值 patch 本条，避免整表重拉
+            d.title = body.title;
+            d.dictationDate = body.dictation_date;
+            d.materialUrl = body.material_url;
             renderContent();
           } catch (err) {
             App.toast(errMsg(err));
@@ -1183,6 +1234,7 @@
         const act = btn.dataset.act;
         if (act === 'register') openRegister(id);
         else if (act === 'retest') openRetestItem(id, btn.dataset.ctx || null);
+        else if (act === 'edit') openEdit(id);
         else if (act === 'material') uploadMaterial(id);
         else if (act === 'detail') openDetail(id);
         else if (act === 'del') removeDictation(id);

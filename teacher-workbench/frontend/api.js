@@ -315,6 +315,10 @@
   const exams = {
     list: (query) => request('/exams', { query }),
     create: (body) => request('/exams', { method: 'POST', body }),
+    /** 合并考试：引用 ≥2 场分项考试，总分自动汇总（不占 exams 配额） */
+    createComposite: (body) => request('/exams/com', { method: 'POST', body }),
+    /** 合并考试分项整体替换（body { component_ids }，服务端重算 total_score） */
+    updateComponents: (id, body) => request(`/exams/${id}/components`, { method: 'PUT', body }),
     get: (id) => request(`/exams/${id}`),
     update: (id, body) => request(`/exams/${id}`, { method: 'PUT', body }),
     remove: (id) => request(`/exams/${id}`, { method: 'DELETE' }),
