@@ -229,7 +229,7 @@
     '按名单生成': ['From roster', '按名單生成'],
     '空表格（自定义顺序）': ['Blank sheet (custom order)', '空表格（自訂順序）'],
     '增加 10 行': ['Add 10 rows', '增加 10 列'],
-    '在线填写提示': ['Headers are fixed. All data cells are editable and accept Excel paste (multi-row, multi-column; rows auto-extend). Blank = skip, type 缺考 = absent. In blank-sheet mode use the toggles to choose columns (grade/class optional; a student no. that differs from the system is fine — matching falls back to name, and duplicate names can be told apart with the class column).', '表頭固定不可修改。所有資料儲存格均可直接編輯或從 Excel 貼上（支援多行多列，自動擴展行數）。留空 = 不錄入，填「缺考」= 記為缺考。空表格模式可用上方開關選擇需要的列（年級/班級可省略；學號與系統不同也沒關係——會改按姓名匹配，重名時可用班級列區分）。'],
+    "表头固定不可修改。「按名单生成」模式下姓名/班级/年级/学号列为名单数据，不可修改；成绩列可直接编辑或粘贴（支持多行多列，自动扩展行，已有成绩会自动预填）。留空 = 不录入，填「缺考」= 记为缺考。空表格模式可用上方开关选择需要的列（年级/班级可省略；学号与系统不同会自动改按姓名匹配，重名时可用班级列区分）。": ["Headers are fixed. In roster mode the name/class/grade/student-no. columns are read-only roster data; score cells are editable and accept Excel paste (multi-row, multi-column; rows auto-extend; existing scores are prefilled). Blank = skip, type 缺考 = absent. In blank-sheet mode use the toggles to choose columns (grade/class optional; a student no. that differs from the system is fine — matching falls back to name, and duplicate names can be told apart with the class column).", "表頭固定不可修改。「按名單生成」模式下姓名/班級/年級/學號列為名單資料，不可修改；成績列可直接編輯或從 Excel 貼上（支援多行多列，自動擴展行，已有成績會自動預填）。留空 = 不錄入，填「缺考」= 記為缺考。空表格模式可用上方開關選擇需要的列（年級/班級可省略；學號與系統不同會自動改按姓名匹配，重名時可用班級列區分）。"],
     '清空成绩': ['Clear scores', '清空成績'],
     '校验并导入': ['Validate & import', '校驗並匯入'],
     '没有可导入的成绩': ['Nothing to import', '沒有可匯入的成績'],

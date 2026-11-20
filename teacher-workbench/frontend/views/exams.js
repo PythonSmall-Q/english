@@ -88,6 +88,8 @@
 html[data-theme='dark'] .ex-ol-grid thead th { background: #232a38; box-shadow: 0 1px 0 #333d52; }
 html[data-theme='dark'] .ex-ol-grid tbody tr:nth-child(even) { background: #1c2230; }
 html[data-theme='dark'] .ex-ol-grid td.ex-ol-cell-bad { background: #3a2430; }
+.ex-ol-grid td.ex-ol-fixed { background: #eef1f6; color: #5b6675; cursor: not-allowed; user-select: none; }
+html[data-theme='dark'] .ex-ol-grid td.ex-ol-fixed { background: #20262f; color: #8a94a6; }
 .ex-ol-grid th .ex-ol-colbtn { border: 0; background: transparent; cursor: pointer; color: #8a94a6; font-size: 11px; padding: 0 3px; border-radius: 4px; }
 .ex-ol-grid th .ex-ol-colbtn:hover { background: #e6ecf5; color: #2458b8; }
 .ex-ol-colmenu { position: absolute; z-index: 50; background: #fff; border: 1px solid #d8dee9; border-radius: 10px; box-shadow: 0 8px 24px rgba(30,45,80,.16); padding: 6px; min-width: 140px; }
@@ -1522,15 +1524,24 @@ html[data-theme='dark'] .ex-ol-grid td.ex-ol-cell-bad { background: #3a2430; }
           return;
         }
         const isCom = Number(exam.composite) === 1;
+        let prefillMaps = [];
         let cols;
         if (isCom) {
           const comps = exam.components || [];
-          const totals = await Promise.all(
-            comps.map((c) => api.exams.get(c.id).then((d) => d.total_score ?? null).catch(() => null))
-          );
-          cols = comps.map((c, i) => ({ id: c.id, name: c.name, total: totals[i] }));
+          const compDetails = await Promise.all(comps.map((c) => api.exams.get(c.id).catch(() => null)));
+          cols = comps.map((c, i) => ({ id: c.id, name: c.name, total: compDetails[i]?.total_score ?? null }));
+          prefillMaps = cols.map(() => new Map());
+          compDetails.forEach((d, i) => {
+            ((d && d.scores) || []).forEach((s) => {
+              prefillMaps[i].set(s.student_id, s.absent ? '缺考' : String(s.score));
+            });
+          });
         } else {
           cols = [{ id: exam.id, name: exam.name, total: exam.total_score ?? null }];
+          prefillMaps = cols.map(() => new Map());
+          (exam.scores || []).forEach((s) => {
+            prefillMaps[0].set(s.student_id, s.absent ? '缺考' : String(s.score));
+          });
         }
 
         // 名单（班级考试仅本班；全年段/合并考试取全年级名单）
@@ -1566,7 +1577,7 @@ html[data-theme='dark'] .ex-ol-grid td.ex-ol-cell-bad { background: #3a2430; }
           <span class="muted" id="exol-live" style="font-size:12px;margin-left:auto" title="${esc(I18n.t('点击跳转到首个待核实行'))}"></span>
         </div>
         <div id="exol-draft" class="ex-detect-ok ex-ol-draft" style="display:none;margin-bottom:8px"></div>
-        <div class="ex-hint muted">${esc(I18n.t('在线填写提示'))}</div>
+        <div class="ex-hint muted">${esc(I18n.t('表头固定不可修改。「按名单生成」模式下姓名/班级/年级/学号列为名单数据，不可修改；成绩列可直接编辑或粘贴（支持多行多列，自动扩展行，已有成绩会自动预填）。留空 = 不录入，填「缺考」= 记为缺考。空表格模式可用上方开关选择需要的列（年级/班级可省略；学号与系统不同会自动改按姓名匹配，重名时可用班级列区分）。'))}</div>
         <div class="ex-ol-grid-wrap" style="max-height:46vh;overflow:auto;border:1px solid #e2e7f0;border-radius:10px">
           <table class="table ex-ol-grid" id="exol-grid" style="margin:0;min-width:520px">
             <thead id="exol-head"></thead>
@@ -1621,16 +1632,24 @@ html[data-theme='dark'] .ex-ol-grid td.ex-ol-cell-bad { background: #3a2430; }
 
         function rowHtml(r, stu) {
           const seq = colSeq();
+          // 名单模式下前置列是名单数据，只读不可修改（空表格模式全部可编辑）
+          const roLead = !!(stu && mode === 'roster');
+          const leadTd = (key, text) =>
+            roLead
+              ? `<td class="ex-ol-fixed" data-f="${key}">${esc(text)}</td>`
+              : `<td contenteditable="true" data-f="${key}">${esc(text)}</td>`;
           const tds = seq
             .map((key) => {
-              if (key === 'name') return `<td contenteditable="true" data-f="name">${esc(stu ? stu.name : '')}</td>`;
-              if (key === 'cls') return `<td contenteditable="true" data-f="cls">${esc(stu ? stu.class_name || '' : '')}</td>`;
-              if (key === 'grade') return `<td contenteditable="true" data-f="grade">${esc(stu && stu.class_id ? gradeByClass[stu.class_id] || '' : '')}</td>`;
-              if (key === 'no') return `<td contenteditable="true" data-f="no">${esc(stu ? stu.student_no || '' : '')}</td>`;
-              return `<td contenteditable="true" data-f="score" data-ci="${Number(key.slice(1))}"></td>`;
+              if (key === 'name') return leadTd('name', stu ? stu.name : '');
+              if (key === 'cls') return leadTd('cls', stu ? stu.class_name || '' : '');
+              if (key === 'grade') return leadTd('grade', stu && stu.class_id ? gradeByClass[stu.class_id] || '' : '');
+              if (key === 'no') return leadTd('no', stu ? stu.student_no || '' : '');
+              const ci = Number(key.slice(1));
+              const pre = stu && prefillMaps[ci] ? prefillMaps[ci].get(stu.id) || '' : '';
+              return `<td contenteditable="true" data-f="score" data-ci="${ci}">${esc(pre)}</td>`;
             })
             .join('');
-          return `<tr><td class="ex-ol-idx muted" style="width:44px">${r + 1}</td>${tds}</tr>`;
+          return `<tr${stu ? ` data-sid="${esc(stu.id)}"` : ''}><td class="ex-ol-idx muted" style="width:44px">${r + 1}</td>${tds}</tr>`;
         }
         /** 读取一行当前值（切列/重建时保留已填内容） */
         function snapshotRow(tr) {
@@ -1805,7 +1824,8 @@ html[data-theme='dark'] .ex-ol-grid td.ex-ol-cell-bad { background: #3a2430; }
           if (!td) return;
           const tr = td.closest('tr');
           const r = Array.from(tbody.querySelectorAll('tr')).indexOf(tr);
-          const seq = colSeq();
+          // 名单模式下前置列只读：键盘导航仅在可编辑列（成绩列）间移动
+          const seq = colSeq().filter((k) => mode === 'empty' || k[0] === 's');
           const idx = seq.indexOf(cellKeyOf(td));
           if (idx < 0) return;
           if (e.key === 'Enter' && !e.shiftKey) {
@@ -1938,7 +1958,7 @@ html[data-theme='dark'] .ex-ol-grid td.ex-ol-cell-bad { background: #3a2430; }
                 if (!key) return;
               }
               const cell = cellOf(tr, key);
-              if (!cell) return;
+              if (!cell || !cell.isContentEditable) return; // 名单列只读：跳过
               cell.textContent = key[0] === 's' ? toHalfWidth(val) : val;
             });
           });
