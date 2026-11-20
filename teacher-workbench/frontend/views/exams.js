@@ -76,6 +76,27 @@
 .ex-stupick-item:hover, .ex-stupick-item.active { background: #f0f6ff; color: #2458b8; }
 .ex-stupick-item .ex-stupick-no { color: #8a94a6; font-size: 12px; margin-left: 6px; }
 .ex-stupick-empty { padding: 12px 10px; color: #8a94a6; font-size: 13px; }
+/* ===== 在线填写成绩表格 ===== */
+.ex-ol-grid { border-collapse: separate; border-spacing: 0; }
+.ex-ol-grid thead th { position: sticky; top: 0; z-index: 2; background: #f4f7fb; box-shadow: 0 1px 0 #dfe5ee; white-space: nowrap; font-weight: 600; }
+.ex-ol-grid tbody tr:nth-child(even) { background: #fafbfd; }
+.ex-ol-grid td[contenteditable] { min-width: 60px; caret-color: #4f8ef7; }
+.ex-ol-grid td[contenteditable]:focus { outline: 2px solid #4f8ef7; outline-offset: -2px; background: #fff; }
+.ex-ol-grid tr.ex-ol-ok > td.ex-ol-idx { box-shadow: inset 3px 0 0 #37b26c; color: #37b26c; font-weight: 600; }
+.ex-ol-grid tr.ex-ol-bad > td.ex-ol-idx { box-shadow: inset 3px 0 0 #d64545; color: #d64545; font-weight: 600; }
+.ex-ol-grid td.ex-ol-cell-bad { background: #fdeeee; color: #d64545; }
+html[data-theme='dark'] .ex-ol-grid thead th { background: #232a38; box-shadow: 0 1px 0 #333d52; }
+html[data-theme='dark'] .ex-ol-grid tbody tr:nth-child(even) { background: #1c2230; }
+html[data-theme='dark'] .ex-ol-grid td.ex-ol-cell-bad { background: #3a2430; }
+.ex-ol-grid th .ex-ol-colbtn { border: 0; background: transparent; cursor: pointer; color: #8a94a6; font-size: 11px; padding: 0 3px; border-radius: 4px; }
+.ex-ol-grid th .ex-ol-colbtn:hover { background: #e6ecf5; color: #2458b8; }
+.ex-ol-colmenu { position: absolute; z-index: 50; background: #fff; border: 1px solid #d8dee9; border-radius: 10px; box-shadow: 0 8px 24px rgba(30,45,80,.16); padding: 6px; min-width: 140px; }
+.ex-ol-colmenu button { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; color: #2a3242; }
+.ex-ol-colmenu button:hover { background: #f0f6ff; color: #2458b8; }
+.ex-ol-grid th { position: sticky; top: 0; }
+.ex-ol-draft { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+#exol-live { cursor: pointer; }
+#exol-live:hover { text-decoration: underline; }
 .ex-stu-table td { vertical-align: top; }
 .ex-detect-ok { font-size: 12px; color: #1d7a6f; background: #e8f7f3; border-radius: 8px; padding: 6px 10px; margin: 6px 0; }
 .ex-row-unmatched td { color: #d64545; }
@@ -653,37 +674,68 @@
     const map = {};
     const used = new Set();
     const ambiguous = new Set();
-    for (const role of genericRoles(type)) {
-      map[role] = -1;
-      const candidates = Array.from({ length: width }, (_, i) => ({ i, rank: genericAliasRank(role, header[i]) }))
-        .filter((c) => c.rank >= 0 && !used.has(c.i))
-        .sort((a, b) => a.rank - b.rank);
-      if (candidates.length && (candidates.length === 1 || candidates[0].rank < candidates[1].rank)) {
-        map[role] = candidates[0].i;
-        used.add(candidates[0].i);
-      } else if (candidates.length) {
-        ambiguous.add(role);
-      }
-    }
-    const sample = matrix.slice(headerRow + 1, headerRow + 31);
+    const SUMMARY_RE = /平均|合计|合計|总计|總計|最高|最低|及格|优秀|優秀|标准差|標準差|中位|人数|人數/;
+    const sample = matrix
+      .slice(headerRow + 1, headerRow + 31)
+      .filter((r) => !(r || []).some((c) => SUMMARY_RE.test(genericCellText(c))));
     const ratio = (i, test) => {
       const vals = sample.map((r) => genericCellText((r || [])[i])).filter(Boolean);
       return vals.length ? vals.filter(test).length / vals.length : 0;
     };
-    const free = Array.from({ length: width }, (_, i) => i).filter((i) => !used.has(i) && !genericHeader(header[i]));
-    if (map.score < 0 && !ambiguous.has('score')) {
-      const candidates = free.filter((i) => ratio(i, (v) => v !== '' && Number.isFinite(Number(v))) >= 0.8);
-      if (candidates.length === 1) {
-        map.score = candidates[0];
-        used.add(candidates[0]);
+    // 内容特征：表头别名同分时按占比决胜，无别名时按占比推断列角色
+    const contentTest = {
+      studentNo: (v) => /^[A-Za-z0-9][A-Za-z0-9\-]{1,20}$/.test(v),
+      name: (v) => /^[\u3400-\u9fff·]{2,8}$|^[A-Za-z][A-Za-z .'-]{1,50}$/.test(v),
+      className: (v) => /班|class/i.test(v) || /^[\u3400-\u9fff0-9]{1,10}$/.test(v),
+      score: (v) => v !== '' && Number.isFinite(Number(v)),
+      questionType: () => false,
+      maxScore: (v) => v !== '' && Number.isFinite(Number(v)),
+    };
+    for (const role of genericRoles(type)) {
+      map[role] = -1;
+      const candidates = Array.from({ length: width }, (_, i) => ({
+        i,
+        rank: genericAliasRank(role, header[i]),
+        cr: ratio(i, contentTest[role] || (() => false)),
+      }))
+        .filter((c) => c.rank >= 0 && !used.has(c.i))
+        .sort((a, b) => a.rank - b.rank || b.cr - a.cr);
+      if (!candidates.length) continue;
+      const best = candidates[0];
+      // 别名级别相同且内容占比接近 → 不猜测，留给手动选择
+      if (candidates.length > 1 && candidates[1].rank === best.rank && Math.abs(candidates[1].cr - best.cr) < 0.1) {
+        ambiguous.add(role);
+        continue;
       }
+      map[role] = best.i;
+      used.add(best.i);
+    }
+    const free = Array.from({ length: width }, (_, i) => i).filter((i) => !used.has(i) && !genericHeader(header[i]));
+    // 无表头命中时按内容推断：取占比最高的列（与第二名差距不足则交手动选择）
+    function bestFreeColumn(test, minRatio, gap) {
+      const scored = free
+        .filter((i) => !used.has(i))
+        .map((i) => ({ i, r: ratio(i, test) }))
+        .filter((x) => x.r >= minRatio)
+        .sort((a, b) => b.r - a.r);
+      if (!scored.length) return null;
+      if (scored.length === 1 || scored[0].r >= scored[1].r + gap) return scored[0].i;
+      return 'ambiguous';
+    }
+    if (map.score < 0 && !ambiguous.has('score')) {
+      const pick = bestFreeColumn(contentTest.score, 0.6, 0.15);
+      if (pick === 'ambiguous') ambiguous.add('score');
+      else if (pick !== null) { map.score = pick; used.add(pick); }
     }
     if (map.name < 0 && !ambiguous.has('name')) {
-      const candidates = free.filter((i) => !used.has(i) && ratio(i, (v) => /^[\u3400-\u9fff·]{2,8}$|^[A-Za-z][A-Za-z .'-]{1,50}$/.test(v)) >= 0.8);
-      if (candidates.length === 1) {
-        map.name = candidates[0];
-        used.add(candidates[0]);
-      }
+      const pick = bestFreeColumn(contentTest.name, 0.5, 0.15);
+      if (pick === 'ambiguous') ambiguous.add('name');
+      else if (pick !== null) { map.name = pick; used.add(pick); }
+    }
+    if (map.studentNo < 0 && !ambiguous.has('studentNo')) {
+      const pick = bestFreeColumn(contentTest.studentNo, 0.6, 0.15);
+      if (pick === 'ambiguous') ambiguous.add('studentNo');
+      else if (pick !== null) { map.studentNo = pick; used.add(pick); }
     }
     return map;
   }
@@ -700,7 +752,9 @@
         if (v) row[role] = v;
       }
       if (!row.studentNo && !row.name) continue;
-      if (/^(班级平均|班級平均|年级平均|年級平均|平均|合计|合計|总计|總計)$/.test(row.name || '')) continue;
+      // 过滤成绩表常见的汇总/统计行与序号列误配（数值落进姓名列等）
+      if (/^(班级平均|班級平均|年级平均|年級平均|平均|合计|合計|总计|總計|最高分|最低分|及格率|优秀率|優秀率|良好率|标准差|標準差|中位数|中位數|人数|人數|班级|年級|年级|学校|全校|参考|參考)/.test(row.name || '')) continue;
+      if (!row.studentNo && /^-?\d+(\.\d+)?$/.test(row.name || '')) continue;
       row.score = absent ? null : Number(scoreText);
       if (absent) row.absent = true;
       if (type === 'subscores') {
@@ -1148,7 +1202,16 @@
         </div>`;
       })
       .join('');
-    App.modal(`${I18n.t('分项考试')} · ${examName || ''}`, `<div>${rows}</div>`, (modalEl) => {
+    App.modal(`${I18n.t('分项考试')} · ${examName || ''}`, `
+      ${canImport ? `<div style="margin-bottom:10px"><button class="btn" id="excc-online" type="button">${esc(I18n.t('在线填写（多列粘贴）'))}</button></div>` : ''}
+      <div>${rows}</div>`, (modalEl) => {
+      const onlineBtn = modalEl.querySelector('#excc-online');
+      if (onlineBtn) {
+        onlineBtn.addEventListener('click', () => {
+          App.closeModal();
+          openOnlineGrid(examId);
+        });
+      }
       modalEl.querySelectorAll('[data-comp-act]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const card = btn.closest('[data-comp-id]');
@@ -1437,6 +1500,706 @@
     );
   }
 
+  // ============================== 在线填写成绩（类 Excel：可粘贴多行多列，本地校验后确认导入） ==============================
+
+  function openOnlineGrid(examId) {
+    App.modal(
+      I18n.t('在线填写成绩'),
+      `
+      <div class="ex-form">
+        <div class="muted">加载中…</div>
+      </div>`,
+      async (modalEl) => {
+        modalEl.classList.add('ex-modal-wide');
+        const form = modalEl.querySelector('.ex-form');
+
+        // 考试信息 + 分项列（合并考试 = 每个分项一列）
+        let exam;
+        try {
+          exam = await api.exams.get(examId);
+        } catch (err) {
+          form.innerHTML = `<div class="muted">考试加载失败：${esc((err && err.message) || '未知错误')}</div>`;
+          return;
+        }
+        const isCom = Number(exam.composite) === 1;
+        let cols;
+        if (isCom) {
+          const comps = exam.components || [];
+          const totals = await Promise.all(
+            comps.map((c) => api.exams.get(c.id).then((d) => d.total_score ?? null).catch(() => null))
+          );
+          cols = comps.map((c, i) => ({ id: c.id, name: c.name, total: totals[i] }));
+        } else {
+          cols = [{ id: exam.id, name: exam.name, total: exam.total_score ?? null }];
+        }
+
+        // 名单（班级考试仅本班；全年段/合并考试取全年级名单）
+        let students = [];
+        try {
+          students = (await api.students.list()).students || [];
+        } catch (err) { /* 名单加载失败时仍可空表格粘贴（按姓名匹配会不可用，学号仍可用） */ }
+        if ((exam.scope || 'grade') === 'class' && exam.class_id) {
+          students = students.filter((s) => s.class_id === exam.class_id);
+        }
+        // 班级 → 年级映射（A/B 之间的「班级」「年级」展示列）
+        let gradeByClass = {};
+        try {
+          const clsList = await api.classes.list();
+          gradeByClass = Object.fromEntries((clsList.classes || clsList || []).map((c) => [c.id, c.grade || '']));
+        } catch (err) { /* 取不到年级则留空 */ }
+
+        const scoreColCount = cols.length;
+        let mode = 'roster';
+
+        form.innerHTML = `
+        <div class="ex-ol-tools" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+          <label class="ex-format-option"><input type="radio" name="exol-mode" value="roster" checked> ${esc(I18n.t('按名单生成'))}</label>
+          <label class="ex-format-option"><input type="radio" name="exol-mode" value="empty"> ${esc(I18n.t('空表格（自定义顺序）'))}</label>
+          <span id="exol-coltoggles" style="display:none;gap:10px;align-items:center;flex-wrap:wrap">
+            <span class="muted" style="font-size:12px">${esc(I18n.t('表格列'))}</span>
+            <label class="ex-format-option"><input type="checkbox" id="exol-col-no" checked> ${esc(I18n.t('学号列'))}</label>
+            <label class="ex-format-option"><input type="checkbox" id="exol-col-cls" checked> ${esc(I18n.t('班级列'))}</label>
+            <label class="ex-format-option"><input type="checkbox" id="exol-col-grade" checked> ${esc(I18n.t('年级列'))}</label>
+          </span>
+          <button class="btn btn-sm" id="exol-addrows" type="button" style="display:none">${esc(I18n.t('增加 10 行'))}</button>
+          <button class="btn btn-sm" id="exol-copy" type="button">${esc(I18n.t('复制表格'))}</button>
+          <span class="muted" id="exol-live" style="font-size:12px;margin-left:auto" title="${esc(I18n.t('点击跳转到首个待核实行'))}"></span>
+        </div>
+        <div id="exol-draft" class="ex-detect-ok ex-ol-draft" style="display:none;margin-bottom:8px"></div>
+        <div class="ex-hint muted">${esc(I18n.t('在线填写提示'))}</div>
+        <div class="ex-ol-grid-wrap" style="max-height:46vh;overflow:auto;border:1px solid #e2e7f0;border-radius:10px">
+          <table class="table ex-ol-grid" id="exol-grid" style="margin:0;min-width:520px">
+            <thead id="exol-head"></thead>
+            <tbody id="exol-body"></tbody>
+          </table>
+        </div>
+        <div id="exol-result" style="margin-top:10px"></div>
+        <div id="exol-foot" class="muted" style="font-size:12px;margin-top:6px"></div>
+        <div class="modal-actions">
+          <button class="btn" id="exol-cancel" type="button">${esc(I18n.t('取消'))}</button>
+          <button class="btn" id="exol-clear" type="button">${esc(I18n.t('清空成绩'))}</button>
+          <button class="btn btn-primary" id="exol-validate" type="button">${esc(I18n.t('校验并导入'))}</button>
+        </div>`;
+
+        const grid = form.querySelector('#exol-grid');
+        const headEl = form.querySelector('#exol-head');
+        const tbody = form.querySelector('#exol-body');
+        const resultEl = form.querySelector('#exol-result');
+        const addRowsBtn = form.querySelector('#exol-addrows');
+        const colToggles = form.querySelector('#exol-coltoggles');
+
+        // 前置列开关（仅空表格模式）：学号不匹配时按姓名匹配；重名时可用班级列区分
+        const leadVisible = { no: true, cls: true, grade: true };
+        const LEAD_LABEL = { name: '姓名', cls: '班级', grade: '年级', no: '学号' };
+        const LEAD_KEYS = ['cls', 'grade', 'no'];
+        /** 当前列序：name + 可见前置列 + 各成绩列（s0、s1…） */
+        function colSeq() {
+          return [
+            'name',
+            ...LEAD_KEYS.filter((k) => leadVisible[k]),
+            ...cols.map((_, i) => `s${i}`),
+          ];
+        }
+        const colLetter = (i) => (i < 26 ? String.fromCharCode(65 + i) : 'A' + String.fromCharCode(65 + i - 26));
+
+        function renderHead() {
+          const seq = colSeq();
+          headEl.innerHTML = `<tr>
+            <th class="ex-ol-idx" style="width:44px">#</th>
+            ${seq
+              .map((key, i) => {
+                if (key[0] === 's') {
+                  const ci = Number(key.slice(1));
+                  const c = cols[ci];
+                  return `<th><span class="muted">${colLetter(i)}</span> ${esc(c.name)}${c.total != null ? `（${esc(I18n.format('满分 {score}', { score: c.total }))}）` : ''} <button type="button" class="ex-ol-colbtn" data-ci="${ci}" title="${esc(I18n.t('列操作'))}">▾</button></th>`;
+                }
+                return `<th><span class="muted">${colLetter(i)}</span> ${esc(I18n.t(LEAD_LABEL[key]))}</th>`;
+              })
+              .join('')}
+          </tr>`;
+        }
+
+        function rowHtml(r, stu) {
+          const seq = colSeq();
+          const tds = seq
+            .map((key) => {
+              if (key === 'name') return `<td contenteditable="true" data-f="name">${esc(stu ? stu.name : '')}</td>`;
+              if (key === 'cls') return `<td contenteditable="true" data-f="cls">${esc(stu ? stu.class_name || '' : '')}</td>`;
+              if (key === 'grade') return `<td contenteditable="true" data-f="grade">${esc(stu && stu.class_id ? gradeByClass[stu.class_id] || '' : '')}</td>`;
+              if (key === 'no') return `<td contenteditable="true" data-f="no">${esc(stu ? stu.student_no || '' : '')}</td>`;
+              return `<td contenteditable="true" data-f="score" data-ci="${Number(key.slice(1))}"></td>`;
+            })
+            .join('');
+          return `<tr><td class="ex-ol-idx muted" style="width:44px">${r + 1}</td>${tds}</tr>`;
+        }
+        /** 读取一行当前值（切列/重建时保留已填内容） */
+        function snapshotRow(tr) {
+          const lead = {};
+          tr.querySelectorAll('td[data-f]').forEach((td) => {
+            if (td.dataset.f !== 'score') lead[td.dataset.f] = td.textContent.trim();
+          });
+          const scores = Array.from({ length: scoreColCount }, (_, i) => tr.querySelector(`td[data-f="score"][data-ci="${i}"]`)?.textContent.trim() || '');
+          return { lead, scores };
+        }
+        function restoreRow(tr, snap) {
+          Object.entries(snap.lead).forEach(([f, v]) => {
+            const td = tr.querySelector(`td[data-f="${f}"]`);
+            if (td) td.textContent = v;
+          });
+          snap.scores.forEach((v, i) => {
+            const td = tr.querySelector(`td[data-f="score"][data-ci="${i}"]`);
+            if (td) td.textContent = v;
+          });
+        }
+        function appendRows(n, snapList) {
+          const cur = tbody.querySelectorAll('tr').length;
+          let html = '';
+          for (let i = 0; i < n; i++) html += rowHtml(cur + i, null);
+          tbody.insertAdjacentHTML('beforeend', html);
+          if (snapList) {
+            const trs = tbody.querySelectorAll('tr');
+            snapList.forEach((snap, i) => {
+              if (snap && trs[cur + i]) restoreRow(trs[cur + i], snap);
+            });
+          }
+        }
+        function rebuildBody(preserve) {
+          const snaps = preserve ? Array.from(tbody.querySelectorAll('tr')).map(snapshotRow) : null;
+          if (mode === 'roster') {
+            tbody.innerHTML = students.map((s, i) => rowHtml(i, s)).join('');
+          } else {
+            tbody.innerHTML = '';
+            appendRows(Math.max(40, snaps ? snaps.length : 0), snaps);
+          }
+          renderHead();
+        }
+        rebuildBody(false);
+
+        // —— 实时反馈：行匹配状态（绿=已匹配 / 红=未匹配或含非法成绩格）、已填统计 ——
+        const liveEl = form.querySelector('#exol-live');
+        let matchIndex = null;
+        function getMatchIndex() {
+          if (matchIndex) return matchIndex;
+          const byNo = new Map();
+          const byName = new Map();
+          const byNameMulti = new Map();
+          students.forEach((s) => {
+            if (s.student_no) byNo.set(String(s.student_no).trim(), s);
+            const n = String(s.name || '').trim();
+            if (n) {
+              if (!byNameMulti.has(n)) byNameMulti.set(n, []);
+              byNameMulti.get(n).push(s);
+              byName.set(n, s); // 唯一时有效；重名时以 byNameMulti + dupNames 判定
+            }
+          });
+          const dupNames = new Set([...byNameMulti.entries()].filter(([, arr]) => arr.length > 1).map(([n]) => n));
+          matchIndex = { byNo, byName, byNameMulti, dupNames };
+          return matchIndex;
+        }
+        /**
+         * 匹配学生：学号精确 → 姓名唯一；姓名重名时若填了班级列，按「同班唯一」再试。
+         * 返回 { stu, dupName }：dupName=true 表示因重名未决（提示补学号/班级）。
+         */
+        function matchStudentRow(idx, name, no, cls) {
+          if (no && idx.byNo.has(no)) return { stu: idx.byNo.get(no) };
+          if (name && idx.byName.has(name) && !idx.dupNames.has(name)) return { stu: idx.byName.get(name) };
+          if (name && idx.dupNames.has(name)) {
+            if (cls) {
+              const cands = (idx.byNameMulti.get(name) || []).filter((s) => (s.class_name || '') === cls);
+              if (cands.length === 1) return { stu: cands[0] };
+            }
+            return { stu: null, dupName: true };
+          }
+          return { stu: null };
+        }
+        const ABSENT_RE_LIVE = /^(缺考|未考|旷考|缺席|absent)$/i;
+        /** 全角数字/小数点/句号 → 半角（成绩列粘贴与校验统一走这里） */
+        const toHalfWidth = (v) =>
+          String(v).replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0)).replace(/[．。]/g, '.').trim();
+        function leadText(tr, f) {
+          return (tr.querySelector(`td[data-f="${f}"]`)?.textContent || '').trim();
+        }
+        function scoreText(tr, ci) {
+          return toHalfWidth(tr.querySelector(`td[data-f="score"][data-ci="${ci}"]`)?.textContent || '');
+        }
+        function refreshStatus() {
+          if (!liveEl) return;
+          const idx = getMatchIndex();
+          let filled = 0;
+          let badRows = 0;
+          let firstBadRow = -1;
+          const colStats = cols.map(() => ({ filled: 0, sum: 0, n: 0 }));
+          tbody.querySelectorAll('tr').forEach((tr, r) => {
+            const name = leadText(tr, 'name');
+            const no = leadText(tr, 'no');
+            const cls = leadText(tr, 'cls');
+            tr.classList.remove('ex-ol-ok', 'ex-ol-bad');
+            let rowBad = false;
+            if (name || no) {
+              const { stu } = matchStudentRow(idx, name, no, cls);
+              tr.classList.add(stu ? 'ex-ol-ok' : 'ex-ol-bad');
+              if (!stu) rowBad = true;
+            }
+            tr.querySelectorAll('td[data-f="score"]').forEach((td) => {
+              const ci = Number(td.dataset.ci);
+              const v = toHalfWidth(td.textContent);
+              if (v !== td.textContent) td.textContent = v; // 全角输入即时归一
+              let bad = false;
+              if (v !== '') {
+                filled++;
+                colStats[ci].filled++;
+                const num = Number(v);
+                if (Number.isFinite(num) && !ABSENT_RE_LIVE.test(v)) { colStats[ci].sum += num; colStats[ci].n++; }
+                bad = !ABSENT_RE_LIVE.test(v) && (!Number.isFinite(num) || num < 0 || (cols[ci]?.total != null && num > Number(cols[ci].total)));
+              }
+              td.classList.toggle('ex-ol-cell-bad', bad);
+              if (bad) rowBad = true;
+            });
+            if (rowBad) {
+              tr.classList.add('ex-ol-bad');
+              badRows++;
+              if (firstBadRow < 0) firstBadRow = r;
+            }
+          });
+          liveEl.textContent = I18n.format('已填 {filled} 条成绩 · {bad} 行待核对', { filled, bad: badRows });
+          liveEl.dataset.badRow = String(firstBadRow);
+          const footEl = form.querySelector('#exol-foot');
+          if (footEl) {
+            footEl.innerHTML = colStats
+              .map((st, ci) => {
+                const avg = st.n ? Math.round((st.sum / st.n) * 100) / 100 : null;
+                return I18n.format('「{name}」已填 {filled} · 均分 {avg}', { name: cols[ci].name, filled: st.filled, avg: avg ?? '—' });
+              })
+              .join('　');
+          }
+        }
+        let statusTimer = null;
+        const refreshStatusSoon = () => {
+          clearTimeout(statusTimer);
+          statusTimer = setTimeout(refreshStatus, 200);
+        };
+        tbody.addEventListener('input', refreshStatusSoon);
+        refreshStatus();
+
+        // —— 键盘导航：Enter/↓ 下一行，↑ 上一行，Tab 右移（行末换行首），Shift+Tab 左移 ——
+        function cellKeyOf(td) {
+          return td.dataset.f === 'score' ? `s${td.dataset.ci}` : td.dataset.f;
+        }
+        function cellOf(tr, key) {
+          return key[0] === 's'
+            ? tr.querySelector(`td[data-f="score"][data-ci="${Number(key.slice(1))}"]`)
+            : tr.querySelector(`td[data-f="${key}"]`);
+        }
+        function focusCellByKey(r, key) {
+          let tr = tbody.querySelectorAll('tr')[r];
+          if (!tr) {
+            appendRows(r + 1 - tbody.querySelectorAll('tr').length);
+            tr = tbody.querySelectorAll('tr')[r];
+          }
+          const cell = tr && cellOf(tr, key);
+          if (cell) { cell.focus(); return true; }
+          return false;
+        }
+        tbody.addEventListener('keydown', (e) => {
+          const td = e.target.closest('td[contenteditable="true"]');
+          if (!td) return;
+          const tr = td.closest('tr');
+          const r = Array.from(tbody.querySelectorAll('tr')).indexOf(tr);
+          const seq = colSeq();
+          const idx = seq.indexOf(cellKeyOf(td));
+          if (idx < 0) return;
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (!focusCellByKey(r + 1, seq[idx])) td.blur();
+          } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            focusCellByKey(r + 1, seq[idx]);
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (r > 0) focusCellByKey(r - 1, seq[idx]);
+          } else if (e.key === 'Tab') {
+            e.preventDefault();
+            if (e.shiftKey) {
+              if (idx > 0) focusCellByKey(r, seq[idx - 1]);
+              else if (r > 0) focusCellByKey(r - 1, seq[seq.length - 1]);
+            } else if (idx < seq.length - 1) {
+              focusCellByKey(r, seq[idx + 1]);
+            } else {
+              focusCellByKey(r + 1, seq[0]);
+            }
+          }
+        });
+
+        // —— 模式与列开关 ——
+        form.querySelectorAll('input[name=exol-mode]').forEach((radio) => {
+          radio.addEventListener('change', () => {
+            if (!radio.checked) return;
+            mode = radio.value;
+            const empty = mode === 'empty';
+            addRowsBtn.style.display = empty ? '' : 'none';
+            colToggles.style.display = empty ? 'inline-flex' : 'none';
+            rebuildBody(false);
+            resultEl.innerHTML = '';
+            refreshStatus();
+          });
+        });
+        [['exol-col-no', 'no'], ['exol-col-cls', 'cls'], ['exol-col-grade', 'grade']].forEach(([id, key]) => {
+          form.querySelector(`#${id}`).addEventListener('change', (e) => {
+            leadVisible[key] = e.target.checked;
+            rebuildBody(true); // 保留已填内容
+            refreshStatus();
+            markDirty();
+          });
+        });
+        addRowsBtn.addEventListener('click', () => { appendRows(10); refreshStatus(); markDirty(); });
+        form.querySelector('#exol-cancel').addEventListener('click', () => App.closeModal());
+        form.querySelector('#exol-clear').addEventListener('click', () => {
+          // 仅清空成绩列，保留姓名/班级/年级/学号
+          tbody.querySelectorAll('td[data-f="score"]').forEach((td) => { td.textContent = ''; });
+          resultEl.innerHTML = '';
+          refreshStatus();
+          markDirty();
+        });
+
+        // 粘贴：智能识别——首行含已知表头（姓名/学号/班级/年级/成绩列名）时按列名映射（乱序列可贴）并跳过表头行；
+        // 否则从目标单元格起按位置填充 TSV/CSV。行数不够自动扩展，超列宽内容忽略。
+        const HEADER_ALIAS = [
+          ['name', [/姓名|名字|学生姓名|^name$/i]],
+          ['no', [/学号|考号|准考证号?|报名号|编号|student\s?no|^no$/i]],
+          ['cls', [/^班级$|班$|class/i]],
+          ['grade', [/^年级$|grade/i]],
+        ];
+        /** 表头探测：命中别名或成绩列名才算表头（纯数据行如 张三,202301,95 不会误判） */
+        function detectHeaderKeys(cells) {
+          const used = new Set();
+          let leadHits = 0;
+          let scoreHits = 0;
+          const map = cells.map((cell) => {
+            const v = String(cell || '').trim();
+            if (!v) return null;
+            for (const [key, res] of HEADER_ALIAS) {
+              if (res.some((re) => re.test(v))) { leadHits++; return { lead: key }; }
+            }
+            const si = cols.findIndex((c, i) => !used.has(i) && v === c.name);
+            if (si >= 0) { used.add(si); scoreHits++; return { score: si }; }
+            return null;
+          });
+          return { map, leadHits, scoreHits };
+        }
+        grid.addEventListener('paste', (e) => {
+          const td = e.target.closest('td[contenteditable="true"]');
+          if (!td) return;
+          const text = e.clipboardData && e.clipboardData.getData('text/plain');
+          if (!text) return;
+          e.preventDefault();
+          const lines = text.replace(/\r/g, '').split('\n');
+          if (lines.length && lines[lines.length - 1] === '') lines.pop();
+          const sep = text.indexOf('\t') >= 0 ? '\t' : /[,，]/.test(text) ? /[,，]/ : '\t';
+          const matrix = lines.map((l) => l.split(sep).map((v) => v.trim()));
+
+          // 表头识别：≥1 个前置列别名，或 ≥2 个成绩列名（成绩列只有 1 列时 ≥1 个即可）
+          let colMap = null;
+          if (matrix.length >= 2) {
+            const { map, leadHits, scoreHits } = detectHeaderKeys(matrix[0]);
+            if (leadHits >= 1 || scoreHits >= Math.min(2, scoreColCount)) {
+              const used = new Set(map.filter((m) => m && m.score != null).map((m) => m.score));
+              colMap = map.map((m) => {
+                if (m) return m;
+                const next = cols.findIndex((_, i) => !used.has(i)); // 未知名称顺延给未占用的成绩列
+                if (next >= 0) { used.add(next); return { score: next }; }
+                return null;
+              });
+              matrix.shift(); // 跳过表头行
+            }
+          }
+
+          const r0 = Array.from(tbody.querySelectorAll('tr')).indexOf(td.closest('tr'));
+          if (r0 < 0) return;
+          const seq = colSeq();
+          const startIdx = seq.indexOf(cellKeyOf(td));
+          let pastedRows = 0;
+          matrix.forEach((cells, li) => {
+            let tr = tbody.querySelectorAll('tr')[r0 + li];
+            if (!tr) {
+              appendRows(r0 + li + 1 - tbody.querySelectorAll('tr').length);
+              tr = tbody.querySelectorAll('tr')[r0 + li];
+            }
+            if (!tr) return;
+            pastedRows++;
+            cells.forEach((val, ci) => {
+              let key = null;
+              if (colMap) {
+                const mk = colMap[ci];
+                if (!mk) return;
+                key = mk.lead || `s${mk.score}`;
+              } else {
+                if (startIdx < 0) return;
+                key = seq[startIdx + ci];
+                if (!key) return;
+              }
+              const cell = cellOf(tr, key);
+              if (!cell) return;
+              cell.textContent = key[0] === 's' ? toHalfWidth(val) : val;
+            });
+          });
+          refreshStatus();
+          markDirty();
+          if (pastedRows) {
+            App.toast(
+              I18n.format('已粘贴 {rows} 行 × {cols} 列', {
+                rows: pastedRows,
+                cols: colMap ? colMap.filter(Boolean).length : 1,
+              })
+            );
+          }
+        });
+
+        // —— 列头操作菜单：复制此列 / 清空此列 / 此列全部缺考 ——
+        let openColMenu = null;
+        function closeColMenu() {
+          if (openColMenu) { openColMenu.remove(); openColMenu = null; }
+        }
+        headEl.addEventListener('click', (e) => {
+          const btn = e.target.closest('.ex-ol-colbtn');
+          if (!btn) return;
+          e.stopPropagation();
+          if (openColMenu && openColMenu.dataset.ci === btn.dataset.ci) { closeColMenu(); return; }
+          closeColMenu();
+          const ci = Number(btn.dataset.ci);
+          const menu = document.createElement('div');
+          menu.className = 'ex-ol-colmenu';
+          menu.dataset.ci = String(ci);
+          menu.innerHTML = `<button type="button" data-op="copy">${esc(I18n.t('复制此列'))}</button>
+            <button type="button" data-op="clear">${esc(I18n.t('清空此列'))}</button>
+            <button type="button" data-op="absent">${esc(I18n.t('此列全部缺考'))}</button>`;
+          btn.parentElement.appendChild(menu);
+          openColMenu = menu;
+          menu.addEventListener('click', (ev) => {
+            const op = ev.target.dataset && ev.target.dataset.op;
+            if (!op) return;
+            const rows = tbody.querySelectorAll('tr');
+            if (op === 'copy') {
+              copyText([cols[ci].name, ...Array.from(rows).map((tr) => scoreText(tr, ci))].join('\n'));
+            } else if (op === 'clear') {
+              rows.forEach((tr) => { const c = cellOf(tr, `s${ci}`); if (c) c.textContent = ''; });
+            } else if (op === 'absent') {
+              rows.forEach((tr) => { const c = cellOf(tr, `s${ci}`); if (c) c.textContent = '缺考'; });
+            }
+            closeColMenu();
+            refreshStatus();
+            markDirty();
+          });
+        });
+        modalEl.addEventListener('click', (e) => {
+          if (openColMenu && !openColMenu.contains(e.target) && !e.target.closest('.ex-ol-colbtn')) closeColMenu();
+        });
+
+        // —— 剪贴板 ——
+        function fallbackCopyText(text) {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); App.toast(I18n.t('已复制')); } catch (err) { App.toast('复制失败'); }
+          ta.remove();
+        }
+        function copyText(text) {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(() => App.toast(I18n.t('已复制'))).catch(() => fallbackCopyText(text));
+          } else {
+            fallbackCopyText(text);
+          }
+        }
+        // 复制整张表（含表头）为 TSV，方便到 Excel 填完再粘回
+        form.querySelector('#exol-copy').addEventListener('click', () => {
+          const seq = colSeq();
+          const head = seq.map((key) => (key[0] === 's' ? cols[Number(key.slice(1))].name : I18n.t(LEAD_LABEL[key])));
+          const lines = [head.join('\t')];
+          tbody.querySelectorAll('tr').forEach((tr) => {
+            lines.push(
+              seq
+                .map((key) => (key[0] === 's' ? scoreText(tr, Number(key.slice(1))) : leadText(tr, key)))
+                .join('\t')
+            );
+          });
+          copyText(lines.join('\n'));
+        });
+
+        // 点击「待核对」计数：跳转到首个问题行
+        liveEl.addEventListener('click', () => {
+          const r = Number(liveEl.dataset.badRow);
+          if (r < 0) return;
+          const tr = tbody.querySelectorAll('tr')[r];
+          if (!tr) return;
+          const cell = cellOf(tr, 'name') || tr.querySelector('td[contenteditable]');
+          if (cell) {
+            cell.scrollIntoView({ block: 'center' });
+            cell.focus();
+          }
+        });
+
+        // —— 草稿自动保存（按 空间+考试 维度；误关弹窗/刷新后可恢复），导入成功后清除 ——
+        const draftKey = `wb.exol.draft.${(App.state.tenant && App.state.tenant.id) || ''}.${examId}`;
+        let draftTimer = null;
+        function markDirty() {
+          clearTimeout(draftTimer);
+          draftTimer = setTimeout(() => {
+            try {
+              localStorage.setItem(
+                draftKey,
+                JSON.stringify({
+                  savedAt: Date.now(),
+                  mode,
+                  leadVisible: { ...leadVisible },
+                  rows: Array.from(tbody.querySelectorAll('tr')).map(snapshotRow),
+                })
+              );
+            } catch (err) { /* 存储超限等情况静默 */ }
+          }, 400);
+        }
+        tbody.addEventListener('input', markDirty);
+        (function offerDraft() {
+          let draft = null;
+          try { draft = JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch (err) { draft = null; }
+          const hasContent =
+            draft &&
+            Array.isArray(draft.rows) &&
+            draft.rows.some((r) => Object.values(r.lead || {}).some((v) => v) || (r.scores || []).some((v) => v));
+          if (!hasContent) {
+            if (draft) localStorage.removeItem(draftKey);
+            return;
+          }
+          const box = form.querySelector('#exol-draft');
+          const time = new Date(draft.savedAt).toLocaleString();
+          box.innerHTML = `${esc(I18n.format('检测到未提交的草稿（{time}）', { time }))}
+            <button class="btn btn-sm" id="exol-draft-restore" type="button">${esc(I18n.t('恢复草稿'))}</button>
+            <button class="btn btn-sm" id="exol-draft-drop" type="button">${esc(I18n.t('丢弃'))}</button>`;
+          box.style.display = 'flex';
+          box.querySelector('#exol-draft-restore').addEventListener('click', () => {
+            mode = draft.mode === 'empty' ? 'empty' : 'roster';
+            Object.assign(leadVisible, draft.leadVisible || {});
+            const modeRadio = form.querySelector(`input[name=exol-mode][value="${mode}"]`);
+            if (modeRadio) modeRadio.checked = true;
+            form.querySelector('#exol-col-no').checked = leadVisible.no;
+            form.querySelector('#exol-col-cls').checked = leadVisible.cls;
+            form.querySelector('#exol-col-grade').checked = leadVisible.grade;
+            addRowsBtn.style.display = mode === 'empty' ? '' : 'none';
+            colToggles.style.display = mode === 'empty' ? 'inline-flex' : 'none';
+            tbody.innerHTML = '';
+            appendRows(Math.max(40, draft.rows.length), draft.rows);
+            renderHead();
+            box.style.display = 'none';
+            refreshStatus();
+            App.toast(I18n.t('草稿已恢复'));
+          });
+          box.querySelector('#exol-draft-drop').addEventListener('click', () => {
+            localStorage.removeItem(draftKey);
+            box.style.display = 'none';
+          });
+        })();
+
+        // 本地校验并确认导入
+        form.querySelector('#exol-validate').addEventListener('click', async () => {
+          const idx = getMatchIndex();
+          const colRows = cols.map(() => []);
+          const unmatched = [];
+          const invalid = [];
+          const ABSENT_RE = /^(缺考|未考|旷考|缺席|absent)$/i;
+          const seenStu = new Map(); // studentId → 首次出现的行号（重复录入检测）
+          tbody.querySelectorAll('tr').forEach((tr, r) => {
+            const name = leadText(tr, 'name');
+            const no = leadText(tr, 'no');
+            const cls = leadText(tr, 'cls');
+            const hasAny = name || no || cols.some((_, ci) => scoreText(tr, ci) !== '');
+            if (!hasAny) return;
+            const { stu, dupName } = matchStudentRow(idx, name, no, cls);
+            if (!stu) {
+              if (dupName) {
+                invalid.push(I18n.format('第 {row} 行「{name}」与名单内多名学生重名，请补学号或用班级列区分', { row: r + 1, name }));
+              } else {
+                unmatched.push({ row: r + 1, name: name || no, no });
+              }
+              return;
+            }
+            if (seenStu.has(stu.id)) {
+              invalid.push(I18n.format('第 {row} 行与第 {first} 行重复（同一学生「{name}」，后者已跳过）', { row: r + 1, first: seenStu.get(stu.id), name: stu.name }));
+              return;
+            }
+            seenStu.set(stu.id, r + 1);
+            cols.forEach((c, ci) => {
+              const v = scoreText(tr, ci);
+              if (v === '') return;
+              const base = { studentNo: stu.student_no || '', name: stu.name };
+              if (ABSENT_RE.test(v)) {
+                colRows[ci].push({ ...base, absent: true, score: null });
+                return;
+              }
+              const n = Number(v);
+              if (!Number.isFinite(n)) {
+                invalid.push(I18n.format('第 {row} 行「{col}」：「{val}」不是数字', { row: r + 1, col: c.name, val: v }));
+                return;
+              }
+              if (n < 0) {
+                invalid.push(I18n.format('第 {row} 行「{col}」：分数不能为负', { row: r + 1, col: c.name }));
+                return;
+              }
+              if (c.total != null && n > Number(c.total)) {
+                invalid.push(I18n.format('第 {row} 行「{col}」：{val} 超过满分 {max}', { row: r + 1, col: c.name, val: n, max: c.total }));
+                return;
+              }
+              colRows[ci].push({ ...base, score: n });
+            });
+          });
+
+          const totalCells = colRows.reduce((a, x) => a + x.length, 0);
+          if (!totalCells) {
+            App.toast(I18n.t('没有可导入的成绩'));
+            return;
+          }
+          const absentCount = colRows.flat().filter((x) => x.absent).length;
+          const summaryParts = [
+            I18n.format('共 {count} 条成绩（缺考 {absent}）', { count: totalCells, absent: absentCount }),
+          ];
+          if (unmatched.length) summaryParts.push(I18n.format('未匹配 {count} 行（将跳过）', { count: unmatched.length }));
+          if (invalid.length) summaryParts.push(I18n.format('无效 {count} 条（将跳过）', { count: invalid.length }));
+          const detailLines = [
+            ...unmatched.slice(0, 5).map((u) => I18n.format('未匹配 第 {row} 行：{name}', { row: u.row, name: u.name || '—' })),
+            ...invalid.slice(0, 5),
+          ];
+          const ok = await App.confirmDialog(
+            summaryParts.join('；') + (detailLines.length ? `\n${detailLines.join('\n')}` : '') + `\n${I18n.t('确认导入吗？')}`
+          );
+          if (!ok) return;
+
+          const btn = form.querySelector('#exol-validate');
+          btn.disabled = true;
+          try {
+            const parts = [];
+            for (let ci = 0; ci < cols.length; ci++) {
+              if (!colRows[ci].length) continue;
+              const res = await api.exams.import(cols[ci].id, { type: 'scores', rows: colRows[ci] });
+              parts.push(
+                I18n.format('「{name}」：导入 {created}、更新 {updated}', {
+                  name: cols[ci].name,
+                  created: res.created || 0,
+                  updated: res.updated || 0,
+                }) +
+                  (res.unmatched && res.unmatched.length ? `，${I18n.format('未匹配 {count}', { count: res.unmatched.length })}` : '')
+              );
+            }
+            resultEl.innerHTML = `<div class="ex-detect-ok">${esc(parts.join('；'))}</div>`;
+            localStorage.removeItem(draftKey); // 导入成功：清除草稿
+            loadExams(); // 均分/人数已变化，后台刷新列表（不打断弹窗）
+          } catch (err) {
+            reportErr(err);
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      }
+    );
+  }
+
   // ============================== 导入（成绩 / 小分） ==============================
 
   function openImportModal(examId, type) {
@@ -1469,7 +2232,10 @@
           <textarea class="form-input" id="exi-paste" rows="6" placeholder=""></textarea>
         </div>
         <div class="ex-hint muted" id="exi-hint"></div>
-        <button class="btn" id="exi-parse" type="button">解析预览</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" id="exi-parse" type="button">解析预览</button>
+          ${isScores ? `<button class="btn" id="exi-online" type="button">${esc(I18n.t('在线填写（类 Excel）'))}</button>` : ''}
+        </div>
         <div id="exi-map"></div>
         <div id="exi-preview"></div>
         <div id="exi-result"></div>
@@ -1491,6 +2257,13 @@
         const mapEl = modalEl.querySelector('#exi-map');
         const resultEl = modalEl.querySelector('#exi-result');
         const importBtn = modalEl.querySelector('#exi-import');
+        const onlineBtn = modalEl.querySelector('#exi-online');
+        if (onlineBtn) {
+          onlineBtn.addEventListener('click', () => {
+            App.closeModal();
+            openOnlineGrid(examId);
+          });
+        }
 
         const HINTS = {
           xlsx: isScores

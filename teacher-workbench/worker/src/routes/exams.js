@@ -675,18 +675,23 @@ app.delete('/:id', requireAuth, requireTenant, requireRole(['teacher']), async (
 });
 
 /**
- * 导入行 → 学生匹配：学号精确 → tenant 内唯一姓名。
- * @param {object} row 导入行
- * @param {Map} byNo 学号 → 学生
- * @param {Map} byName 唯一姓名 → 学生
- * @param {Set} duplicateNames 重名学生姓名
+ * 导入行 → 学生匹配：学号精确 → tenant 内唯一姓名；姓名重名时用行内班级名在重名学生中再匹配（班内唯一）。
+ * @returns {{student?: object, dup?: boolean, name?: string}} student 命中；dup=true 表示姓名重名且无法用班级区分
  */
-function matchStudent(row, byNo, byName, duplicateNames) {
+function matchStudent(row, byNo, byName, duplicateNames, byNameMulti) {
   const no = row.studentNo !== undefined && row.studentNo !== null ? String(row.studentNo).trim() : '';
-  if (no && byNo.has(no)) return byNo.get(no);
+  if (no && byNo.has(no)) return { student: byNo.get(no) };
   const name = row.name !== undefined && row.name !== null ? String(row.name).trim() : '';
-  if (name && byName.has(name) && !duplicateNames.has(name)) return byName.get(name);
-  return null;
+  if (name && byName.has(name) && !duplicateNames.has(name)) return { student: byName.get(name) };
+  if (name && duplicateNames.has(name)) {
+    const cls = row.className !== undefined && row.className !== null ? String(row.className).trim() : '';
+    if (cls && byNameMulti) {
+      const cands = (byNameMulti.get(name) || []).filter((st) => (st.class_name || '') === cls);
+      if (cands.length === 1) return { student: cands[0] };
+    }
+    return { dup: true, name };
+  }
+  return {};
 }
 
 /**
@@ -731,14 +736,19 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
     .all();
   const byNo = new Map();
   const byName = new Map();
+  const byNameMulti = new Map();
   const duplicateNames = new Set();
   for (const st of studentRows.results) {
     if (st.student_no) byNo.set(String(st.student_no).trim(), st);
     if (st.name) {
       const name = String(st.name).trim();
-      if (byName.has(name)) duplicateNames.add(name);
-      else byName.set(name, st);
+      if (!byNameMulti.has(name)) byNameMulti.set(name, []);
+      byNameMulti.get(name).push(st);
+      byName.set(name, st);
     }
+  }
+  for (const [name, arr] of byNameMulti) {
+    if (arr.length > 1) duplicateNames.add(name);
   }
 
   // 导入权限：班级管理者（班主任/任课老师/年级组长/owner/admin）可导入，按学生所属班判定
@@ -751,11 +761,12 @@ app.post('/:id/import', requireAuth, requireTenant, requireRole(['teacher']), re
   const fullScore = exam.total_score !== null && exam.total_score !== undefined ? Number(exam.total_score) : null;
 
   for (const row of body.rows) {
-    const student = matchStudent(row, byNo, byName, duplicateNames);
-    if (!student) {
-      unmatched.push(row);
+    const m = matchStudent(row, byNo, byName, duplicateNames, byNameMulti);
+    if (!m.student) {
+      unmatched.push(m.dup ? { row, reason: `「${m.name}」姓名重名，请提供学号或班级` } : row);
       continue;
     }
+    const student = m.student;
     if (student.class_id) {
       const allowed = await canManageClass(db, tenantId, user.id, student.class_id);
       if (!allowed.ok) {
