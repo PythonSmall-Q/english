@@ -52,6 +52,11 @@ App.showAuthScreen = function (mode = 'login') {
           <input class="form-input" id="auth-name" type="text" placeholder="你的姓名（选填，默认可稍后在设置中修改）">` : ''}
           <label class="form-label">密码</label>
           <input class="form-input" id="auth-password" type="password" required minlength="8" placeholder="至少 8 位">
+          ${isLogin ? `
+          <label class="auth-remember-row" for="auth-remember" style="display:flex;align-items:center;gap:8px;margin:2px 0 10px;font-size:13px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="auth-remember">
+            <span data-i18n="记住账号密码">记住账号密码</span>
+          </label>` : ''}
           <div class="auth-error hidden" id="auth-error"></div>
           <button class="btn btn-primary btn-block" type="submit">${isLogin ? '登录' : '注册并进入'}</button>
         </form>
@@ -70,6 +75,17 @@ App.showAuthScreen = function (mode = 'login') {
       document.getElementById('auth-email').value = remembered.email;
       document.getElementById('auth-password').value = remembered.password;
       setTimeout(() => document.getElementById('auth-form')?.requestSubmit(), 0);
+    }
+
+    // 「记住账号密码」勾选状态：默认仅独立 App（Electron/Capacitor）勾选，浏览器默认不记住；
+    // 用户的选择持久化到本机，切换登录/注册页后保持一致。
+    const rememberEl = document.getElementById('auth-remember');
+    if (rememberEl) {
+      const pref = localStorage.getItem('wb.app.remember_pref');
+      rememberEl.checked = pref !== null ? pref === '1' : isStandaloneApp;
+      rememberEl.addEventListener('change', () => {
+        localStorage.setItem('wb.app.remember_pref', rememberEl.checked ? '1' : '0');
+      });
     }
 
     screen.querySelectorAll('.auth-tab').forEach((tab) => {
@@ -107,8 +123,26 @@ App.showAuthScreen = function (mode = 'login') {
         } else {
           await api.auth.register(body);
         }
-        rememberAccount({ email: body.email, password: body.password });
-        if (isStandaloneApp) localStorage.setItem(AUTO_LOGIN_KEY, JSON.stringify({ email: body.email, password: body.password }));
+        // 仅当勾选「记住账号密码」时保存凭证；未勾选则清除该邮箱已存的凭证与自动登录标记
+        if (isLogin) {
+          const remember = document.getElementById('auth-remember')?.checked;
+          if (remember) {
+            rememberAccount({ email: body.email, password: body.password });
+            if (isStandaloneApp) localStorage.setItem(AUTO_LOGIN_KEY, JSON.stringify({ email: body.email, password: body.password }));
+          } else {
+            const rest = getAccounts().filter((item) => item.email.toLowerCase() !== body.email.toLowerCase());
+            localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(rest));
+            try {
+              const auto = JSON.parse(localStorage.getItem(AUTO_LOGIN_KEY) || 'null');
+              if (auto && String(auto.email).toLowerCase() === body.email.toLowerCase()) {
+                localStorage.removeItem(AUTO_LOGIN_KEY);
+              }
+            } catch (err) { /* 忽略损坏的存储 */ }
+          }
+        } else {
+          rememberAccount({ email: body.email, password: body.password });
+          if (isStandaloneApp) localStorage.setItem(AUTO_LOGIN_KEY, JSON.stringify({ email: body.email, password: body.password }));
+        }
         // 登录成功后统一回到工作台首页，避免沿用登录前残留的 hash 或 redirect。
         sessionStorage.removeItem('wb.redirect');
         history.replaceState(null, '', '#/dashboard');

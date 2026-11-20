@@ -146,7 +146,7 @@ async function resolveExamScores(db, tenantId, exam) {
  * 口径一致（全部 class 且同班，或全部 grade），并对每个分项通过 canManageExam。
  * 返回统一口径：scope/class_id/total_score（任一分项满分 NULL → 总分 NULL）
  */
-async function validateComponents(db, tenantId, user, componentIds) {
+async function validateComponents(db, tenantId, user, componentIds, excludeCompositeId = null) {
   if (!Array.isArray(componentIds) || componentIds.length < 2) {
     throw new ApiError('VALIDATION_ERROR', '合并考试至少需要 2 个分项考试');
   }
@@ -160,6 +160,14 @@ async function validateComponents(db, tenantId, user, componentIds) {
     if (comp.composite) throw new ApiError('VALIDATION_ERROR', '分项考试不能是合并考试');
     if (comp.academic_year !== currentAcademicYear()) {
       throw new ApiError('VALIDATION_ERROR', '分项考试必须是当前学年的考试');
+    }
+    // 一个分项只能被一个合并考试引用（编辑自身时除外）
+    const used = await db
+      .prepare('SELECT exam_id FROM exam_components WHERE component_exam_id = ? LIMIT 1')
+      .bind(cid)
+      .first();
+    if (used && used.exam_id !== excludeCompositeId) {
+      throw new ApiError('VALIDATION_ERROR', `分项考试「${comp.name}」已被其他合并考试使用`);
     }
     if (!(await canManageExam(db, tenantId, user, comp))) {
       throw new ApiError('FORBIDDEN', `你没有权限管理分项考试「${comp.name}」`);
@@ -207,6 +215,7 @@ app.get('/', requireAuth, requireTenant, requireRole(['viewer']), async (c) => {
   const rows = await db
     .prepare(
       `SELECT e.*, e.archived_stats, cl.name AS class_name,
+              (SELECT exam_id FROM exam_components ec WHERE ec.component_exam_id = e.id LIMIT 1) AS composite_of,
               (SELECT COUNT(*) FROM exam_scores s WHERE s.exam_id = e.id AND s.score IS NOT NULL AND s.absent = 0) AS student_count,
               (SELECT ROUND(AVG(s.score), 2) FROM exam_scores s
                 WHERE s.exam_id = e.id AND s.score IS NOT NULL AND s.absent = 0) AS avg_score
@@ -510,7 +519,7 @@ app.put('/:id/components', requireAuth, requireTenant, requireRole(['teacher']),
   await assertCurrentYear(db, tenantId, 'exams', exam.id);
 
   const body = await c.req.json().catch(() => ({}));
-  const { components, scope, classId, totalScore } = await validateComponents(db, tenantId, user, body.component_ids);
+  const { components, scope, classId, totalScore } = await validateComponents(db, tenantId, user, body.component_ids, exam.id);
 
   const ts = now();
   const stmts = [

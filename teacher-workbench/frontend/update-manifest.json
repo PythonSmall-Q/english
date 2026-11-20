@@ -1,5 +1,5 @@
 {
-  "version": "3.2.26",
+  "version": "3.2.27",
   "files": [
     "index.html",
     "styles.css",
@@ -40,6 +40,7 @@
     "vendor/retest/jszip.LICENSE",
     "vendor/retest/NotoSansSC.LICENSE",
     "assets/dict-featured.json",
-    "assets/dict-gaokao.json"
+    "assets/dict-gaokao.json",
+    "assets/pinyin.json"
   ]
 }

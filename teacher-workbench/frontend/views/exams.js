@@ -64,6 +64,18 @@
 .ex-score-btn { margin-left: 8px; }
 .ex-subscore { display: inline-block; margin: 2px 6px 2px 0; }
 .ex-stu-select { max-width: 360px; }
+/* ===== 软弹出学生选择器（搜索：姓名/学号/拼音） ===== */
+.ex-stupick { position: relative; max-width: 420px; }
+.ex-stupick-btn { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; cursor: pointer; background: #fff; }
+.ex-stupick-btn .ex-stupick-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-stupick-btn .ex-stupick-arrow { flex-shrink: 0; color: #8a94a6; font-size: 12px; }
+.ex-stupick-panel { position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; right: 0; background: #fff; border: 1px solid #d8dee9; border-radius: 10px; box-shadow: 0 8px 24px rgba(30, 45, 80, .16); padding: 8px; }
+.ex-stupick-search { width: 100%; box-sizing: border-box; margin-bottom: 6px; }
+.ex-stupick-list { max-height: 240px; overflow-y: auto; }
+.ex-stupick-item { display: block; width: 100%; text-align: left; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; font-size: 13px; color: #2a3242; }
+.ex-stupick-item:hover, .ex-stupick-item.active { background: #f0f6ff; color: #2458b8; }
+.ex-stupick-item .ex-stupick-no { color: #8a94a6; font-size: 12px; margin-left: 6px; }
+.ex-stupick-empty { padding: 12px 10px; color: #8a94a6; font-size: 13px; }
 .ex-stu-table td { vertical-align: top; }
 .ex-detect-ok { font-size: 12px; color: #1d7a6f; background: #e8f7f3; border-radius: 8px; padding: 6px 10px; margin: 6px 0; }
 .ex-row-unmatched td { color: #d64545; }
@@ -104,6 +116,150 @@
 
   /** HTML 转义（复用 App.esc） */
   const esc = (s) => App.esc(s);
+
+  // ============================== 软弹出学生选择器（搜索：姓名/学号/拼音） ==============================
+
+  /** 拼音表：懒加载一次（assets/pinyin.json，kMandarin 精简为无声调 map） */
+  let pinyinMap = null;
+  let pinyinPromise = null;
+  function loadPinyin() {
+    if (pinyinMap) return Promise.resolve(pinyinMap);
+    if (!pinyinPromise) {
+      pinyinPromise = fetch('assets/pinyin.json')
+        .then((r) => (r.ok ? r.json() : {}))
+        .then((m) => { pinyinMap = m || {}; return pinyinMap; })
+        .catch(() => { pinyinMap = {}; return pinyinMap; });
+    }
+    return pinyinPromise;
+  }
+
+  /** 计算学生姓名的拼音全拼与声母串（逐字查表，查不到的字保留原字符） */
+  function namePinyin(name, map) {
+    if (!map || !name) return { py: '', init: '' };
+    let py = '';
+    let init = '';
+    for (const ch of String(name)) {
+      const p = map[ch];
+      if (p) {
+        py += p;
+        init += p[0];
+      } else {
+        py += ch.toLowerCase();
+      }
+    }
+    return { py, init };
+  }
+
+  /**
+   * 创建软弹出学生选择器，挂载到 container（清空其内容）。
+   * opts: { items: [{id, name, no, label}], initialId?, placeholder?, onSelect(id) }
+   * 返回 { setItems(items, initialId), setDisabled(text), value() }
+   */
+  function createStuPicker(container, opts = {}) {
+    const placeholder = opts.placeholder || I18n.t('请选择学生');
+    container.innerHTML = `
+      <div class="ex-stupick">
+        <button type="button" class="ex-stupick-btn form-input">
+          <span class="ex-stupick-label muted">${esc(placeholder)}</span>
+          <span class="ex-stupick-arrow">▾</span>
+        </button>
+        <div class="ex-stupick-panel hidden">
+          <input type="text" class="form-input ex-stupick-search" placeholder="${esc(I18n.t('搜索姓名、学号或拼音'))}">
+          <div class="ex-stupick-list"></div>
+        </div>
+      </div>`;
+    const btn = container.querySelector('.ex-stupick-btn');
+    const labelEl = container.querySelector('.ex-stupick-label');
+    const panel = container.querySelector('.ex-stupick-panel');
+    const search = container.querySelector('.ex-stupick-search');
+    const listEl = container.querySelector('.ex-stupick-list');
+    let items = [];
+    let selectedId = '';
+    let outsideBound = false;
+
+    function closePanel() {
+      panel.classList.add('hidden');
+      document.removeEventListener('click', onOutside, true);
+      outsideBound = false;
+    }
+    function onOutside(e) {
+      if (!container.contains(e.target)) closePanel();
+    }
+    function matches(item, q) {
+      if (!q) return true;
+      return (
+        (item.name || '').toLowerCase().includes(q) ||
+        (item.no || '').toLowerCase().includes(q) ||
+        (item.py && item.py.includes(q)) ||
+        (item.init && item.init.startsWith(q))
+      );
+    }
+    function renderList() {
+      const q = search.value.trim().toLowerCase();
+      const hit = items.filter((it) => matches(it, q));
+      listEl.innerHTML = hit.length
+        ? hit
+            .map(
+              (it) => `<button type="button" class="ex-stupick-item" data-sid="${esc(it.id)}">${esc(it.label)}${it.no ? `<span class="ex-stupick-no">${esc(it.no)}</span>` : ''}</button>`
+            )
+            .join('')
+        : `<div class="ex-stupick-empty">${esc(I18n.t('暂无匹配的学生'))}</div>`;
+    }
+    btn.addEventListener('click', () => {
+      if (panel.classList.contains('hidden')) {
+        panel.classList.remove('hidden');
+        search.value = '';
+        renderList();
+        if (!outsideBound) {
+          document.addEventListener('click', onOutside, true);
+          outsideBound = true;
+        }
+        setTimeout(() => search.focus(), 0);
+      } else {
+        closePanel();
+      }
+    });
+    search.addEventListener('input', renderList);
+    listEl.addEventListener('click', (e) => {
+      const itemBtn = e.target.closest('[data-sid]');
+      if (!itemBtn) return;
+      selectedId = itemBtn.dataset.sid;
+      const it = items.find((x) => x.id === selectedId);
+      labelEl.textContent = it ? it.label : '';
+      labelEl.classList.remove('muted');
+      closePanel();
+      if (opts.onSelect) opts.onSelect(selectedId);
+    });
+
+    return {
+      value() { return selectedId; },
+      setDisabled(text) {
+        items = [];
+        selectedId = '';
+        labelEl.textContent = text || placeholder;
+        labelEl.classList.add('muted');
+        btn.disabled = true;
+      },
+      /** 加载拼音表后补齐每项的 py/init，再渲染 */
+      async setItems(nextItems, initialId) {
+        const map = await loadPinyin();
+        items = (nextItems || []).map((it) => {
+          const { py, init } = namePinyin(it.name, map);
+          return { ...it, py, init };
+        });
+        btn.disabled = !items.length;
+        if (initialId) {
+          const it = items.find((x) => x.id === initialId);
+          if (it) {
+            selectedId = initialId;
+            labelEl.textContent = it.label;
+            labelEl.classList.remove('muted');
+          }
+        }
+        if (!panel.classList.contains('hidden')) renderList();
+      },
+    };
+  }
 
   // ============================== 数据解析（四种来源） ==============================
 
@@ -714,17 +870,19 @@
     return Number(e.composite) === 1 ? `<span class="ex-badge ex-badge-composite">${esc(I18n.t('合并'))}</span>` : '';
   }
 
-  /** 分项多选列表 HTML（排除合并考试自身与其他合并行；checkedIds 默认勾选） */
+  /** 分项多选列表 HTML（排除合并考试自身与其他合并行；checkedIds 默认勾选；已被其他合并占用的分项禁选） */
   function compPickerHtml(candidates, checkedIds) {
     if (!candidates.length) return `<div class="muted" style="padding:8px 2px">${esc(I18n.t('当前学年暂无可合并的考试'))}</div>`;
     return candidates
-      .map(
-        (e) => `<label class="exc-pick">
-          <input type="checkbox" value="${esc(e.id)}"${checkedIds.indexOf(e.id) >= 0 ? ' checked' : ''}>
+      .map((e) => {
+        const checked = checkedIds.indexOf(e.id) >= 0;
+        const usedByOther = !!e.composite_of && !checked;
+        return `<label class="exc-pick"${usedByOther ? ' style="opacity:.55"' : ''}>
+          <input type="checkbox" value="${esc(e.id)}"${checked ? ' checked' : ''}${usedByOther ? ' disabled' : ''}>
           <span>${esc(e.name)}</span>
-          <span class="exc-pick-meta">${esc(e.exam_date || '—')} · ${Number(e.student_count || 0)}${esc(I18n.t('人'))}</span>
-        </label>`
-      )
+          <span class="exc-pick-meta">${esc(e.exam_date || '—')} · ${Number(e.student_count || 0)}${esc(I18n.t('人'))}${usedByOther ? ` · ${esc(I18n.t('已被其他合并使用'))}` : ''}</span>
+        </label>`;
+      })
       .join('');
   }
 
@@ -735,6 +893,8 @@
   }
 
   function renderList(exams) {
+    // 已被合并考试引用的分项不在总览内展示（可从合并考试的「详情」进入分项）
+    exams = exams.filter((e) => Number(e.composite) === 1 || !e.composite_of);
     // 已归档学年（明细已删）：隐藏「新建考试」入口
     const archivedView = exams.some((e) => e.archived);
     // 「下载归档」（§63 新版：仅历史学年 + 本学年已归档 + owner/admin 可见）
@@ -776,12 +936,13 @@
             ? '<span class="muted" style="font-size:12px">明细已归档</span>'
             : `${canCreateExams ? `<button class="btn btn-sm" data-act="import-scores" data-id="${esc(e.id)}"${isComposite ? ' data-composite="1"' : ''} type="button">导入成绩</button>
             <button class="btn btn-sm" data-act="import-subscores" data-id="${esc(e.id)}"${isComposite ? ' data-composite="1"' : ''} type="button">导入小分</button>` : ''}
+            ${isComposite ? `<button class="btn btn-sm" data-act="components" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">详情</button>` : ''}
             <button class="btn btn-sm" data-act="analysis" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">查看分析</button>
             <button class="btn btn-sm" data-act="scores" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">学生成绩</button>
             <button class="btn btn-sm" data-act="report" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">个性化报告</button>
             <button class="btn btn-sm" data-act="paper" data-id="${esc(e.id)}" data-has-paper="${e.paper_url ? '1' : ''}" type="button">${e.paper_url ? '查看试卷' : '上传试卷'}</button>
             <button class="btn btn-sm" data-act="edit" data-id="${esc(e.id)}" type="button">编辑</button>
-            <button class="btn btn-sm btn-danger" data-act="del" data-id="${esc(e.id)}" data-name="${esc(e.name)}" type="button">删除</button>`;
+            <button class="btn btn-sm btn-danger" data-act="del" data-id="${esc(e.id)}" data-name="${esc(e.name)}"${isComposite ? ' data-composite="1"' : ''} type="button">删除</button>`;
           return `
         <tr>
           <td>${esc(e.name)}${scopeBadge(e)}${compositeBadge(e)}${archived ? '<span class="badge badge-archived">已归档</span>' : ''}</td>
@@ -900,12 +1061,15 @@
   async function onRowAction(d) {
     switch (d.act) {
       case 'import-scores':
-        if (d.composite === '1') return App.toast(I18n.t('请到分项考试中修改成绩'));
+        if (d.composite === '1') return openCompositeComponents(d.id, d.name);
         openImportModal(d.id, 'scores');
         break;
       case 'import-subscores':
-        if (d.composite === '1') return App.toast(I18n.t('请到分项考试中修改成绩'));
+        if (d.composite === '1') return openCompositeComponents(d.id, d.name);
         openImportModal(d.id, 'subscores');
+        break;
+      case 'components':
+        openCompositeComponents(d.id, d.name);
         break;
       case 'analysis':
         openAnalysis(d.id, d.name);
@@ -929,11 +1093,18 @@
         break;
       }
       case 'del': {
-        const ok = await App.confirmDialog(`确定删除考试「${d.name}」吗？该考试的成绩与小分将一并删除。`);
+        const msg = d.composite === '1'
+          ? `确定删除合并考试「${d.name}」吗？仅删除合并考试本身，分项考试及其成绩不会被删除。`
+          : `确定删除考试「${d.name}」吗？该考试的成绩与小分将一并删除。`;
+        const ok = await App.confirmDialog(msg);
         if (!ok) return;
         try {
           await api.exams.remove(d.id);
           App.toast('已删除');
+          // 分项随合并考试一并回到总览：清掉 composite_of 标记
+          examsCache.forEach((e) => {
+            if (e.composite_of === d.id) delete e.composite_of;
+          });
           examsCache = examsCache.filter((e) => e.id !== d.id);
           refreshLocal();
         } catch (err) {
@@ -942,6 +1113,55 @@
         break;
       }
     }
+  }
+
+  /**
+   * 合并考试的分项详情弹窗：列出各分项考试，由用户选择进入哪个分项
+   * （查看成绩/分析，或把成绩、小分导入到对应分项考试）。
+   */
+  async function openCompositeComponents(examId, examName) {
+    let comps = examsCache.find((e) => e.id === examId)?.components || [];
+    if (!comps.length) {
+      try {
+        comps = (await api.exams.get(examId)).components || [];
+      } catch (err) {
+        return reportErr(err);
+      }
+    }
+    if (!comps.length) return App.toast(I18n.t('暂无分项考试'));
+    const canImport = canCreateExams;
+    const rows = comps
+      .map((cm) => {
+        const full = examsCache.find((e) => e.id === cm.id) || {};
+        return `
+        <div class="card" style="margin-bottom:8px" data-comp-id="${esc(cm.id)}">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <strong>${esc(cm.name)}</strong>
+            <span class="muted" style="font-size:12px">${esc(cm.exam_date || full.exam_date || '—')}</span>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+            <button class="btn btn-sm" data-comp-act="scores" type="button">学生成绩</button>
+            <button class="btn btn-sm" data-comp-act="analysis" type="button">查看分析</button>
+            ${canImport ? `<button class="btn btn-sm" data-comp-act="import-scores" type="button">导入成绩</button>
+            <button class="btn btn-sm" data-comp-act="import-subscores" type="button">导入小分</button>` : ''}
+          </div>
+        </div>`;
+      })
+      .join('');
+    App.modal(`${I18n.t('分项考试')} · ${examName || ''}`, `<div>${rows}</div>`, (modalEl) => {
+      modalEl.querySelectorAll('[data-comp-act]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const card = btn.closest('[data-comp-id]');
+          const cid = card?.dataset.compId;
+          const name = card?.querySelector('strong')?.textContent || '';
+          const act = btn.dataset.compAct;
+          App.closeModal();
+          if (act === 'scores') openExamScores(cid, name);
+          else if (act === 'analysis') openAnalysis(cid, name);
+          else openImportModal(cid, act === 'import-scores' ? 'scores' : 'subscores');
+        });
+      });
+    });
   }
 
   /** 上传/查看试卷：上传到 R2，返回公共 URL 存到 exam.paper_url */
@@ -2122,13 +2342,18 @@
       `
       <div class="ex-form">
         <label>选择学生</label>
-        <select class="form-input ex-stu-select" id="exst-student"><option value="">加载中…</option></select>
+        <div id="exst-student"></div>
       </div>
       <div id="exst-body" style="margin-top:12px"><div class="muted">选择学生后展示其当前学年全部考试成绩。</div></div>`,
       (modalEl) => {
         modalEl.classList.add('ex-modal-wide');
-        const select = modalEl.querySelector('#exst-student');
         const body = modalEl.querySelector('#exst-body');
+        const picker = createStuPicker(document.getElementById('exst-student'), {
+          onSelect: (studentId) => {
+            if (studentId) loadScores(studentId);
+            else body.innerHTML = '<div class="muted">选择学生后展示其当前学年全部考试成绩。</div>';
+          },
+        });
 
         async function loadScores(studentId) {
           body.innerHTML = '<div class="muted">加载中…</div>';
@@ -2168,33 +2393,28 @@
             </table></div>`;
         }
 
-        select.addEventListener('change', () => {
-          if (select.value) loadScores(select.value);
-          else body.innerHTML = '<div class="muted">选择学生后展示其当前学年全部考试成绩。</div>';
-        });
-
         (async () => {
           let students;
           try {
             const data = await api.students.list();
             students = data.students || [];
           } catch (err) {
-            select.innerHTML = '<option value="">（学生列表加载失败）</option>';
+            picker.setDisabled('（学生列表加载失败）');
             return;
           }
           if (!students.length) {
-            select.innerHTML = '<option value="">（暂无学生）</option>';
+            picker.setDisabled('（暂无学生）');
             body.innerHTML = '<div class="muted">当前学年还没有学生，请先在「学生管理」中创建。</div>';
             return;
           }
-          select.innerHTML =
-            '<option value="">请选择学生</option>' +
-            students
-              .map(
-                (s) =>
-                  `<option value="${esc(s.id)}">${esc(s.class_name || '未分班')} · ${esc(s.name)}（${esc(s.student_no || '无学号')}）</option>`
-              )
-              .join('');
+          await picker.setItems(
+            students.map((s) => ({
+              id: s.id,
+              name: s.name,
+              no: s.student_no || '',
+              label: `${s.class_name || '未分班'} · ${s.name}`,
+            }))
+          );
         })();
       }
     );
@@ -2211,14 +2431,16 @@
           <label style="margin:0">选择学生</label>
           <span class="muted" id="exr-loading">加载学生名单…</span>
         </div>
-        <select class="form-input" id="exr-student"><option value="">加载中…</option></select>
+        <div id="exr-student"></div>
       </div>
       <div id="exr-body" style="margin-top:12px"></div>`,
       (modalEl) => {
         modalEl.classList.add('ex-modal-wide');
-        const select = modalEl.querySelector('#exr-student');
         const body = modalEl.querySelector('#exr-body');
         const loading = modalEl.querySelector('#exr-loading');
+        const picker = createStuPicker(document.getElementById('exr-student'), {
+          onSelect: (studentId) => loadReport(studentId),
+        });
 
         async function loadReport(studentId) {
           if (!studentId) {
@@ -2263,27 +2485,26 @@
             <ol class="ex-suggest">${(data.suggestions || []).map((s) => `<li>${esc(s)}</li>`).join('')}</ol>`;
         }
 
-        select.addEventListener('change', () => loadReport(select.value));
-
         (async () => {
           let detail;
           try {
             detail = await api.exams.get(examId);
           } catch (err) {
             loading.textContent = '名单加载失败';
-            select.innerHTML = '<option value="">（无法加载名单）</option>';
+            picker.setDisabled('（无法加载名单）');
             return;
           }
           const scores = (detail.scores || []).filter((s) => s.score !== null && s.score !== undefined);
           loading.textContent = scores.length ? `共 ${scores.length} 人有成绩` : '暂无成绩数据';
-          select.innerHTML =
-            '<option value="">请选择学生</option>' +
-            scores
-              .map(
-                (s) =>
-                  `<option value="${esc(s.student_id)}" ${s.student_id === presetStudentId ? 'selected' : ''}>${esc(s.class_name || '')} ${esc(s.student_name)}（${esc(s.student_no || '无学号')} · ${fmtScore(s.score)}分）</option>`
-              )
-              .join('');
+          await picker.setItems(
+            scores.map((s) => ({
+              id: s.student_id,
+              name: s.student_name,
+              no: s.student_no || '',
+              label: `${s.class_name || ''} ${s.student_name}（${fmtScore(s.score)}分）`,
+            })),
+            presetStudentId
+          );
           if (presetStudentId) loadReport(presetStudentId);
           else if (scores.length) body.innerHTML = '<div class="muted">请选择学生查看报告。</div>';
           else body.innerHTML = '<div class="muted">该考试还没有成绩数据，请先「导入成绩」。</div>';
